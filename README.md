@@ -8,4 +8,6 @@ Way to run directly the script file :
 - in the folder where is OdfEdit.py, run the command : python3 OdfEdit.py
 
 The Windows binary has been tested in Windows 10
-The Linux binary has been tested in Ubuntu 18.04
+The Linux binary has been tested in Ubuntu 22.04.1 in Oracle VM VirtualBox
+
+From version 2.0, Hauptwerk sample sets can be loaded by OdfEdit which generates a GrandOrgue ODF permitting to use this sample set in GrandOrgue (with limitations compared to what is possible in Hauptwerk).
