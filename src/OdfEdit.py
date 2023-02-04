@@ -4,23 +4,24 @@
 #              The ODF can be used in the GrandOrgue application
 #              Implemented with Python 3
 #              Tested in Windows 10 and Ubuntu 21.10
-#              It is contains 3 classes :
+#              It is contains 4 classes :
 #                   C_ODF to manage and check the ODF data
-#                   C_GUI to manage the graphical user interface
+#                   C_HW2GO to manage the convertion from a Hauptwerk ODF to a GrandOrgue ODF
+#                   C_GUI to manage the graphical user interface of this application
 #                   CreateToolTip to display a tool tip on a GUI widget
 # Author:      Eric Turpault (France, Châtellerault)
 # Copyright:   open source
 # Licence:     free to modify, please share the modification with the author
 #
-# The considered ODF syntax is :
-#    [object_ID]
+# The considered GrandOrgue ODF syntax is :
+#    [object_UID]
 #    ; comment line, empty lines are ignored
-#    ; object_ID can contain only alphanumeric characters
+#    ; object_UID can contain only alphanumeric characters
 #    attribute1=value1
 #    attribute2=value2
 #    ; attribute can contain only alphanumeric or '_' characters
 #
-# The new panel format is detected if the object Panel000 is present and it contains the attribute NumberOfGUIElements
+# The new panel format is detected if the Panel000 object is present and contains the attribute NumberOfGUIElements
 #
 # Versions history :
 #   v1.0 - 15 April 2022 - initial version
@@ -28,16 +29,36 @@
 #   v1.2 - 27 April 2022 - some GUI behavior improvements, minor improvements in the help and the objects checks
 #   v1.3 - 19 May   2022 - data management improvement, change in the way to define the parent-child relations between the objects,
 #                          completed some attributes values maximum check, added a tab to search a string in the whole ODF
-#
+#   v2.0 - 23 Dec.  2022 - fix made in the function check_object_Manual around the key_type checks
+#                          fix made in the function check_attribute_value to not change out of range integer value and better check HTML color code
+#                          use the PIL library instead of Tk to check the sample set images sizes
+#                          first implementation of the Hauptwerk to GrandOrgue ODF conversion feature
+#   v2.1 - 22 Dec.  2023 - HW to GO : fix for files path separator management in various OS
+#                          HW to GO : get the actual files path/name/extension case from the HW sample set instead of from the HW ODF
+#                          HW to GO : some design changes without functional impact
+#                          HW to GO : added general sound stops (blower, bells, ...) and stop action noise support
 #-------------------------------------------------------------------------------
 
-MAIN_WINDOW_TITLE = "OdfEdit - v1.3"
+MAIN_WINDOW_TITLE = "OdfEdit - v2.1"
 
 import os
-import inspect
+import shutil
+
 from tkinter import *
 from tkinter import filedialog as fd
 from tkinter import messagebox, ttk
+import tkinter.font as tkf
+
+from PIL import Image  ## install with : pip install pillow
+from lxml import etree ## install instruction : https://stackoverflow.com/a/40202702
+
+DISP_HW_OBJECTS_TREE = True # True or False, to display or not a notebook tab with Hauptwerk objects tree if a Hauptwerk ODF is loaded
+
+HW_CONV_MSG = """An ODF will be built in order to permit to use the selected Hauptwerk sample set with the GrandOrgue application. None file of the Hauptwerk sample set will be modified.
+ATTENTION :
+- Please do this operation only with a free Hauptwerk sample set or a not-free sample set that you have duly paid for, and if the editor of this sample set does not preclude its use outside Hauptwerk application.
+- Don't expect to have necessarily with GrandOrgue the sound quality and all control possibilities that this sample set can provide with Hauptwerk.
+"""
 
 IDX_OBJ_NAME = 0 # index in the objects dictionnary entry list of the object name
 IDX_OBJ_PAR = 1  # index in the objects dictionnary entry list of the object parents
@@ -64,33 +85,38 @@ ATTR_TYPE_FILE_NAME = 13       # used in many objects for bitmap or wav files
 ATTR_TYPE_OBJECT_REF = 14      # used in many objects to make a reference to another object ID
 ATTR_TYPE_PIPE_WAVE = 15       # used in Rank
 
+# constants to identify a link between objects
+TO_PARENT = False
+TO_CHILD = True
+
+OS_NAME = os.name
+
+#-------------------------------------------------------------------------------------------------
 class C_ODF:
-    #--- class to store and manage the ODF data
+    #--- class to store and manage the GO ODF data
 
     odf_file_name = ""      # name of the ODF file which the data have been loaded in odf_lines_list
-    odf_file_encoding = ""  # encoding type of the loaded ODF file
+    odf_file_encoding = ""  # encoding type of the loaded ODF
     odf_lines_list = []     # list containing the lines coming from the loaded ODF
-    odf_objects_dict = {}   # dictionnary having as keys the objects IDs of the ODF (sorted). Each key has as value a list with the following items :
+    odf_objects_dic = {}    # dictionnary having as keys objects UID (unique identifier) of the ODF (sorted). Each key has as value a list with the following items :
                             #   item 1 (index IDX_OBJ_NAME) : object names (string)
-                            #   item 2 (index IDX_OBJ_PAR)  : object parents (list of objects ID)
-                            #   item 3 (index IDX_OBJ_CHI)  : object children (list of objects ID)
-                            #   item 4 (index IDX_OBJ_LINE) : number of the line in the ODF lines list where is located the object_ID of the key (integer)
-                            # summarized like this : ['object_names', ['parent1_obj_ID', 'parent2_obj_ID',...], ['child1_obj_ID', 'child2_obj_ID',...], line_number]
-    new_panel_format = False  # flag indicating if the odf_lines_list uses the new panel format or not
+                            #   item 2 (index IDX_OBJ_PAR)  : object parents (list of objects UID)
+                            #   item 3 (index IDX_OBJ_CHI)  : object children (list of objects UID)
+                            #   item 4 (index IDX_OBJ_LINE) : number of the line in the ODF lines list where is located the object_UID of the key (integer)
+                            # summarized like this : ['object_names', ['parent1_obj_UID', 'parent2_obj_UID',...], ['child1_obj_UID', 'child2_obj_UID',...], line_number]
+    new_panel_format = False  # flag indicating if the loaded ODF uses the new panel format or not
     check_files_names = ""  # flag storing the choice of the user to check or not the files names in the ODF ('' for not defined, False, True)
     check_nb_attr = 0       # number of attributes checked during the checking operation
     events_log_list = []    # list of events logs (errors or messages resulting from file operation or syntax check)
 
     #-------------------------------------------------------------------------------------------------
-    def odf_lines_load(self, file_name):
+    def odf_lines_load(self, file_name_str):
         #--- load in odf_lines_list the content of the given ODF
         #--- returns True/False whether the file has been loaded correctly or not
 
-        self.events_log_add(f"Loading the file '{file_name}'")
-
         # open the given ODF in read mode, and check its encoding format
         try:
-            f = open(file_name, mode='r', encoding=ENCODING_ISO_8859_1)
+            f = open(file_name_str, mode='r', encoding=ENCODING_ISO_8859_1)
         except OSError as err:
             # it has not be possible to open the file
             self.events_log_add(f"Cannot open the file. {err}")
@@ -100,42 +126,49 @@ class C_ODF:
                 # close the file
                 f.close()
                 # reopen the file with the proper encoding format
-                f = open(file_name, mode='r', encoding=ENCODING_UTF8_BOM)
+                f = open(file_name_str, mode='r', encoding=ENCODING_UTF8_BOM)
                 self.odf_file_encoding = ENCODING_UTF8_BOM
             else:
                 f.seek(0)  # reset the position of the cursor at the beginning of the file
                 self.odf_file_encoding = ENCODING_ISO_8859_1
             # store the name of the ODF
-            self.odf_file_name = file_name
+            self.odf_file_name = file_name_str
             valid_odf_file = True
 
             # clear the lists/dict content
             self.odf_lines_list.clear()
-            self.odf_objects_dict.clear()
+            self.odf_objects_dic.clear()
+            object_types_list = []
 
             # load in the ODF lines list the content of the given ODF
-            line_nb = 0
-            attr_nb = 0
-            object_ID = ''
-            object_ID_list = []
+            object_attr_nb_int = 0
+            object_UID = ''
+            object_UID_list = []
             for line in f:
                 if line[-1:] == '\n': line = line[:-1]  # remove the ending \n characters if any
                 line = line.rstrip()  # remove the trailing whitespaces if any
-                line_nb += 1  # increment the counter counting the number of loaded lines
 
-                if self.is_line_with_object_ID(line): # line with an object ID
-                    object_ID = line[1:-1] # remove the brackets in first and last characters to get the object ID
+                if self.is_line_with_object_UID(line): # line with an object UID
+                    object_UID = line[1:-1] # remove the brackets in first and last characters to get the object UID
 
-                    while object_ID in object_ID_list:
-                        # there is already an object ID with the same name in the list : add _ at end of the ID until the ID is unique
-                        # this is done in order to avoid duplicate IDs in the objects list, the user will have to fix it
-                        self.events_log_add(f"Another occurence of the object {object_ID} is present, it has been renamed in {object_ID}_")
-                        object_ID += '_'
-                    line = '[' + object_ID + ']'
-                    # add the object ID to the objects list
-                    object_ID_list.append(object_ID)
+                    # store the object type for statistics
+                    object_type = object_UID[:-3]
+                    if object_type[:5] == 'Panel' and len(object_type) > 5:  # type : Panel999Image or Panel999Element
+                        object_type = 'Panel' + object_type[9:]              # type : PanelImage or PanelElement
+                    if not object_type in object_types_list:
+                        object_types_list.append(object_type)
+
+                    while object_UID in object_UID_list:
+                        # there is already an object with the same UID in the list : add '_' at end of the UID until the UID is unique
+                        # this is done in order to avoid duplicate UIDs in the objects list, the user will have to fix it
+                        self.events_log_add(f"Another occurence of the object {object_UID} is present, it has been renamed in {object_UID}_")
+                        object_UID += '_'
+                    line = '[' + object_UID + ']'
+                    # add the object UID to the objects list
+                    object_UID_list.append(object_UID)
+
                 elif self.is_line_with_attribute(line): # line with an attribute
-                    attr_nb += 1 # increment the counter counting the number of defined objects
+                    object_attr_nb_int += 1 # increment the counter of defined attributes
 
                 # add the line to the ODF lines list
                 self.odf_lines_list.append(line)
@@ -144,44 +177,54 @@ class C_ODF:
             f.close()
 
             # update the objects dictionnary from the ODF lines list content
-            self.objects_dict_update()
+            self.objects_dic_update()
             # update the panel format flag from the ODF lines list content
             self.check_odf_panel_format()
             # reset the check files names flag
             self.check_files_names = ''
 
-            self.events_log_add(f"Loading completed : {str(line_nb)} lines, {str(len(object_ID_list))} objects, {str(attr_nb)} attributes, file encoding {self.odf_file_encoding}")
+            if self.odf_file_encoding == ENCODING_UTF8_BOM:
+                file_encoding = 'UTF8'
+            else:
+                file_encoding = 'ISO_8859_1'
+
+            self.events_log_add(f'GrandOrgue ODF loaded "{file_name_str}"')
+            if self.new_panel_format:
+                self.events_log_add(f'New panel format, file encoding {file_encoding}')
+            else:
+                self.events_log_add(f'Old panel format, file encoding {file_encoding}')
+            self.events_log_add(f'{object_attr_nb_int:,} attributes among {len(object_UID_list):,} objects among {len(object_types_list)} object types')
 
         return valid_odf_file
 
     #-------------------------------------------------------------------------------------------------
-    def odf_lines_save(self, file_name):
+    def odf_lines_save(self, file_name_str):
         #--- save odf_lines_list in the given ODF
         #--- if no file name is given, the saving is done in the already loaded ODF file
         #--- returns True/False whether the writting in file has been done correctly or not
 
         if len(self.odf_lines_list) == 0:
             # the ODF lines list is empty, there are no data to save
-            self.events_log_add(f"None data to save in the file {file_name}")
+            self.events_log_add(f"None data to save in the file {file_name_str}")
             file_saved = False
-        elif file_name == '' and self.odf_file_name == '':
+        elif file_name_str == '' and self.odf_file_name == '':
             # no file name known, so no possibility to make the save operation
             file_saved = False
         else:
             # open the given ODF in write mode
-            if file_name == '':
+            if file_name_str == '':
                 # no given file name, make the saving in the already loaded ODF
-                file_name = self.odf_file_name
+                file_name_str = self.odf_file_name
 
             if self.odf_file_encoding == '':
                 self.odf_file_encoding = ENCODING_UTF8_BOM
 
             # check if the file name has an extension, if not add the .organ extension
-            if file_name[-6:] != '.organ':
-                file_name += '.organ'
+            if file_name_str[-6:] != '.organ':
+                file_name_str += '.organ'
 
             try:
-                f = open(file_name, mode='w', encoding=self.odf_file_encoding)
+                f = open(file_name_str, mode='w', encoding=self.odf_file_encoding)
             except OSError as err:
                 self.events_log_add(f"Cannot write in the file. {err}")
                 file_saved = False
@@ -201,9 +244,9 @@ class C_ODF:
                 file_saved = True
 
                 # store the name of the ODF file
-                self.odf_file_name = file_name
+                self.odf_file_name = file_name_str
 
-                self.events_log_add(f"Data saved in file '{file_name}' with encoding {self.odf_file_encoding}")
+                self.events_log_add(f"Data saved in file '{file_name_str}' with encoding {self.odf_file_encoding}")
 
         return file_saved
 
@@ -214,7 +257,7 @@ class C_ODF:
         self.odf_file_name = ''
         self.odf_file_encoding = ENCODING_ISO_8859_1
         self.odf_lines_list.clear()
-        self.odf_objects_dict.clear()
+        self.odf_objects_dic.clear()
         self.events_log_clear()
         self.new_panel_format = False
 
@@ -231,153 +274,153 @@ class C_ODF:
         self.events_log_list.clear()
 
     #-------------------------------------------------------------------------------------------------
-    def objects_dict_update(self):
+    def objects_dic_update(self):
         #--- (re)build the ODF objects dictionnary from the ODF lines list
 
         # parse the ODF lines list to recover all the present objects IDs
-        object_ID_list = []
+        object_UID_list = []
         for line in self.odf_lines_list:
-            if self.is_line_with_object_ID(line):
+            if self.is_line_with_object_UID(line):
                 # line with an object ID : add it in the objects ID list without the surrounding brackets
-                object_ID_list.append(line[1:-1])
+                object_UID_list.append(line[1:-1])
         # sort the objects ID list
-        object_ID_list.sort()
+        object_UID_list.sort()
 
         # initialize the ODF objects dictionnary using the items of the objects ID list as the keys of the dictionnary
-        self.odf_objects_dict.clear()
-        for object_ID in object_ID_list:
-            self.odf_objects_dict[object_ID] = ['', [], [], -1]  # set the format of each entry of the dictionnary
+        self.odf_objects_dic.clear()
+        for object_UID in object_UID_list:
+            self.odf_objects_dic[object_UID] = ['', [], [], -1]  # set the format of each entry of the dictionnary
 
-        object_ID = ''  # ID of the object for which we are parsing the attributes
+        object_UID = ''  # ID of the object for which we are parsing the attributes
 
         # parse the ODF lines list to fill the dictionnary values
         for index, line in enumerate(self.odf_lines_list):
 
-            if self.is_line_with_object_ID(line):
-                # line with an object ID
-                # recover the object ID without the surrounding brackets
-                object_ID = line[1:-1]
-                object_ID_str_len = len(object_ID)
+            if self.is_line_with_object_UID(line):
+                # line with an object UID
+                # recover the object UID without the surrounding brackets
+                object_UID = line[1:-1]
+                object_UID_str_len = len(object_UID)
 
-                # write in the dictionnary entry of this object ID the index of the line in the ODF lines list
-                self.odf_objects_dict[object_ID][IDX_OBJ_LINE] = index
+                # write in the dictionnary entry of this object UID the index of the line in the ODF lines list
+                self.odf_objects_dic[object_UID][IDX_OBJ_LINE] = index
 
-                if object_ID.startswith(('General', 'Manual', 'WindchestGroup', 'Image', 'Label', 'ReversiblePiston', 'SetterElement')):
+                if object_UID.startswith(('General', 'Manual', 'WindchestGroup', 'Image', 'Label', 'ReversiblePiston', 'SetterElement')):
                     # General999, Manual999, WindchestGroup999, ... object
                     # add a link between 'Organ' (parent) and this object (child)
-                    self.objects_dict_append_child('Organ', object_ID)
-                elif object_ID.startswith('Panel'):
-                    if object_ID_str_len == 8:
+                    self.objects_dic_append_child('Organ', object_UID)
+                elif object_UID.startswith('Panel'):
+                    if object_UID_str_len == 8:
                         # Panel999 object
                         # add a link between 'Organ' (parent) and this Panel999 (child)
-                        self.objects_dict_append_child('Organ', object_ID)
-                    elif object_ID_str_len > 8:
+                        self.objects_dic_append_child('Organ', object_UID)
+                    elif object_UID_str_len > 8:
                         # Panel999NNNNN999 object
                         # add a link between Panel999 (parent) and this Panel999NNNNN999 (child)
-                        self.objects_dict_append_child(object_ID[0:8], object_ID)
+                        self.objects_dic_append_child(object_UID[0:8], object_UID)
 
             elif self.is_line_with_attribute(line):
                 # line which contains an attribute
                 # recover the attribute name and its value (around the equal character)
-                (attr_name, attr_value) = line.split("=", 1)
+                (attr_name_str, attr_value_str) = line.split("=", 1)
 
-                if attr_name[-3:].isdigit() and attr_value.isdigit():
+                if attr_name_str[-3:].isdigit() and attr_value_str.isdigit():
                     # attribute which ends with 3 digits (like Coupler999) : it contains in its value the reference to another object
                     # add a link between the object ID to which belongs this attribute (parent) and the referenced other object ID (child)
-                    self.objects_dict_append_child(object_ID, attr_name[:-3] + attr_value.zfill(3))
-                elif attr_name == 'WindchestGroup' and attr_value.isdigit():
+                    self.objects_dic_append_child(object_UID, attr_name_str[:-3] + attr_value_str.zfill(3))
+                elif attr_name_str == 'WindchestGroup' and attr_value_str.isdigit():
                     # attribute WindchestGroup : it contains in its value the reference to a WindchestGroup
                     # add a link between the referenced WindchestGroup (parent) and the object ID to which belongs this attribute (child)
-                    self.objects_dict_append_child(attr_name + attr_value.zfill(3), object_ID)
-                elif object_ID[8:15] == 'Element' and attr_name in ('Coupler', 'Divisional', 'DivisionalCoupler', 'Enclosure', 'Stop', 'Switch', 'Tremulant'):
+                    self.objects_dic_append_child(attr_name_str + attr_value_str.zfill(3), object_UID)
+                elif object_UID[8:15] == 'Element' and attr_name_str in ('Coupler', 'Divisional', 'DivisionalCoupler', 'Enclosure', 'Stop', 'Switch', 'Tremulant'):
                     # panel element of the new panel format with a reference to an object of the main panel
-                    # add a link between the object_ID (parent) and the referenced object (child)
-                    self.objects_dict_append_child(object_ID, attr_name + attr_value.zfill(3))
+                    # add a link between the object_UID (parent) and the referenced object (child)
+                    self.objects_dic_append_child(object_UID, attr_name_str + attr_value_str.zfill(3))
 
                 # recover in the attributes a name for the current object
-                if (attr_name in ["Name", "ChurchName", "Type", "Image"] or attr_name[-4:] == "Text") and attr_value != "":
+                if (attr_name_str in ["Name", "ChurchName", "Type", "Image"] or attr_name_str[-4:] == "Text") and attr_value_str != "":
                     # the attribute is Name / ChurchName / Type / Image / ...Text and has a value defined
-                    if attr_name == "Image":
+                    if attr_name_str == "Image":
                         # image attribute, the value is the path of the image : keep from the image path only the file name
-                        attr_value = os.path.basename(attr_value)
+                        attr_value_str = os.path.basename(attr_value_str)
                     # add the attribute value as name of this object
-                    self.objects_dict_append_name(object_ID, attr_value)
+                    self.objects_dic_append_name(object_UID, attr_value_str)
 
         # sort the parents / children lists in each entry of the dictionnary
-        for object_ID in self.odf_objects_dict:
-            self.odf_objects_dict[object_ID][IDX_OBJ_PAR].sort()
-            self.odf_objects_dict[object_ID][IDX_OBJ_CHI].sort()
+        for object_UID in self.odf_objects_dic:
+            self.odf_objects_dic[object_UID][IDX_OBJ_PAR].sort()
+            self.odf_objects_dic[object_UID][IDX_OBJ_CHI].sort()
 
-##        self.objects_dict_save2file('objects_list_dict.txt')
+##        self.objects_dic_save2file('objects_list_dic.txt')
 
     #-------------------------------------------------------------------------------------------------
-    def objects_dict_append_name(self, object_ID, name_to_add):
+    def objects_dic_append_name(self, object_UID, name_to_add):
         #--- append in the objects dictionnary a name for the given object ID
 
-        if object_ID in self.odf_objects_dict:
+        if object_UID in self.odf_objects_dic:
             # add the given name to the name attribute of the entry of this object
-            if len(self.odf_objects_dict[object_ID][IDX_OBJ_NAME]) == 0:
-                self.odf_objects_dict[object_ID][IDX_OBJ_NAME] = name_to_add
+            if len(self.odf_objects_dic[object_UID][IDX_OBJ_NAME]) == 0:
+                self.odf_objects_dic[object_UID][IDX_OBJ_NAME] = name_to_add
             else:
-                self.odf_objects_dict[object_ID][IDX_OBJ_NAME] = self.odf_objects_dict[object_ID][IDX_OBJ_NAME] + ' | ' + name_to_add
+                self.odf_objects_dic[object_UID][IDX_OBJ_NAME] = self.odf_objects_dic[object_UID][IDX_OBJ_NAME] + ' | ' + name_to_add
         else:
             pass  # do nothing if the object ID is not present in the dictionnary, this should never happen because the name to add comes from this object
 
     #-------------------------------------------------------------------------------------------------
-    def objects_dict_append_child(self, parent_object_ID, child_object_ID):
+    def objects_dic_append_child(self, parent_object_UID, child_object_UID):
         #--- append in the objects dictionnary a link between the given parent / child objects
 
-        if parent_object_ID in self.odf_objects_dict and child_object_ID in self.odf_objects_dict:
-            # append the child object_ID to its parent properties
-            self.odf_objects_dict[parent_object_ID][IDX_OBJ_CHI].append(child_object_ID)
-            # append the parent object_ID to its child properties
-            self.odf_objects_dict[child_object_ID][IDX_OBJ_PAR].append(parent_object_ID)
+        if parent_object_UID in self.odf_objects_dic and child_object_UID in self.odf_objects_dic:
+            # append the child object_UID to its parent properties
+            self.odf_objects_dic[parent_object_UID][IDX_OBJ_CHI].append(child_object_UID)
+            # append the parent object_UID to its child properties
+            self.odf_objects_dic[child_object_UID][IDX_OBJ_PAR].append(parent_object_UID)
 
     #-------------------------------------------------------------------------------------------------
-    def objects_dict_save2file(self, file_name):
+    def objects_dic_save2file(self, file_name_str):
         #--- save the ODF objects dictionnary into the given file (for debug purpose)
 
-        with open(file_name, 'w') as f:
+        with open(file_name_str, 'w') as f:
             # write the dictionnary
             f.write('object ID : [object name, parents, children]\n')
             f.write('----------------------------------------\n')
-            for obj_ID, obj_prop_list in self.odf_objects_dict.items():
-                f.write('%s:%s\n' % (obj_ID, obj_prop_list))
+            for obj_UID, obj_prop_list in self.odf_objects_dic.items():
+                f.write('%s:%s\n' % (obj_UID, obj_prop_list))
 
     #-------------------------------------------------------------------------------------------------
-    def objects_type_count(self, object_type):
+    def objects_type_count(self, HW_object_type_str):
         #--- count the number of objects having the given object type (Manual, Enclosure, ...) in the objects dictionnary with a 3-digits ending index higher than 1
         #--- returns the number of found objects
 
         counter = 0
-        for object_ID in self.odf_objects_dict:
-            if object_ID[:-3] == object_type and object_ID[-3:].isdigit():
-                if int(object_ID[-3:]) > 0 :
+        for object_UID in self.odf_objects_dic:
+            if object_UID[:-3] == HW_object_type_str and object_UID[-3:].isdigit():
+                if int(object_UID[-3:]) > 0 :
                     counter += 1
-                elif object_type not in ('Panel', 'Manual'):
-                    self.events_log_add(f"Error : the object identifier {object_ID} cannot have the index 000")
+                elif HW_object_type_str not in ('Panel', 'Manual'):
+                    self.events_log_add(f"Error : the object identifier {object_UID} cannot have the index 000")
         return counter
 
     #-------------------------------------------------------------------------------------------------
-    def object_get_lines_range(self, object_ID):
+    def object_get_lines_range(self, object_UID):
         #--- return the indexes range of the object section (ID + attributes) in the ODF lines list
         #--- returns the range (0, 0) if the object ID has not been found
 
-        if object_ID == 'Header':
+        if object_UID == 'Header':
             # the header of the odf_lines_list
             # set the index to start the search from the beginning of the ODF lines list
             line_idx_first = line_idx_last = 0
-        elif object_ID in self.odf_objects_dict:
+        elif object_UID in self.odf_objects_dic:
             # recover in the dictionnary the index of the line where starts the given object ID
-            line_idx_first = self.odf_objects_dict[object_ID][IDX_OBJ_LINE]
+            line_idx_first = self.odf_objects_dic[object_UID][IDX_OBJ_LINE]
             # set the index to start the search from the line after the object ID
             line_idx_last = line_idx_first + 1
         else:
-            # return a void range since the object_ID is not in the dictionnary
+            # return a void range since the object_UID is not in the dictionnary
             return (0,0)
 
         # search for the start of the next object, or the end of odf_lines_list
-        while line_idx_last < len(self.odf_lines_list) and not(self.is_line_with_object_ID(self.odf_lines_list[line_idx_last])):
+        while line_idx_last < len(self.odf_lines_list) and not(self.is_line_with_object_UID(self.odf_lines_list[line_idx_last])):
             # no list end and no next object ID reached
             line_idx_last += 1
 
@@ -389,12 +432,12 @@ class C_ODF:
             return (line_idx_first, line_idx_last)
 
     #-------------------------------------------------------------------------------------------------
-    def object_get_data_list(self, object_ID):
+    def object_get_data_list(self, object_UID):
         #--- return from the ODF lines list the object section lines (object ID + attributes) of the given object ID
         #--- if the object has not be found, return an empty list
 
         # get the lines range of the object in odf_lines_list
-        obj_range = self.object_get_lines_range(object_ID)
+        obj_range = self.object_get_lines_range(object_UID)
 
         if obj_range != (0, 0):
             return self.odf_lines_list[obj_range[0]:obj_range[1]]
@@ -402,84 +445,84 @@ class C_ODF:
             return []
 
     #-------------------------------------------------------------------------------------------------
-    def object_get_attribute_value(self, object_ID_or_list, attribute, is_list_sorted = False):
+    def object_get_attribute_value(self, object_UID_or_list, attribute, is_list_sorted = False):
         #--- returns the value (string) of the given attribute defined in the given object ID section of the ODF lines list
         #---   or defined in the given object lines list (which can be sorted, to accelerate the search)
         #--- returns a tuple (attribute value if found else '', index of the attribute in the list if found else -1)
 
-        if isinstance(object_ID_or_list, list):
+        if isinstance(object_UID_or_list, list):
             # the given parameter is a list
-            object_lines_list = object_ID_or_list
+            object_lines_list = object_UID_or_list
         else:
             # the given parameter is an object ID
             # get the lines of the object in the ODF lines list
-            object_lines_list = self.object_get_data_list(object_ID_or_list)
+            object_lines_list = self.object_get_data_list(object_UID_or_list)
 
         for index, line in enumerate(object_lines_list):
             if self.is_line_with_attribute(line):
                 # the line contains an attribute
                 # recover the attribute name and value present in this line
-                (attr_name, attr_value) = line.split("=", 1)
-                if attr_name == attribute:
-                    return (attr_value, index)
-                elif is_list_sorted and attr_name > attribute:
+                (attr_name_str, attr_value_str) = line.split("=", 1)
+                if attr_name_str == attribute:
+                    return (attr_value_str, index)
+                elif is_list_sorted and attr_name_str > attribute:
                     break
         return ('', -1)
 
     #-------------------------------------------------------------------------------------------------
-    def object_get_parent_panel_ID(self, object_ID):
+    def object_get_parent_panel_UID(self, object_UID):
         #--- returns the object ID of the panel (Panel999 or Organ if old panel format) to which belongs the given object ID
 
-        parent_panel_ID = ''
+        parent_panel_UID = ''
 
-        if object_ID[:5] == 'Panel':
-            if len(object_ID) == 8:
+        if object_UID[:5] == 'Panel':
+            if len(object_UID) == 8:
                 # Panel999 : it has no parent panel
-                parent_panel_ID = ''
+                parent_panel_UID = ''
             else:
                 # Panel999NNNNN999
-                parent_panel_ID = object_ID[:8]
+                parent_panel_UID = object_UID[:8]
         else:
             # the object ID is not Panel999 or Panel999Element999, so it is necessarily displayed in the main panel
             if self.new_panel_format:
-                parent_panel_ID = 'Panel000'
+                parent_panel_UID = 'Panel000'
             else:
-                parent_panel_ID = 'Organ'
+                parent_panel_UID = 'Organ'
 
-        return parent_panel_ID
+        return parent_panel_UID
 
     #-------------------------------------------------------------------------------------------------
-    def object_get_parent_manual_ID(self, object_ID):
+    def object_get_parent_manual_UID(self, object_UID):
         #--- returns the object ID of the manual (Manual999) to which belongs the given object ID
 
         # parse the various Manual999 objects of the dictionnary to see where is referenced the given object ID
-        for obj_ID in self.odf_objects_dict:
-            if obj_ID[:6] == 'Manual':
+        for obj_UID in self.odf_objects_dic:
+            if obj_UID[:6] == 'Manual':
                 # get the lines of the Manual999 object in the ODF lines list
-                object_lines_list = self.object_get_data_list(obj_ID)
+                object_lines_list = self.object_get_data_list(obj_UID)
                 # parse the attributes of this Manual object
                 for line in object_lines_list:
                     if self.is_line_with_attribute(line):
-                        (attr_name, attr_value) = line.split("=", 1)
-                        if attr_name[:-3] == object_ID[:-3] and attr_value.zfill(3) == object_ID[-3:]:
+                        (attr_name_str, attr_value_str) = line.split("=", 1)
+                        if attr_name_str[:-3] == object_UID[:-3] and attr_value_str.zfill(3) == object_UID[-3:]:
                             # object reference found
-                            return obj_ID
+                            return obj_UID
         return ''
 
     #-------------------------------------------------------------------------------------------------
-    def object_set_data_list(self, object_ID, new_list):
+    def object_set_data_list(self, object_UID, new_list):
         #--- replace in odf_lines_list the object section lines (object ID + attributes) of the given object ID
-        #--- if the object ID doesn't exist yet, or if object_ID is empty, add it in odf_lines_list
+        #--- if the object ID doesn't exist yet, or if object_UID is empty, add it in odf_lines_list
         #--- return the object ID if the set has been done properly, else an empty string
 
         is_new_list_OK = True
-        new_object_ID = object_ID
+        new_object_UID = object_UID
 
         if self.is_list_empty(new_list):
             # empty list provided
-            if object_ID == 'Header':
+            if object_UID == 'Header':
                 # the empty list is in the header of the ODF
-                obj_range = self.object_get_lines_range(object_ID)
+                obj_range = self.object_get_lines_range(object_UID)
                 if obj_range != (0, 0):
                     # the header has been found in odf_lines_list, replace it by an empty list
                     self.odf_lines_list[obj_range[0]:obj_range[1]] = new_list
@@ -490,7 +533,7 @@ class C_ODF:
                 is_new_list_OK = False
         else:
             # the new list is not empty
-            if object_ID == 'Header':
+            if object_UID == 'Header':
                 # special processing if the object is Header, that is the beginning of the odf_lines_list before the first object ID
                 # it can contain only comment or empty lines
                 # check that the lines of the new list contain only comments or empty lines
@@ -500,7 +543,7 @@ class C_ODF:
                         is_new_list_OK = False
                 if is_new_list_OK:
                     # replace the header section by the new list
-                    obj_range = self.object_get_lines_range(object_ID)
+                    obj_range = self.object_get_lines_range(object_UID)
                     self.odf_lines_list[obj_range[0]:obj_range[1]] = new_list
                     self.events_log_add(f"Header updated")
 
@@ -510,67 +553,67 @@ class C_ODF:
                 for index, line in enumerate(new_list):
                     # remove the trailing blank spaces if any
                     line = line.rstrip()
-                    if not self.check_odf_line_syntax(line, object_ID):
+                    if not self.check_odf_line_syntax(line, object_UID):
                         # the line has syntax issue
                         is_new_list_OK = False
                     else:
                         if index == 0:
-                            if self.is_line_with_object_ID(line):
+                            if self.is_line_with_object_UID(line):
                                 # the first line contains an object ID, get it
-                                new_object_ID = line[1:-1]
+                                new_object_UID = line[1:-1]
                             else:
                                 self.events_log_add(f"Syntax error : the first line of the object section must containt an object ID between brackets")
                                 is_new_list_OK = False
-                        elif self.is_line_with_object_ID(line):
+                        elif self.is_line_with_object_UID(line):
                                 self.events_log_add(f"Syntax error : '{line}' an object ID between brackets must be present only in first line of the object section")
                                 is_new_list_OK = False
 
                 if is_new_list_OK:
                     # manage the case where the new list contains a new object ID compared to the one given in argument
-                    if new_object_ID != object_ID and object_ID != '':
-                        self.events_log_add(f"Object {object_ID} unchanged")
+                    if new_object_UID != object_UID and object_UID != '':
+                        self.events_log_add(f"Object {object_UID} unchanged")
 
                     # recover the range of the object to update in odf_lines_list (if it exists)
-                    obj_range = self.object_get_lines_range(new_object_ID)
+                    obj_range = self.object_get_lines_range(new_object_UID)
                     if obj_range != (0, 0):
                         # the object has been found in odf_lines_list, update it with the new list
                         self.odf_lines_list[obj_range[0]:obj_range[1]] = new_list
-                        self.events_log_add(f"Object {new_object_ID} updated")
+                        self.events_log_add(f"Object {new_object_UID} updated")
                     else:
                         # the object doesn't exist in odf_lines_list, add it
                         # add a blank line at the beginning of the new list
                         new_list.insert(0, "")
                         # add the new object in odf_lines_list
                         self.odf_lines_list.extend(new_list)
-                        self.events_log_add(f"Object {new_object_ID} added")
+                        self.events_log_add(f"Object {new_object_UID} added")
 
                     # update the objects dictionnary
-                    self.objects_dict_update()
+                    self.objects_dic_update()
 
-        return new_object_ID if is_new_list_OK else ''
+        return new_object_UID if is_new_list_OK else ''
 
     #-------------------------------------------------------------------------------------------------
-    def object_remove(self, object_ID):
+    def object_remove(self, object_UID):
         #--- remove from odf_lines_list the object section lines (object ID + attributes) of the given object ID
         #--- ask to the user to confirm the deletion
         #--- return True or False whether the deletion has been done or not
 
         obj_removed_ok = False
 
-        if messagebox.askokcancel("ODF Editor", "Do you confirm you want to delete the object " + object_ID + " ?"):
+        if messagebox.askokcancel("ODF Editor", "Do you confirm you want to delete the object " + object_UID + " ?"):
             # the user has accepted the deletion
             # recover the range of the object data
-            obj_range = self.object_get_lines_range(object_ID)
+            obj_range = self.object_get_lines_range(object_UID)
             if obj_range != (0, 0):
                 # the range has been recovered
                 # remove the object section in odf_lines_list
                 self.odf_lines_list[obj_range[0]:obj_range[1]] = []
-                self.events_log_add(f"Object {object_ID} deleted")
+                self.events_log_add(f"Object {object_UID} deleted")
                 # update the objects dictionnary
-                self.objects_dict_update()
+                self.objects_dic_update()
                 obj_removed_ok = True
             else:
-                self.events_log_add(f"Object {object_ID} not deleted because not found")
+                self.events_log_add(f"Object {object_UID} not deleted because not found")
                 obj_removed_ok = False
         else:
             obj_removed_ok = False
@@ -590,7 +633,7 @@ class C_ODF:
         return is_empty
 
     #-------------------------------------------------------------------------------------------------
-    def is_line_with_object_ID(self, line_to_check):
+    def is_line_with_object_UID(self, line_to_check):
         #--- returns True or False whether the given line contains an object ID or not (at least 1 character between brackets)
 
         return (line_to_check[:1] == "[" and line_to_check[-1:] == "]" and len(line_to_check) > 2)
@@ -628,17 +671,17 @@ class C_ODF:
                 self.events_log_add(f"Syntax error in {line_location} '{line}' : the character '=' must not start a line")
                 syntax_is_OK = False
             else:
-                attr_name = line.rpartition("=")[0]  # recover the attribute at the left of =
-                for char in attr_name:
+                attr_name_str = line.rpartition("=")[0]  # recover the attribute at the left of =
+                for char in attr_name_str:
                     if char not in ALLOWED_CHARS_4_FIELDS:
-                        self.events_log_add(f"Syntax error in {line_location} '{line}' : the attribute '{attr_name}' must contain only alphanumeric or '_' characters")
+                        self.events_log_add(f"Syntax error in {line_location} '{line}' : the attribute '{attr_name_str}' must contain only alphanumeric or '_' characters")
                         syntax_is_OK = False
                         break
 
         return syntax_is_OK
 
     #-------------------------------------------------------------------------------------------------
-    def check_odf_lines(self, update_call_back_fct):
+    def check_odf_lines(self, progress_status_update_fct):
         #--- check the consistency of the data which are present in odf_lines_list
 
         if self.check_files_names == '':
@@ -649,6 +692,10 @@ class C_ODF:
 
         # update the panel format flag
         self.check_odf_panel_format()
+        if self.new_panel_format:
+            self.events_log_add("New panel format")
+        else:
+            self.events_log_add("Old panel format")
 
         # check the syntax of the header of the ODF
         object_lines_list = self.object_get_data_list('Header')
@@ -656,24 +703,24 @@ class C_ODF:
             self.check_odf_line_syntax(line, "the header")
 
         # check the presence of the Organ object (which is the root of all the other objects)
-        if 'Organ' not in self.odf_objects_dict:
+        if 'Organ' not in self.odf_objects_dic:
             self.events_log_add("Error : the object Organ is not defined")
 
-        for object_ID in self.odf_objects_dict:
+        for object_UID in self.odf_objects_dic:
             # parse the objects of the objects dictionnary keys
 
             # recover the lines of the object section in odf_lines_list
-            object_lines_list = self.object_get_data_list(object_ID)
+            object_lines_list = self.object_get_data_list(object_UID)
 
             # update in the GUI the name of the checked object ID
-            update_call_back_fct(object_ID)
+            progress_status_update_fct(f'Checking {object_UID}...')
 
             if len(object_lines_list) > 0:
                 # lines have been recovered for the current object ID
 
                 # check the syntax of the lines of the object
                 for line in object_lines_list:
-                    self.check_odf_line_syntax(line, object_ID)
+                    self.check_odf_line_syntax(line, object_UID)
 
                 # remove the first line of the object section which contains the object ID
                 object_lines_list.pop(0)
@@ -682,59 +729,59 @@ class C_ODF:
                 object_lines_list.sort()
 
                 # remove the first line while it is empty (after the sorting the empty lines are all in first positions)
-                while object_lines_list[0] == '':
+                while len(object_lines_list) > 0 and object_lines_list[0] == '':
                     object_lines_list.pop(0)
 
                 # check if the attributes are all uniques in the object section
-                self.check_attributes_unicity(object_ID, object_lines_list)
+                self.check_attributes_unicity(object_UID, object_lines_list)
 
                 # generate the generic object ID (Manual999 instead of Manual001 for example)
-                gen_object_ID = ''
-                for c in object_ID:
-                    gen_object_ID += '9' if c.isdigit() else c
+                gen_object_UID = ''
+                for c in object_UID:
+                    gen_object_UID += '9' if c.isdigit() else c
 
                 # check the attributes and values of the object
-                if gen_object_ID == 'Organ':
-                    self.check_object_Organ(object_ID, object_lines_list)
-                elif gen_object_ID == 'Coupler999':
-                    self.check_object_Coupler(object_ID, object_lines_list)
-                elif gen_object_ID == 'Divisional999':
-                    self.check_object_Divisional(object_ID, object_lines_list)
-                elif gen_object_ID == 'DivisionalCoupler999':
-                    self.check_object_DivisionalCoupler(object_ID, object_lines_list)
-                elif gen_object_ID == 'Enclosure999':
-                    self.check_object_Enclosure(object_ID, object_lines_list)
-                elif gen_object_ID == 'General999':
-                    self.check_object_General(object_ID, object_lines_list)
-                elif gen_object_ID == 'Image999':
-                    self.check_object_Image(object_ID, object_lines_list)
-                elif gen_object_ID == 'Label999':
-                    self.check_object_Label(object_ID, object_lines_list)
-                elif gen_object_ID == 'Manual999':
-                    self.check_object_Manual(object_ID, object_lines_list)
-                elif gen_object_ID == 'Panel999':
-                    self.check_object_Panel(object_ID, object_lines_list)
-                elif gen_object_ID == 'Panel999Element999':
-                    self.check_object_PanelElement(object_ID, object_lines_list)
-                elif gen_object_ID[:5] == 'Panel': # Panel999Coupler999, Panel999Divisional999, Panel999Image999, ...
-                    self.check_object_PanelOther(object_ID, object_lines_list)
-                elif gen_object_ID == 'Rank999':
-                    self.check_object_Rank(object_ID, object_lines_list)
-                elif gen_object_ID == 'ReversiblePiston999':
-                    self.check_object_ReversiblePiston(object_ID, object_lines_list)
-                elif gen_object_ID == 'SetterElement999':
-                    self.check_object_SetterElement(object_ID, object_lines_list)
-                elif gen_object_ID == 'Stop999':
-                    self.check_object_Stop(object_ID, object_lines_list)
-                elif gen_object_ID == 'Switch999':
-                    self.check_object_Switch(object_ID, object_lines_list)
-                elif gen_object_ID == 'Tremulant999':
-                    self.check_object_Tremulant(object_ID, object_lines_list)
-                elif gen_object_ID == 'WindchestGroup999':
-                    self.check_object_WindchestGroup(object_ID, object_lines_list)
+                if gen_object_UID == 'Organ':
+                    self.check_object_Organ(object_UID, object_lines_list)
+                elif gen_object_UID == 'Coupler999':
+                    self.check_object_Coupler(object_UID, object_lines_list)
+                elif gen_object_UID == 'Divisional999':
+                    self.check_object_Divisional(object_UID, object_lines_list)
+                elif gen_object_UID == 'DivisionalCoupler999':
+                    self.check_object_DivisionalCoupler(object_UID, object_lines_list)
+                elif gen_object_UID == 'Enclosure999':
+                    self.check_object_Enclosure(object_UID, object_lines_list)
+                elif gen_object_UID == 'General999':
+                    self.check_object_General(object_UID, object_lines_list)
+                elif gen_object_UID == 'Image999':
+                    self.check_object_Image(object_UID, object_lines_list)
+                elif gen_object_UID == 'Label999':
+                    self.check_object_Label(object_UID, object_lines_list)
+                elif gen_object_UID == 'Manual999':
+                    self.check_object_Manual(object_UID, object_lines_list)
+                elif gen_object_UID == 'Panel999':
+                    self.check_object_Panel(object_UID, object_lines_list)
+                elif gen_object_UID == 'Panel999Element999':
+                    self.check_object_PanelElement(object_UID, object_lines_list)
+                elif gen_object_UID[:5] == 'Panel': # Panel999Coupler999, Panel999Divisional999, Panel999Image999, ...
+                    self.check_object_PanelOther(object_UID, object_lines_list)
+                elif gen_object_UID == 'Rank999':
+                    self.check_object_Rank(object_UID, object_lines_list)
+                elif gen_object_UID == 'ReversiblePiston999':
+                    self.check_object_ReversiblePiston(object_UID, object_lines_list)
+                elif gen_object_UID == 'SetterElement999':
+                    self.check_object_SetterElement(object_UID, object_lines_list)
+                elif gen_object_UID == 'Stop999':
+                    self.check_object_Stop(object_UID, object_lines_list)
+                elif gen_object_UID == 'Switch999':
+                    self.check_object_Switch(object_UID, object_lines_list)
+                elif gen_object_UID == 'Tremulant999':
+                    self.check_object_Tremulant(object_UID, object_lines_list)
+                elif gen_object_UID == 'WindchestGroup999':
+                    self.check_object_WindchestGroup(object_UID, object_lines_list)
                 else:
                     # the object ID has not been recognized
-                    self.events_log_add(f"Error : the object identifier {object_ID} is invalid or misspelled")
+                    self.events_log_add(f"Error : the object identifier {object_UID} is invalid or misspelled")
                     # empty the lines list of the object which is not recognized, to not display in the log its attributes which have not been checked
                     object_lines_list = []
 
@@ -744,17 +791,17 @@ class C_ODF:
                 for line in object_lines_list:
                     if self.is_line_with_attribute(line):
                         self.check_nb_attr += 1
-                        (attr_name, attr_value) = line.split("=", 1)
-                        self.events_log_add(f"Warning in {object_ID} : the attribute {attr_name} is not expected in this object or is misspelled or please fix an error above")
+                        (attr_name_str, attr_value_str) = line.split("=", 1)
+                        self.events_log_add(f"Warning in {object_UID} : the attribute {attr_name_str} is not expected in this object or is misspelled")
 
         # report in the logs if Couplers / Divisionals / Stops are referenced in none object (Manual or WindchestGroup), so they are not used
-        for obj_ID, obj_prop_list in self.odf_objects_dict.items():
-            if obj_ID != 'Organ' and len(obj_prop_list[IDX_OBJ_PAR]) == 0:
+        for obj_UID, obj_prop_list in self.odf_objects_dic.items():
+            if obj_UID != 'Organ' and len(obj_prop_list[IDX_OBJ_PAR]) == 0:
                 # the object has none parent in the objects dictionnary
-                self.events_log_add(f"Warning : the object {obj_ID} is not used")
+                self.events_log_add(f"Warning : the object {obj_UID} is not used")
 
         # display in the log the number of checked attributes
-        self.events_log_add(f"{self.check_nb_attr} attributes checked")
+        self.events_log_add(f"{self.check_nb_attr:,} attributes checked")
 
         # display in the log if none error has been detected
         if len(self.events_log_list) <= 3:  # 3 lines minimum : check start message + detected panel format + number of checked attributes
@@ -764,181 +811,176 @@ class C_ODF:
     def check_odf_panel_format(self):
         #--- check which is the panel format used in the ODF (new or old) and update the flag
 
-        (attr_value, attr_idx) = self.object_get_attribute_value('Panel000', 'NumberOfGUIElements')
-        self.new_panel_format = (attr_value.isdigit() and int(attr_value) >= 0)
-
-        if self.new_panel_format:
-            self.events_log_add("New panel format detected")
-        else:
-            self.events_log_add("Old panel format detected")
+        (attr_value_str, attr_idx) = self.object_get_attribute_value('Panel000', 'NumberOfGUIElements')
+        self.new_panel_format = (attr_value_str.isdigit() and int(attr_value_str) >= 0)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_Organ(self, object_ID, lines_list):
+    def check_object_Organ(self, object_UID, lines_list):
         #--- check the data of an Organ object section which the lines are in the given lines list
 
         # required attributes
-        self.check_attribute_value(object_ID, lines_list, 'ChurchName', ATTR_TYPE_STRING, True)
-        self.check_attribute_value(object_ID, lines_list, 'ChurchAddress', ATTR_TYPE_STRING, True)
+        self.check_attribute_value(object_UID, lines_list, 'ChurchName', ATTR_TYPE_STRING, True)
+        self.check_attribute_value(object_UID, lines_list, 'ChurchAddress', ATTR_TYPE_STRING, True)
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'HasPedals', ATTR_TYPE_BOOLEAN, True)
-        if ret == "Y" and not ('Manual000' in self.odf_objects_dict):
-            self.events_log_add(f"Error in {object_ID} : HasPedals=Y but no Manual000 object is defined")
-        elif ret == "N" and ('Manual000' in self.odf_objects_dict):
-            self.events_log_add(f"Error in {object_ID} : HasPedals=N whereas a Manual000 object is defined")
+        ret = self.check_attribute_value(object_UID, lines_list, 'HasPedals', ATTR_TYPE_BOOLEAN, True)
+        if ret == "Y" and not ('Manual000' in self.odf_objects_dic):
+            self.events_log_add(f"Error in {object_UID} : HasPedals=Y but no Manual000 object is defined")
+        elif ret == "N" and ('Manual000' in self.odf_objects_dic):
+            self.events_log_add(f"Error in {object_UID} : HasPedals=N whereas a Manual000 object is defined")
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfDivisionalCouplers', ATTR_TYPE_INTEGER, True, 0, 8)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfDivisionalCouplers', ATTR_TYPE_INTEGER, True, 0, 8)
         if ret.isdigit() and int(ret) >= 0:
             count = self.objects_type_count('DivisionalCoupler')
             if count != int(ret):
-                self.events_log_add(f"Error in {object_ID} : NumberOfDivisionalCouplers={ret} whereas {count} DivisionalCoupler object(s) defined")
+                self.events_log_add(f"Error in {object_UID} : NumberOfDivisionalCouplers={ret} whereas {count} DivisionalCoupler object(s) defined")
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfEnclosures', ATTR_TYPE_INTEGER, True, 0, 50)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfEnclosures', ATTR_TYPE_INTEGER, True, 0, 50)
         if ret.isdigit() and int(ret) >= 0:
             count = self.objects_type_count('Enclosure')
             if count != int(ret):
-                self.events_log_add(f"Error in {object_ID} : NumberOfEnclosures={ret} whereas {count} Enclosure object(s) defined")
+                self.events_log_add(f"Error in {object_UID} : NumberOfEnclosures={ret} whereas {count} Enclosure object(s) defined")
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfGenerals', ATTR_TYPE_INTEGER, True, 0, 99)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfGenerals', ATTR_TYPE_INTEGER, True, 0, 99)
         if ret.isdigit() and int(ret) >= 0:
             count = self.objects_type_count('General')
             if count != int(ret):
-                self.events_log_add(f"Error in {object_ID} : NumberOfGenerals={ret} whereas {count} General object(s) defined")
+                self.events_log_add(f"Error in {object_UID} : NumberOfGenerals={ret} whereas {count} General object(s) defined")
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfManuals', ATTR_TYPE_INTEGER, True, 1, 16)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfManuals', ATTR_TYPE_INTEGER, True, 1, 16)
         if ret.isdigit() and int(ret) >= 0:
             count = self.objects_type_count('Manual')
             if count != int(ret):
-                self.events_log_add(f"Error in {object_ID} : NumberOfManuals={ret} whereas {count} Manual object(s) defined")
+                self.events_log_add(f"Error in {object_UID} : NumberOfManuals={ret} whereas {count} Manual object(s) defined")
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfPanels', ATTR_TYPE_INTEGER, self.new_panel_format, 0, 100)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfPanels', ATTR_TYPE_INTEGER, self.new_panel_format, 0, 100)
         if ret.isdigit() and int(ret) >= 0:
             count = self.objects_type_count('Panel')
             if count != int(ret):
-                self.events_log_add(f"Error in {object_ID} : NumberOfPanels={ret} whereas {count} Panel object(s) defined")
+                self.events_log_add(f"Error in {object_UID} : NumberOfPanels={ret} whereas {count} Panel object(s) defined")
 
-        if self.new_panel_format and not ('Panel000' in self.odf_objects_dict):
+        if self.new_panel_format and not ('Panel000' in self.odf_objects_dic):
             self.events_log_add(f"Error : new panel format used but no Panel000 object is defined")
-        elif not self.new_panel_format and ('Panel000' in self.odf_objects_dict):
-            self.events_log_add(f"Error in {object_ID} : old panel format used whereas a Panel000 is defined")
+        elif not self.new_panel_format and ('Panel000' in self.odf_objects_dic):
+            self.events_log_add(f"Error in {object_UID} : old panel format used whereas a Panel000 is defined")
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfReversiblePistons', ATTR_TYPE_INTEGER, True, 0, 32)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfReversiblePistons', ATTR_TYPE_INTEGER, True, 0, 32)
         if ret.isdigit() and int(ret) >= 0:
             count = self.objects_type_count('ReversiblePiston')
             if count != int(ret):
-                self.events_log_add(f"Error in {object_ID} : NumberOfReversiblePistons={ret} whereas {count} ReversiblePiston object(s) defined")
+                self.events_log_add(f"Error in {object_UID} : NumberOfReversiblePistons={ret} whereas {count} ReversiblePiston object(s) defined")
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, True, 0, 10)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, True, 0, 10)
         if ret.isdigit() and int(ret) >= 0:
             count = self.objects_type_count('Tremulant')
             if count != int(ret):
-                self.events_log_add(f"Error in {object_ID} : NumberOfTremulants={ret} whereas {count} Tremulant object(s) defined")
+                self.events_log_add(f"Error in {object_UID} : NumberOfTremulants={ret} whereas {count} Tremulant object(s) defined")
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfWindchestGroups', ATTR_TYPE_INTEGER, True, 1, 50)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfWindchestGroups', ATTR_TYPE_INTEGER, True, 1, 50)
         if ret.isdigit() and int(ret) >= 0:
             count = self.objects_type_count('WindchestGroup')
             if count != int(ret):
-                self.events_log_add(f"Error in {object_ID} : NumberOfWindchestGroups={ret} whereas {count} WindchestGroup object(s) defined")
+                self.events_log_add(f"Error in {object_UID} : NumberOfWindchestGroups={ret} whereas {count} WindchestGroup object(s) defined")
 
-        self.check_attribute_value(object_ID, lines_list, 'DivisionalsStoreIntermanualCouplers', ATTR_TYPE_BOOLEAN, True)
-        self.check_attribute_value(object_ID, lines_list, 'DivisionalsStoreIntramanualCouplers', ATTR_TYPE_BOOLEAN, True)
-        self.check_attribute_value(object_ID, lines_list, 'DivisionalsStoreTremulants', ATTR_TYPE_BOOLEAN, True)
-        self.check_attribute_value(object_ID, lines_list, 'GeneralsStoreDivisionalCouplers', ATTR_TYPE_BOOLEAN, True)
+        self.check_attribute_value(object_UID, lines_list, 'DivisionalsStoreIntermanualCouplers', ATTR_TYPE_BOOLEAN, True)
+        self.check_attribute_value(object_UID, lines_list, 'DivisionalsStoreIntramanualCouplers', ATTR_TYPE_BOOLEAN, True)
+        self.check_attribute_value(object_UID, lines_list, 'DivisionalsStoreTremulants', ATTR_TYPE_BOOLEAN, True)
+        self.check_attribute_value(object_UID, lines_list, 'GeneralsStoreDivisionalCouplers', ATTR_TYPE_BOOLEAN, True)
 
         # optional attributes
-        self.check_attribute_value(object_ID, lines_list, 'OrganBuilder', ATTR_TYPE_STRING, False)
-        self.check_attribute_value(object_ID, lines_list, 'OrganBuildDate', ATTR_TYPE_STRING, False)
-        self.check_attribute_value(object_ID, lines_list, 'OrganComments', ATTR_TYPE_STRING, False)
-        self.check_attribute_value(object_ID, lines_list, 'RecordingDetails', ATTR_TYPE_STRING, False)
-        self.check_attribute_value(object_ID, lines_list, 'InfoFilename', ATTR_TYPE_STRING, False)
+        self.check_attribute_value(object_UID, lines_list, 'OrganBuilder', ATTR_TYPE_STRING, False)
+        self.check_attribute_value(object_UID, lines_list, 'OrganBuildDate', ATTR_TYPE_STRING, False)
+        self.check_attribute_value(object_UID, lines_list, 'OrganComments', ATTR_TYPE_STRING, False)
+        self.check_attribute_value(object_UID, lines_list, 'RecordingDetails', ATTR_TYPE_STRING, False)
+        self.check_attribute_value(object_UID, lines_list, 'InfoFilename', ATTR_TYPE_STRING, False)
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfImages', ATTR_TYPE_INTEGER, False, 0, 999) # old panel format
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfImages', ATTR_TYPE_INTEGER, False, 0, 999) # old panel format
         if ret.isdigit() and int(ret) >= 0:
             count = self.objects_type_count('Image')
             if count != int(ret):
-                self.events_log_add(f"Error in {object_ID} : NumberOfImages={ret} whereas {count} Image object(s) defined")
+                self.events_log_add(f"Error in {object_UID} : NumberOfImages={ret} whereas {count} Image object(s) defined")
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfLabels', ATTR_TYPE_INTEGER, False, 0, 999)  # old panel format
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfLabels', ATTR_TYPE_INTEGER, False, 0, 999)  # old panel format
         if ret.isdigit() and int(ret) >= 0:
             count = self.objects_type_count('Label')
             if count != int(ret):
-                self.events_log_add(f"Error in {object_ID} : NumberOfLabels={ret} whereas {count} Label object(s) defined")
+                self.events_log_add(f"Error in {object_UID} : NumberOfLabels={ret} whereas {count} Label object(s) defined")
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfRanks', ATTR_TYPE_INTEGER, False, 0, 999)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfRanks', ATTR_TYPE_INTEGER, False, 0, 999)
         if ret.isdigit() and int(ret) >= 0:
             count = self.objects_type_count('Rank')
             if count != int(ret):
-                self.events_log_add(f"Error in {object_ID} : NumberOfRanks={ret} whereas {count} Rank object(s) defined")
+                self.events_log_add(f"Error in {object_UID} : NumberOfRanks={ret} whereas {count} Rank object(s) defined")
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfSetterElements', ATTR_TYPE_INTEGER, False, 0, 999)  # old panel format
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfSetterElements', ATTR_TYPE_INTEGER, False, 0, 999)  # old panel format
         if ret.isdigit() and int(ret) >= 0:
             count = self.objects_type_count('SetterElement')
             if count != int(ret):
-                self.events_log_add(f"Error in {object_ID} : NumberOfSetterElements={ret} whereas {count} SetterElement object(s) defined")
+                self.events_log_add(f"Error in {object_UID} : NumberOfSetterElements={ret} whereas {count} SetterElement object(s) defined")
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, 999)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, 999)
         if ret.isdigit() and int(ret) >= 0:
             count = self.objects_type_count('Switch')
             if count != int(ret):
-                self.events_log_add(f"Error in {object_ID} : NumberOfSwitches={ret} whereas {count} Switch object(s) defined")
+                self.events_log_add(f"Error in {object_UID} : NumberOfSwitches={ret} whereas {count} Switch object(s) defined")
 
-        self.check_attribute_value(object_ID, lines_list, 'CombinationsStoreNonDisplayedDrawstops', ATTR_TYPE_BOOLEAN, False)
-        self.check_attribute_value(object_ID, lines_list, 'AmplitudeLevel', ATTR_TYPE_FLOAT, False, 0, 1000)
-        self.check_attribute_value(object_ID, lines_list, 'Gain', ATTR_TYPE_FLOAT, False, -120, 40)
-        self.check_attribute_value(object_ID, lines_list, 'PitchTuning', ATTR_TYPE_FLOAT, False, -1200, 1200)
-        self.check_attribute_value(object_ID, lines_list, 'TrackerDelay', ATTR_TYPE_FLOAT, False, 0, 10000)
+        self.check_attribute_value(object_UID, lines_list, 'CombinationsStoreNonDisplayedDrawstops', ATTR_TYPE_BOOLEAN, False)
+        self.check_attribute_value(object_UID, lines_list, 'AmplitudeLevel', ATTR_TYPE_FLOAT, False, 0, 1000)
+        self.check_attribute_value(object_UID, lines_list, 'Gain', ATTR_TYPE_FLOAT, False, -120, 40)
+        self.check_attribute_value(object_UID, lines_list, 'PitchTuning', ATTR_TYPE_FLOAT, False, -1200, 1200)
+        self.check_attribute_value(object_UID, lines_list, 'TrackerDelay', ATTR_TYPE_FLOAT, False, 0, 10000)
 
         if not self.new_panel_format:
             # if old parnel format, the Organ object contains panel attributes
-            self.check_object_Panel(object_ID, lines_list)
+            self.check_object_Panel(object_UID, lines_list)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_Button(self, object_ID, lines_list):
+    def check_object_Button(self, object_UID, lines_list):
         #--- check the data of a Button object section which the lines are in the given lines list
 
         # optional attributes
-        self.check_attribute_value(object_ID, lines_list, 'Name', ATTR_TYPE_STRING, False)
-        self.check_attribute_value(object_ID, lines_list, 'ShortcutKey', ATTR_TYPE_INTEGER, False, 0, 255)
-        self.check_attribute_value(object_ID, lines_list, 'StopControlMIDIKeyNumber', ATTR_TYPE_INTEGER, False, 0, 127)
-        self.check_attribute_value(object_ID, lines_list, 'MIDIProgramChangeNumber', ATTR_TYPE_INTEGER, False, 1, 128)
-        self.check_attribute_value(object_ID, lines_list, 'Displayed', ATTR_TYPE_BOOLEAN, False)
-        self.check_attribute_value(object_ID, lines_list, 'DisplayInInvertedState', ATTR_TYPE_BOOLEAN, False)
+        self.check_attribute_value(object_UID, lines_list, 'Name', ATTR_TYPE_STRING, False)
+        self.check_attribute_value(object_UID, lines_list, 'ShortcutKey', ATTR_TYPE_INTEGER, False, 0, 255)
+        self.check_attribute_value(object_UID, lines_list, 'StopControlMIDIKeyNumber', ATTR_TYPE_INTEGER, False, 0, 127)
+        self.check_attribute_value(object_UID, lines_list, 'MIDIProgramChangeNumber', ATTR_TYPE_INTEGER, False, 1, 128)
+        self.check_attribute_value(object_UID, lines_list, 'Displayed', ATTR_TYPE_BOOLEAN, False)
+        self.check_attribute_value(object_UID, lines_list, 'DisplayInInvertedState', ATTR_TYPE_BOOLEAN, False)
 
-        display_as_piston = self.check_attribute_value(object_ID, lines_list, 'DisplayAsPiston', ATTR_TYPE_BOOLEAN, False)
+        display_as_piston = self.check_attribute_value(object_UID, lines_list, 'DisplayAsPiston', ATTR_TYPE_BOOLEAN, False)
         if display_as_piston == '':
             # attribute not defined, set its default value
-            if (any(str in object_ID for str in ('Divisional', 'General')) or
-                ('Element' in object_ID and any(str in self.object_get_attribute_value(object_ID, 'Type') for str in ('Divisional', 'General')))):
+            if (any(str in object_UID for str in ('Divisional', 'General')) or
+                ('Element' in object_UID and any(str in self.object_get_attribute_value(object_UID, 'Type') for str in ('Divisional', 'General')))):
                 # the object is a Divisional or General button or GUI element, so it must be displayed as a piston by default
                 display_as_piston = 'Y'
             else:
                 display_as_piston = 'N'
 
-        self.check_attribute_value(object_ID, lines_list, 'DispLabelColour', ATTR_TYPE_COLOR, False)
-        self.check_attribute_value(object_ID, lines_list, 'DispLabelFontSize', ATTR_TYPE_FONT_SIZE, False)
-        self.check_attribute_value(object_ID, lines_list, 'DispLabelFontName', ATTR_TYPE_STRING, False)
-        self.check_attribute_value(object_ID, lines_list, 'DispLabelText', ATTR_TYPE_STRING, False)
-        self.check_attribute_value(object_ID, lines_list, 'DispKeyLabelOnLeft', ATTR_TYPE_BOOLEAN, False)
-        self.check_attribute_value(object_ID, lines_list, 'DispImageNum', ATTR_TYPE_INTEGER, False, 1, 5 if display_as_piston == 'Y' else 6)
-        self.check_attribute_value(object_ID, lines_list, 'DispButtonRow', ATTR_TYPE_INTEGER, False, 0, 199)
-        self.check_attribute_value(object_ID, lines_list, 'DispButtonCol', ATTR_TYPE_INTEGER, False, 1, 32)
-        self.check_attribute_value(object_ID, lines_list, 'DispDrawstopRow', ATTR_TYPE_INTEGER, False, 1, 199)
-        self.check_attribute_value(object_ID, lines_list, 'DispDrawstopCol', ATTR_TYPE_INTEGER, False, 1, 12)
-        image_on = self.check_attribute_value(object_ID, lines_list, 'ImageOn', ATTR_TYPE_FILE_NAME, False)
-        self.check_attribute_value(object_ID, lines_list, 'ImageOff', ATTR_TYPE_FILE_NAME, False)
-        self.check_attribute_value(object_ID, lines_list, 'MaskOn', ATTR_TYPE_FILE_NAME, False)
-        self.check_attribute_value(object_ID, lines_list, 'MaskOff', ATTR_TYPE_FILE_NAME, False)
+        self.check_attribute_value(object_UID, lines_list, 'DispLabelColour', ATTR_TYPE_COLOR, False)
+        self.check_attribute_value(object_UID, lines_list, 'DispLabelFontSize', ATTR_TYPE_FONT_SIZE, False)
+        self.check_attribute_value(object_UID, lines_list, 'DispLabelFontName', ATTR_TYPE_STRING, False)
+        self.check_attribute_value(object_UID, lines_list, 'DispLabelText', ATTR_TYPE_STRING, False)
+        self.check_attribute_value(object_UID, lines_list, 'DispKeyLabelOnLeft', ATTR_TYPE_BOOLEAN, False)
+        self.check_attribute_value(object_UID, lines_list, 'DispImageNum', ATTR_TYPE_INTEGER, False, 1, 5 if display_as_piston == 'Y' else 6)
+        self.check_attribute_value(object_UID, lines_list, 'DispButtonRow', ATTR_TYPE_INTEGER, False, 0, 199)
+        self.check_attribute_value(object_UID, lines_list, 'DispButtonCol', ATTR_TYPE_INTEGER, False, 1, 32)
+        self.check_attribute_value(object_UID, lines_list, 'DispDrawstopRow', ATTR_TYPE_INTEGER, False, 1, 199)
+        self.check_attribute_value(object_UID, lines_list, 'DispDrawstopCol', ATTR_TYPE_INTEGER, False, 1, 12)
+        image_on = self.check_attribute_value(object_UID, lines_list, 'ImageOn', ATTR_TYPE_FILE_NAME, False)
+        self.check_attribute_value(object_UID, lines_list, 'ImageOff', ATTR_TYPE_FILE_NAME, False)
+        self.check_attribute_value(object_UID, lines_list, 'MaskOn', ATTR_TYPE_FILE_NAME, False)
+        self.check_attribute_value(object_UID, lines_list, 'MaskOff', ATTR_TYPE_FILE_NAME, False)
 
         # get the dimensions of the parent panel
-        panel_ID = self.object_get_parent_panel_ID(object_ID)
-        (value, idx) = self.object_get_attribute_value(panel_ID, 'DispScreenSizeHoriz')
+        panel_UID = self.object_get_parent_panel_UID(object_UID)
+        (value, idx) = self.object_get_attribute_value(panel_UID, 'DispScreenSizeHoriz')
         panel_width = int(value) if value.isdigit() else 3000
-        (value, idx) = self.object_get_attribute_value(panel_ID, 'DispScreenSizeVert')
+        (value, idx) = self.object_get_attribute_value(panel_UID, 'DispScreenSizeVert')
         panel_height = int(value) if value.isdigit() else 2000
 
-        self.check_attribute_value(object_ID, lines_list, 'PositionX', ATTR_TYPE_INTEGER, False, 0, panel_width)
-        self.check_attribute_value(object_ID, lines_list, 'PositionY', ATTR_TYPE_INTEGER, False, 0, panel_height)
-        width = self.check_attribute_value(object_ID, lines_list, 'Width', ATTR_TYPE_INTEGER, False, 0, panel_width)
-        height = self.check_attribute_value(object_ID, lines_list, 'Height', ATTR_TYPE_INTEGER, False, 0, panel_height)
+        self.check_attribute_value(object_UID, lines_list, 'PositionX', ATTR_TYPE_INTEGER, False, 0, panel_width)
+        self.check_attribute_value(object_UID, lines_list, 'PositionY', ATTR_TYPE_INTEGER, False, 0, panel_height)
+        width = self.check_attribute_value(object_UID, lines_list, 'Width', ATTR_TYPE_INTEGER, False, 0, panel_width)
+        height = self.check_attribute_value(object_UID, lines_list, 'Height', ATTR_TYPE_INTEGER, False, 0, panel_height)
         max_width = int(width) if width.isdigit() else panel_width
         max_height = int(height) if height.isdigit() else panel_height
 
@@ -947,10 +989,9 @@ class C_ODF:
             # an image is defined to display the button
             if self.check_files_names:
                 # get the sizes of the image in the file which is existing
-                modif_path = image_on.replace('\\', '/')
-                photo = PhotoImage(file = os.path.dirname(self.odf_file_name) + '/' + modif_path)
-                bitmap_width = photo.width()
-                bitmap_height = photo.height()
+                im = Image.open(os.path.dirname(self.odf_file_name) + os.sep + image_on.replace('\\', os.sep))
+                bitmap_width = im.size[1]
+                bitmap_height = im.size[0]
             else:
                 bitmap_width = 500  # arbritrary default value
                 bitmap_height = 200 # arbritrary default value
@@ -961,167 +1002,169 @@ class C_ODF:
             else:
                 bitmap_width = bitmap_height = 62
 
-        self.check_attribute_value(object_ID, lines_list, 'TileOffsetX', ATTR_TYPE_INTEGER, False, 0, bitmap_width)
-        self.check_attribute_value(object_ID, lines_list, 'TileOffsetY', ATTR_TYPE_INTEGER, False, 0, bitmap_height)
+        self.check_attribute_value(object_UID, lines_list, 'TileOffsetX', ATTR_TYPE_INTEGER, False, 0, bitmap_width)
+        self.check_attribute_value(object_UID, lines_list, 'TileOffsetY', ATTR_TYPE_INTEGER, False, 0, bitmap_height)
 
-        self.check_attribute_value(object_ID, lines_list, 'MouseRectLeft', ATTR_TYPE_INTEGER, False, 0, max_width)
-        self.check_attribute_value(object_ID, lines_list, 'MouseRectTop', ATTR_TYPE_INTEGER, False, 0, max_height)
-        mouse_rect_width = self.check_attribute_value(object_ID, lines_list, 'MouseRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width)
-        mouse_rect_height = self.check_attribute_value(object_ID, lines_list, 'MouseRectHeight', ATTR_TYPE_INTEGER, False, 0, max_height)
+        self.check_attribute_value(object_UID, lines_list, 'MouseRectLeft', ATTR_TYPE_INTEGER, False, 0, max_width)
+        self.check_attribute_value(object_UID, lines_list, 'MouseRectTop', ATTR_TYPE_INTEGER, False, 0, max_height)
+        mouse_rect_width = self.check_attribute_value(object_UID, lines_list, 'MouseRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width)
+        mouse_rect_height = self.check_attribute_value(object_UID, lines_list, 'MouseRectHeight', ATTR_TYPE_INTEGER, False, 0, max_height)
 
         if mouse_rect_width.isdigit() and mouse_rect_height.isdigit():
             mouse_radius = max(int(mouse_rect_width), int(mouse_rect_height))
         else:
             mouse_radius = max(bitmap_width, bitmap_height)
-        self.check_attribute_value(object_ID, lines_list, 'MouseRadius', ATTR_TYPE_INTEGER, False, 0, mouse_radius)
+        self.check_attribute_value(object_UID, lines_list, 'MouseRadius', ATTR_TYPE_INTEGER, False, 0, mouse_radius)
 
-        self.check_attribute_value(object_ID, lines_list, 'TextRectLeft', ATTR_TYPE_INTEGER, False, 0, max_width)
-        self.check_attribute_value(object_ID, lines_list, 'TextRectTop', ATTR_TYPE_INTEGER, False, 0, max_height)
-        text_rect_width = self.check_attribute_value(object_ID, lines_list, 'TextRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width)
-        self.check_attribute_value(object_ID, lines_list, 'TextRectHeight', ATTR_TYPE_INTEGER, False, 0, max_height)
+        self.check_attribute_value(object_UID, lines_list, 'TextRectLeft', ATTR_TYPE_INTEGER, False, 0, max_width)
+        self.check_attribute_value(object_UID, lines_list, 'TextRectTop', ATTR_TYPE_INTEGER, False, 0, max_height)
+        text_rect_width = self.check_attribute_value(object_UID, lines_list, 'TextRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width)
+        self.check_attribute_value(object_UID, lines_list, 'TextRectHeight', ATTR_TYPE_INTEGER, False, 0, max_height)
 
         if text_rect_width.isdigit():
             text_break_width = int(text_rect_width)
         else:
             text_break_width = bitmap_width
-        self.check_attribute_value(object_ID, lines_list, 'TextBreakWidth', ATTR_TYPE_INTEGER, False, 0, text_break_width)
+        self.check_attribute_value(object_UID, lines_list, 'TextBreakWidth', ATTR_TYPE_INTEGER, False, 0, text_break_width)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_Coupler(self, object_ID, lines_list):
+    def check_object_Coupler(self, object_UID, lines_list):
         #--- check the data of a Coupler object section which the lines are in the given lines list
 
         # required attributes
-        ret1 = self.check_attribute_value(object_ID, lines_list, 'UnisonOff', ATTR_TYPE_BOOLEAN, True)
-        ret2 = self.check_attribute_value(object_ID, lines_list, 'CouplerType', ATTR_TYPE_COUPLER_TYPE, False)  # optional but here to recover its value used after
-        self.check_attribute_value(object_ID, lines_list, 'DestinationManual', ATTR_TYPE_INTEGER, True if ret1 == 'N' else False, 0, 16) # conditional required/optional
-        self.check_attribute_value(object_ID, lines_list, 'DestinationKeyshift', ATTR_TYPE_INTEGER, True if ret1 == 'N' else False, -24, 24) # conditional required/optional
+        ret1 = self.check_attribute_value(object_UID, lines_list, 'UnisonOff', ATTR_TYPE_BOOLEAN, True)
+        ret2 = self.check_attribute_value(object_UID, lines_list, 'CouplerType', ATTR_TYPE_COUPLER_TYPE, False)  # optional but here to recover its value used after
+        self.check_attribute_value(object_UID, lines_list, 'DestinationManual', ATTR_TYPE_INTEGER, True if ret1 == 'N' else False, 0, 16) # conditional required/optional
+        self.check_attribute_value(object_UID, lines_list, 'DestinationKeyshift', ATTR_TYPE_INTEGER, True if ret1 == 'N' else False, -24, 24) # conditional required/optional
 
         is_required = (ret1 == 'N' and not(ret2.upper() in ('MELODY', 'BASS')))
-        self.check_attribute_value(object_ID, lines_list, 'CoupleToSubsequentUnisonIntermanualCouplers', ATTR_TYPE_BOOLEAN, is_required)
-        self.check_attribute_value(object_ID, lines_list, 'CoupleToSubsequentUpwardIntermanualCouplers', ATTR_TYPE_BOOLEAN, is_required)
-        self.check_attribute_value(object_ID, lines_list, 'CoupleToSubsequentDownwardIntermanualCouplers', ATTR_TYPE_BOOLEAN, is_required)
-        self.check_attribute_value(object_ID, lines_list, 'CoupleToSubsequentUpwardIntramanualCouplers', ATTR_TYPE_BOOLEAN, is_required)
-        self.check_attribute_value(object_ID, lines_list, 'CoupleToSubsequentDownwardIntramanualCouplers', ATTR_TYPE_BOOLEAN, is_required)
+        self.check_attribute_value(object_UID, lines_list, 'CoupleToSubsequentUnisonIntermanualCouplers', ATTR_TYPE_BOOLEAN, is_required)
+        self.check_attribute_value(object_UID, lines_list, 'CoupleToSubsequentUpwardIntermanualCouplers', ATTR_TYPE_BOOLEAN, is_required)
+        self.check_attribute_value(object_UID, lines_list, 'CoupleToSubsequentDownwardIntermanualCouplers', ATTR_TYPE_BOOLEAN, is_required)
+        self.check_attribute_value(object_UID, lines_list, 'CoupleToSubsequentUpwardIntramanualCouplers', ATTR_TYPE_BOOLEAN, is_required)
+        self.check_attribute_value(object_UID, lines_list, 'CoupleToSubsequentDownwardIntramanualCouplers', ATTR_TYPE_BOOLEAN, is_required)
 
         # optional attributes
-        self.check_attribute_value(object_ID, lines_list, 'FirstMIDINoteNumber', ATTR_TYPE_INTEGER, False, 0, 127)
-        self.check_attribute_value(object_ID, lines_list, 'NumberOfKeys', ATTR_TYPE_INTEGER, False, 0, 127)
+        self.check_attribute_value(object_UID, lines_list, 'FirstMIDINoteNumber', ATTR_TYPE_INTEGER, False, 0, 127)
+        self.check_attribute_value(object_UID, lines_list, 'NumberOfKeys', ATTR_TYPE_INTEGER, False, 0, 127)
 
         # a Coupler has in addition the attributes of a DrawStop
-        self.check_object_DrawStop(object_ID, lines_list)
+        self.check_object_DrawStop(object_UID, lines_list)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_Divisional(self, object_ID, lines_list):
+    def check_object_Divisional(self, object_UID, lines_list):
         #--- check the data of a Divisional object section which the lines are in the given lines list
 
         # recover the ID of manual in which is referenced this Divisional
-        parent_manual_ID = self.object_get_parent_manual_ID(object_ID)
+        parent_manual_UID = self.object_get_parent_manual_UID(object_UID)
 
         # required attributes
-        (ret, idx) = self.object_get_attribute_value(parent_manual_ID, 'NumberOfCouplers')
+        (ret, idx) = self.object_get_attribute_value(parent_manual_UID, 'NumberOfCouplers')
         max = int(ret) if ret.isdigit() else 999
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfCouplers', ATTR_TYPE_INTEGER, True, 0, max)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfCouplers', ATTR_TYPE_INTEGER, True, 0, max)
         if ret.isdigit():
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f'Coupler{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'Coupler{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
-        (ret, idx) = self.object_get_attribute_value(parent_manual_ID, 'NumberOfStops')
+        (ret, idx) = self.object_get_attribute_value(parent_manual_UID, 'NumberOfStops')
         max = int(ret) if ret.isdigit() else 999
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfStops', ATTR_TYPE_INTEGER, True, 0, max)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfStops', ATTR_TYPE_INTEGER, True, 0, max)
         if ret.isdigit():
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f'Stop{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'Stop{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
-        (ret, idx) = self.object_get_attribute_value(parent_manual_ID, 'NumberOfTremulants')
+        (ret, idx) = self.object_get_attribute_value(parent_manual_UID, 'NumberOfTremulants')
         max = int(ret) if ret.isdigit() else 10
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, True, 0, max)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, True, 0, max)
         if ret.isdigit():
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f'Tremulant{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'Tremulant{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
         # optional attributes
-        self.check_attribute_value(object_ID, lines_list, 'Protected', ATTR_TYPE_BOOLEAN, False)
+        self.check_attribute_value(object_UID, lines_list, 'Protected', ATTR_TYPE_BOOLEAN, False)
 
-        (ret, idx) = self.object_get_attribute_value(parent_manual_ID, 'NumberOfSwitches')
+        (ret, idx) = self.object_get_attribute_value(parent_manual_UID, 'NumberOfSwitches')
         max = int(ret) if ret.isdigit() else 999
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, max)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, max)
         if ret.isdigit():
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f'Switch{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'Switch{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
         # a Divisional has in addition the attributes of a Push Button
-        self.check_object_PushButton(object_ID, lines_list)
+        self.check_object_PushButton(object_UID, lines_list)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_DivisionalCoupler(self, object_ID, lines_list):
+    def check_object_DivisionalCoupler(self, object_UID, lines_list):
         #--- check the data of a Divisional Coupler object section which the lines are in the given lines list
 
         # required attributes
-        self.check_attribute_value(object_ID, lines_list, 'BiDirectionalCoupling', ATTR_TYPE_BOOLEAN, True)
+        self.check_attribute_value(object_UID, lines_list, 'BiDirectionalCoupling', ATTR_TYPE_BOOLEAN, True)
 
         (ret, idx) = self.object_get_attribute_value('Organ', 'NumberOfManuals')
         max = int(ret) if ret.isdigit() else 16
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfManuals', ATTR_TYPE_INTEGER, True, 1, max)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfManuals', ATTR_TYPE_INTEGER, True, 1, max)
         if ret.isdigit():
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f"Manual{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f"Manual{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
 
         # a Divisional Coupler has in addition the attributes of a DrawStop
-        self.check_object_DrawStop(object_ID, lines_list)
+        self.check_object_DrawStop(object_UID, lines_list)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_DrawStop(self, object_ID, lines_list):
+    def check_object_DrawStop(self, object_UID, lines_list):
         #--- check the data of a DrawStop object section which the lines are in the given lines list
 
         # optional attributes
-        self.check_attribute_value(object_ID, lines_list, 'Function', ATTR_TYPE_DRAWSTOP_FCT, False)
+        self.check_attribute_value(object_UID, lines_list, 'Function', ATTR_TYPE_DRAWSTOP_FCT, False)
 
         (ret, idx) = self.object_get_attribute_value('Organ', 'NumberOfSwitches')
         max = int(ret) if ret.isdigit() else 999
-        ret = self.check_attribute_value(object_ID, lines_list, 'SwitchCount', ATTR_TYPE_INTEGER, False, 1, max)
+        switch_id = int(object_UID[-3:]) if (object_UID[-3:].isdigit() and object_UID[:-3] == 'Switch') else 999
+        ret = self.check_attribute_value(object_UID, lines_list, 'SwitchCount', ATTR_TYPE_INTEGER, False, 1, max)
         if ret.isdigit():
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f"Switch{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f"Switch{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
+                if switch_id != 999:
+                    self.check_attribute_value(object_UID, lines_list, f"Switch{str(idx).zfill(3)}", ATTR_TYPE_INTEGER, True, 1, switch_id - 1)
 
-        self.check_attribute_value(object_ID, lines_list, 'DefaultToEngaged', ATTR_TYPE_BOOLEAN, False)
-        self.check_attribute_value(object_ID, lines_list, 'GCState', ATTR_TYPE_INTEGER, False, -1, 1)
-        self.check_attribute_value(object_ID, lines_list, 'StoreInDivisional', ATTR_TYPE_BOOLEAN, False)
-        self.check_attribute_value(object_ID, lines_list, 'StoreInGeneral', ATTR_TYPE_BOOLEAN, False)
+        self.check_attribute_value(object_UID, lines_list, 'DefaultToEngaged', ATTR_TYPE_BOOLEAN, False)
+        self.check_attribute_value(object_UID, lines_list, 'GCState', ATTR_TYPE_INTEGER, False, -1, 1)
+        self.check_attribute_value(object_UID, lines_list, 'StoreInDivisional', ATTR_TYPE_BOOLEAN, False)
+        self.check_attribute_value(object_UID, lines_list, 'StoreInGeneral', ATTR_TYPE_BOOLEAN, False)
 
         # a Drawstop has in addition the attributes of a Button
-        self.check_object_Button(object_ID, lines_list)
+        self.check_object_Button(object_UID, lines_list)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_Enclosure(self, object_ID, lines_list):
+    def check_object_Enclosure(self, object_UID, lines_list):
         #--- check the data of an Enclosure object section which the lines are in the given lines list
 
         # required attributes
         # none required attribute
 
         # optional attributes
-        self.check_attribute_value(object_ID, lines_list, 'Name', ATTR_TYPE_STRING, False)
-        self.check_attribute_value(object_ID, lines_list, 'AmpMinimumLevel', ATTR_TYPE_INTEGER, False, 0, 100)
-        self.check_attribute_value(object_ID, lines_list, 'MIDIInputNumber', ATTR_TYPE_INTEGER, False, 0, 100)
-        self.check_attribute_value(object_ID, lines_list, 'Displayed', ATTR_TYPE_BOOLEAN, False)
-        self.check_attribute_value(object_ID, lines_list, 'DispLabelColour', ATTR_TYPE_COLOR, False)
-        self.check_attribute_value(object_ID, lines_list, 'DispLabelFontSize', ATTR_TYPE_FONT_SIZE, False)
-        self.check_attribute_value(object_ID, lines_list, 'DispLabelFontName', ATTR_TYPE_STRING, False)
-        self.check_attribute_value(object_ID, lines_list, 'DispLabelText', ATTR_TYPE_STRING, False)
-        self.check_attribute_value(object_ID, lines_list, 'EnclosureStyle', ATTR_TYPE_INTEGER, False, 1, 4)
+        self.check_attribute_value(object_UID, lines_list, 'Name', ATTR_TYPE_STRING, False)
+        self.check_attribute_value(object_UID, lines_list, 'AmpMinimumLevel', ATTR_TYPE_INTEGER, False, 0, 100)
+        self.check_attribute_value(object_UID, lines_list, 'MIDIInputNumber', ATTR_TYPE_INTEGER, False, 0, 100)
+        self.check_attribute_value(object_UID, lines_list, 'Displayed', ATTR_TYPE_BOOLEAN, False)
+        self.check_attribute_value(object_UID, lines_list, 'DispLabelColour', ATTR_TYPE_COLOR, False)
+        self.check_attribute_value(object_UID, lines_list, 'DispLabelFontSize', ATTR_TYPE_FONT_SIZE, False)
+        self.check_attribute_value(object_UID, lines_list, 'DispLabelFontName', ATTR_TYPE_STRING, False)
+        self.check_attribute_value(object_UID, lines_list, 'DispLabelText', ATTR_TYPE_STRING, False)
+        self.check_attribute_value(object_UID, lines_list, 'EnclosureStyle', ATTR_TYPE_INTEGER, False, 1, 4)
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'BitmapCount', ATTR_TYPE_INTEGER, False, 1, 127)
+        ret = self.check_attribute_value(object_UID, lines_list, 'BitmapCount', ATTR_TYPE_INTEGER, False, 1, 127)
         if ret.isdigit():
             for idx in range(1, int(ret)+1):
-                image = self.check_attribute_value(object_ID, lines_list, f'Bitmap{str(idx).zfill(3)}', ATTR_TYPE_FILE_NAME, True)
-                self.check_attribute_value(object_ID, lines_list, f'Mask{str(idx).zfill(3)}', ATTR_TYPE_FILE_NAME, False)
+                image = self.check_attribute_value(object_UID, lines_list, f'Bitmap{str(idx).zfill(3)}', ATTR_TYPE_FILE_NAME, True)
+                self.check_attribute_value(object_UID, lines_list, f'Mask{str(idx).zfill(3)}', ATTR_TYPE_FILE_NAME, False)
             # get the dimensions of the last enclosure bitmap
             if image != '' and self.check_files_names:
                 # an image is defined to display the enclosure
                 # get the sizes of the image in the file which is existing
-                modif_path = image.replace('\\', '/')
-                photo = PhotoImage(file = os.path.dirname(self.odf_file_name) + '/' + modif_path)
-                bitmap_width = photo.width()
-                bitmap_height = photo.height()
+                im = Image.open(os.path.dirname(self.odf_file_name) + os.sep + image.replace('\\', os.sep))
+                bitmap_width = im.size[1]
+                bitmap_height = im.size[0]
             else:
                 bitmap_width = 100  # arbritrary default value
                 bitmap_height = 200 # arbritrary default value
@@ -1131,125 +1174,124 @@ class C_ODF:
             bitmap_height = 61
 
         # get the dimensions of the parent panel
-        panel_ID = self.object_get_parent_panel_ID(object_ID)
-        (value, idx) = self.object_get_attribute_value(panel_ID, 'DispScreenSizeHoriz')
+        panel_UID = self.object_get_parent_panel_UID(object_UID)
+        (value, idx) = self.object_get_attribute_value(panel_UID, 'DispScreenSizeHoriz')
         panel_width = int(value) if value.isdigit() else 3000
-        (value, idx) = self.object_get_attribute_value(panel_ID, 'DispScreenSizeVert')
+        (value, idx) = self.object_get_attribute_value(panel_UID, 'DispScreenSizeVert')
         panel_height = int(value) if value.isdigit() else 2000
 
-        self.check_attribute_value(object_ID, lines_list, 'PositionX', ATTR_TYPE_INTEGER, False, 0, panel_width)
-        self.check_attribute_value(object_ID, lines_list, 'PositionY', ATTR_TYPE_INTEGER, False, 0, panel_height)
-        width = self.check_attribute_value(object_ID, lines_list, 'Width', ATTR_TYPE_INTEGER, False, 0, panel_width)
-        height = self.check_attribute_value(object_ID, lines_list, 'Height', ATTR_TYPE_INTEGER, False, 0, panel_height)
+        self.check_attribute_value(object_UID, lines_list, 'PositionX', ATTR_TYPE_INTEGER, False, 0, panel_width)
+        self.check_attribute_value(object_UID, lines_list, 'PositionY', ATTR_TYPE_INTEGER, False, 0, panel_height)
+        width = self.check_attribute_value(object_UID, lines_list, 'Width', ATTR_TYPE_INTEGER, False, 0, panel_width)
+        height = self.check_attribute_value(object_UID, lines_list, 'Height', ATTR_TYPE_INTEGER, False, 0, panel_height)
         max_width = int(width) if width.isdigit() else panel_width
         max_height = int(height) if height.isdigit() else panel_height
 
-        self.check_attribute_value(object_ID, lines_list, 'TileOffsetX', ATTR_TYPE_INTEGER, False, 0, bitmap_width)
-        self.check_attribute_value(object_ID, lines_list, 'TileOffsetY', ATTR_TYPE_INTEGER, False, 0, bitmap_height)
+        self.check_attribute_value(object_UID, lines_list, 'TileOffsetX', ATTR_TYPE_INTEGER, False, 0, bitmap_width)
+        self.check_attribute_value(object_UID, lines_list, 'TileOffsetY', ATTR_TYPE_INTEGER, False, 0, bitmap_height)
 
-        self.check_attribute_value(object_ID, lines_list, 'MouseRectLeft', ATTR_TYPE_INTEGER, False, 0, max_width)
-        self.check_attribute_value(object_ID, lines_list, 'MouseRectTop', ATTR_TYPE_INTEGER, False, 0, max_height)
-        self.check_attribute_value(object_ID, lines_list, 'MouseRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width)
-        mouse_rect_height = self.check_attribute_value(object_ID, lines_list, 'MouseRectHeight', ATTR_TYPE_INTEGER, False, 0, max_height)
+        self.check_attribute_value(object_UID, lines_list, 'MouseRectLeft', ATTR_TYPE_INTEGER, False, 0, max_width)
+        self.check_attribute_value(object_UID, lines_list, 'MouseRectTop', ATTR_TYPE_INTEGER, False, 0, max_height)
+        self.check_attribute_value(object_UID, lines_list, 'MouseRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width)
+        mouse_rect_height = self.check_attribute_value(object_UID, lines_list, 'MouseRectHeight', ATTR_TYPE_INTEGER, False, 0, max_height)
 
         if mouse_rect_height.isdigit():
             max_start = int(mouse_rect_height)
         else:
             max_start = 200
-        mouse_axis_start = self.check_attribute_value(object_ID, lines_list, 'MouseAxisStart', ATTR_TYPE_INTEGER, False, 0, max_start)
+        mouse_axis_start = self.check_attribute_value(object_UID, lines_list, 'MouseAxisStart', ATTR_TYPE_INTEGER, False, 0, max_start)
 
         if mouse_axis_start.isdigit():
             min_end = int(mouse_axis_start)
         else:
             min_end = 200
-        self.check_attribute_value(object_ID, lines_list, 'MouseAxisEnd', ATTR_TYPE_INTEGER, False, min_end, max_start)
+        self.check_attribute_value(object_UID, lines_list, 'MouseAxisEnd', ATTR_TYPE_INTEGER, False, min_end, max_start)
 
-        self.check_attribute_value(object_ID, lines_list, 'TextRectLeft', ATTR_TYPE_INTEGER, False, 0, max_width)
-        self.check_attribute_value(object_ID, lines_list, 'TextRectTop', ATTR_TYPE_INTEGER, False, 0, max_height)
-        text_rect_width = self.check_attribute_value(object_ID, lines_list, 'TextRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width)
-        self.check_attribute_value(object_ID, lines_list, 'TextRectHeight', ATTR_TYPE_INTEGER, False, 0, max_height)
+        self.check_attribute_value(object_UID, lines_list, 'TextRectLeft', ATTR_TYPE_INTEGER, False, 0, max_width)
+        self.check_attribute_value(object_UID, lines_list, 'TextRectTop', ATTR_TYPE_INTEGER, False, 0, max_height)
+        text_rect_width = self.check_attribute_value(object_UID, lines_list, 'TextRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width)
+        self.check_attribute_value(object_UID, lines_list, 'TextRectHeight', ATTR_TYPE_INTEGER, False, 0, max_height)
 
         if text_rect_width.isdigit():
             text_break_width = int(text_rect_width)
         else:
             text_break_width = bitmap_width
-        self.check_attribute_value(object_ID, lines_list, 'TextBreakWidth', ATTR_TYPE_INTEGER, False, 0, text_break_width)
+        self.check_attribute_value(object_UID, lines_list, 'TextBreakWidth', ATTR_TYPE_INTEGER, False, 0, text_break_width)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_General(self, object_ID, lines_list):
+    def check_object_General(self, object_UID, lines_list):
         #--- check the data of a General object section which the lines are in the given lines list
 
-        is_general_obj = object_ID.startswith('General') # some mandatory attributes are not mandatory for objects which inherit the General attributes
+        is_general_obj = object_UID.startswith('General') # some mandatory attributes are not mandatory for objects which inherit the General attributes
 
         # required attributes
         max = self.objects_type_count('Coupler')
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfCouplers', ATTR_TYPE_INTEGER, is_general_obj, 0, max)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfCouplers', ATTR_TYPE_INTEGER, is_general_obj, 0, max)
         if ret.isdigit():
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f'CouplerNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
-                self.check_attribute_value(object_ID, lines_list, f'CouplerManual{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'CouplerNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'CouplerManual{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
         max = self.objects_type_count('DivisionalCoupler')
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfDivisionalCouplers', ATTR_TYPE_INTEGER, False, 0, max)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfDivisionalCouplers', ATTR_TYPE_INTEGER, False, 0, max)
         if ret.isdigit():
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f'DivisionalCouplerNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'DivisionalCouplerNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
         max = self.objects_type_count('Stop')
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfStops', ATTR_TYPE_INTEGER, is_general_obj, 0, max)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfStops', ATTR_TYPE_INTEGER, is_general_obj, 0, max)
         if ret.isdigit():
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f'StopNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
-                self.check_attribute_value(object_ID, lines_list, f'StopManual{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'StopNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'StopManual{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
         max = self.objects_type_count('Tremulant')
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, is_general_obj, 0, max)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, is_general_obj, 0, max)
         if ret.isdigit():
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f'TremulantNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'TremulantNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
         # optional attributes
         max = self.objects_type_count('Switch')
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, max)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, max)
         if ret.isdigit():
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f'SwitchNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'SwitchNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
-        self.check_attribute_value(object_ID, lines_list, 'Protected', ATTR_TYPE_BOOLEAN, False)
+        self.check_attribute_value(object_UID, lines_list, 'Protected', ATTR_TYPE_BOOLEAN, False)
 
         # a General has in addition the attributes of a Push Button
-        self.check_object_PushButton(object_ID, lines_list)
+        self.check_object_PushButton(object_UID, lines_list)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_Image(self, object_ID, lines_list):
+    def check_object_Image(self, object_UID, lines_list):
         #--- check the data of an Image object section which the lines are in the given lines list
 
         # required attributes
-        image = self.check_attribute_value(object_ID, lines_list, 'Image', ATTR_TYPE_FILE_NAME, True)
+        image = self.check_attribute_value(object_UID, lines_list, 'Image', ATTR_TYPE_FILE_NAME, True)
 
         # get the dimensions of the parent panel
-        parent_panel_ID = self.object_get_parent_panel_ID(object_ID)
-        (value, idx) = self.object_get_attribute_value(parent_panel_ID, 'DispScreenSizeHoriz')
+        parent_panel_UID = self.object_get_parent_panel_UID(object_UID)
+        (value, idx) = self.object_get_attribute_value(parent_panel_UID, 'DispScreenSizeHoriz')
         panel_width = int(value) if value.isdigit() else 3000
-        (value, idx) = self.object_get_attribute_value(parent_panel_ID, 'DispScreenSizeVert')
+        (value, idx) = self.object_get_attribute_value(parent_panel_UID, 'DispScreenSizeVert')
         panel_height = int(value) if value.isdigit() else 2000
 
         # optional attributes
-        self.check_attribute_value(object_ID, lines_list, 'Mask', ATTR_TYPE_FILE_NAME, False)
-        self.check_attribute_value(object_ID, lines_list, 'PositionX', ATTR_TYPE_INTEGER, False, 0, panel_width)
-        self.check_attribute_value(object_ID, lines_list, 'PositionY', ATTR_TYPE_INTEGER, False, 0, panel_height)
-        self.check_attribute_value(object_ID, lines_list, 'Width', ATTR_TYPE_INTEGER, False, 0, panel_width)
-        self.check_attribute_value(object_ID, lines_list, 'Height', ATTR_TYPE_INTEGER, False, 0, panel_height)
+        self.check_attribute_value(object_UID, lines_list, 'Mask', ATTR_TYPE_FILE_NAME, False)
+        self.check_attribute_value(object_UID, lines_list, 'PositionX', ATTR_TYPE_INTEGER, False, 0, panel_width)
+        self.check_attribute_value(object_UID, lines_list, 'PositionY', ATTR_TYPE_INTEGER, False, 0, panel_height)
+        self.check_attribute_value(object_UID, lines_list, 'Width', ATTR_TYPE_INTEGER, False, 0, panel_width)
+        self.check_attribute_value(object_UID, lines_list, 'Height', ATTR_TYPE_INTEGER, False, 0, panel_height)
 
         # get the dimensions of the image bitmap
         if image != '':
             # an image is defined
             if self.check_files_names:
                 # get the sizes of the image in the file which is existing
-                modif_path = image.replace('\\', '/')
-                photo = PhotoImage(file = os.path.dirname(self.odf_file_name) + '/' + modif_path)
-                bitmap_width = photo.width()
-                bitmap_height = photo.height()
+                im = Image.open(os.path.dirname(self.odf_file_name) + os.sep + image.replace('\\', os.sep))
+                bitmap_width = im.size[1]
+                bitmap_height = im.size[0]
             else:
                 bitmap_width = panel_width
                 bitmap_height = panel_height
@@ -1258,47 +1300,47 @@ class C_ODF:
             bitmap_width = panel_width
             bitmap_height = panel_height
 
-        self.check_attribute_value(object_ID, lines_list, 'TileOffsetX', ATTR_TYPE_INTEGER, False, 0, bitmap_width)
-        self.check_attribute_value(object_ID, lines_list, 'TileOffsetY', ATTR_TYPE_INTEGER, False, 0, bitmap_height)
+        self.check_attribute_value(object_UID, lines_list, 'TileOffsetX', ATTR_TYPE_INTEGER, False, 0, bitmap_width)
+        self.check_attribute_value(object_UID, lines_list, 'TileOffsetY', ATTR_TYPE_INTEGER, False, 0, bitmap_height)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_Label(self, object_ID, lines_list):
+    def check_object_Label(self, object_UID, lines_list):
         #--- check the data of a Label object section which the lines are in the given lines list
 
         # optional attributes
-        self.check_attribute_value(object_ID, lines_list, 'Name', ATTR_TYPE_STRING, False)
-        ret1 = self.check_attribute_value(object_ID, lines_list, 'FreeXPlacement', ATTR_TYPE_BOOLEAN, False)
-        ret2 = self.check_attribute_value(object_ID, lines_list, 'FreeYPlacement', ATTR_TYPE_BOOLEAN, False)
+        self.check_attribute_value(object_UID, lines_list, 'Name', ATTR_TYPE_STRING, False)
+        ret1 = self.check_attribute_value(object_UID, lines_list, 'FreeXPlacement', ATTR_TYPE_BOOLEAN, False)
+        ret2 = self.check_attribute_value(object_UID, lines_list, 'FreeYPlacement', ATTR_TYPE_BOOLEAN, False)
 
         # get the dimensions of the parent panel
-        parent_panel_ID = self.object_get_parent_panel_ID(object_ID)
-        (value, idx) = self.object_get_attribute_value(parent_panel_ID, 'DispScreenSizeHoriz')
+        parent_panel_UID = self.object_get_parent_panel_UID(object_UID)
+        (value, idx) = self.object_get_attribute_value(parent_panel_UID, 'DispScreenSizeHoriz')
         panel_width = int(value) if value.isdigit() else 3000
-        (value, idx) = self.object_get_attribute_value(parent_panel_ID, 'DispScreenSizeVert')
+        (value, idx) = self.object_get_attribute_value(parent_panel_UID, 'DispScreenSizeVert')
         panel_height = int(value) if value.isdigit() else 2000
 
-        self.check_attribute_value(object_ID, lines_list, 'DispXpos', ATTR_TYPE_INTEGER, False, 0, panel_width)
-        self.check_attribute_value(object_ID, lines_list, 'DispYpos', ATTR_TYPE_INTEGER, False, 0, panel_height)
+        self.check_attribute_value(object_UID, lines_list, 'DispXpos', ATTR_TYPE_INTEGER, False, 0, panel_width)
+        self.check_attribute_value(object_UID, lines_list, 'DispYpos', ATTR_TYPE_INTEGER, False, 0, panel_height)
 
-        self.check_attribute_value(object_ID, lines_list, 'DispAtTopOfDrawstopCol', ATTR_TYPE_BOOLEAN, ret2 == 'N')
+        self.check_attribute_value(object_UID, lines_list, 'DispAtTopOfDrawstopCol', ATTR_TYPE_BOOLEAN, ret2 == 'N')
 
         # get the number of drawstop columns in the parent panel
-        (value, idx) = self.object_get_attribute_value(parent_panel_ID, 'DispDrawstopCols')
+        (value, idx) = self.object_get_attribute_value(parent_panel_UID, 'DispDrawstopCols')
         columns_nb = int(value) if value.isdigit() else 12
-        self.check_attribute_value(object_ID, lines_list, 'DispDrawstopCol', ATTR_TYPE_INTEGER, ret1 == 'N', 1, columns_nb)
+        self.check_attribute_value(object_UID, lines_list, 'DispDrawstopCol', ATTR_TYPE_INTEGER, ret1 == 'N', 1, columns_nb)
 
-        self.check_attribute_value(object_ID, lines_list, 'DispSpanDrawstopColToRight', ATTR_TYPE_BOOLEAN, True if ret1 == 'N' else False)
-        self.check_attribute_value(object_ID, lines_list, 'DispLabelColour', ATTR_TYPE_COLOR, False)
-        self.check_attribute_value(object_ID, lines_list, 'DispLabelFontSize', ATTR_TYPE_FONT_SIZE, False)
-        self.check_attribute_value(object_ID, lines_list, 'DispLabelFontName', ATTR_TYPE_STRING, False)
-        image_num = self.check_attribute_value(object_ID, lines_list, 'DispImageNum', ATTR_TYPE_INTEGER, False, 1, 12)
-        image = self.check_attribute_value(object_ID, lines_list, 'Image', ATTR_TYPE_FILE_NAME, False)
-        self.check_attribute_value(object_ID, lines_list, 'Mask', ATTR_TYPE_FILE_NAME, False)
+        self.check_attribute_value(object_UID, lines_list, 'DispSpanDrawstopColToRight', ATTR_TYPE_BOOLEAN, True if ret1 == 'N' else False)
+        self.check_attribute_value(object_UID, lines_list, 'DispLabelColour', ATTR_TYPE_COLOR, False)
+        self.check_attribute_value(object_UID, lines_list, 'DispLabelFontSize', ATTR_TYPE_FONT_SIZE, False)
+        self.check_attribute_value(object_UID, lines_list, 'DispLabelFontName', ATTR_TYPE_STRING, False)
+        image_num = self.check_attribute_value(object_UID, lines_list, 'DispImageNum', ATTR_TYPE_INTEGER, False, 1, 12)
+        image = self.check_attribute_value(object_UID, lines_list, 'Image', ATTR_TYPE_FILE_NAME, False)
+        self.check_attribute_value(object_UID, lines_list, 'Mask', ATTR_TYPE_FILE_NAME, False)
 
-        self.check_attribute_value(object_ID, lines_list, 'PositionX', ATTR_TYPE_INTEGER, False, 0, panel_width)
-        self.check_attribute_value(object_ID, lines_list, 'PositionY', ATTR_TYPE_INTEGER, False, 0, panel_height)
-        width = self.check_attribute_value(object_ID, lines_list, 'Width', ATTR_TYPE_INTEGER, False, 0, panel_width)
-        height = self.check_attribute_value(object_ID, lines_list, 'Height', ATTR_TYPE_INTEGER, False, 0, panel_height)
+        self.check_attribute_value(object_UID, lines_list, 'PositionX', ATTR_TYPE_INTEGER, False, 0, panel_width)
+        self.check_attribute_value(object_UID, lines_list, 'PositionY', ATTR_TYPE_INTEGER, False, 0, panel_height)
+        width = self.check_attribute_value(object_UID, lines_list, 'Width', ATTR_TYPE_INTEGER, False, 0, panel_width)
+        height = self.check_attribute_value(object_UID, lines_list, 'Height', ATTR_TYPE_INTEGER, False, 0, panel_height)
         max_width = int(width) if width.isdigit() else panel_width
         max_height = int(height) if height.isdigit() else panel_height
 
@@ -1307,10 +1349,9 @@ class C_ODF:
             # an image is defined to display the label
             if self.check_files_names:
                 # get the sizes of the image in the file which is existing
-                modif_path = image.replace('\\', '/')
-                photo = PhotoImage(file = os.path.dirname(self.odf_file_name) + '/' + modif_path)
-                bitmap_width = photo.width()
-                bitmap_height = photo.height()
+                im = Image.open(os.path.dirname(self.odf_file_name) + os.sep + image.replace('\\', os.sep))
+                bitmap_width = im.size[1]
+                bitmap_height = im.size[0]
             else:
                 bitmap_width = 400  # arbritrary default value
                 bitmap_height = 100 # arbritrary default value
@@ -1329,119 +1370,118 @@ class C_ODF:
             else:                   bitmap_width = 200; bitmap_height = 50
 
 
-        self.check_attribute_value(object_ID, lines_list, 'TileOffsetX', ATTR_TYPE_INTEGER, False, 0, bitmap_width)
-        self.check_attribute_value(object_ID, lines_list, 'TileOffsetY', ATTR_TYPE_INTEGER, False, 0, bitmap_height)
+        self.check_attribute_value(object_UID, lines_list, 'TileOffsetX', ATTR_TYPE_INTEGER, False, 0, bitmap_width)
+        self.check_attribute_value(object_UID, lines_list, 'TileOffsetY', ATTR_TYPE_INTEGER, False, 0, bitmap_height)
 
-        self.check_attribute_value(object_ID, lines_list, 'TextRectLeft', ATTR_TYPE_INTEGER, False, 0, max_width)
-        self.check_attribute_value(object_ID, lines_list, 'TextRectTop', ATTR_TYPE_INTEGER, False, 0, max_height)
-        text_rect_width = self.check_attribute_value(object_ID, lines_list, 'TextRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width)
-        self.check_attribute_value(object_ID, lines_list, 'TextRectHeight', ATTR_TYPE_INTEGER, False, 0, max_height)
+        self.check_attribute_value(object_UID, lines_list, 'TextRectLeft', ATTR_TYPE_INTEGER, False, 0, max_width)
+        self.check_attribute_value(object_UID, lines_list, 'TextRectTop', ATTR_TYPE_INTEGER, False, 0, max_height)
+        text_rect_width = self.check_attribute_value(object_UID, lines_list, 'TextRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width)
+        self.check_attribute_value(object_UID, lines_list, 'TextRectHeight', ATTR_TYPE_INTEGER, False, 0, max_height)
 
         if text_rect_width.isdigit():
             text_break_width = int(text_rect_width)
         else:
             text_break_width = bitmap_width
-        self.check_attribute_value(object_ID, lines_list, 'TextBreakWidth', ATTR_TYPE_INTEGER, False, 0, text_break_width)
+        self.check_attribute_value(object_UID, lines_list, 'TextBreakWidth', ATTR_TYPE_INTEGER, False, 0, text_break_width)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_Manual(self, object_ID, lines_list):
+    def check_object_Manual(self, object_UID, lines_list):
         #--- check the data of a Manual object section which the lines are in the given lines list
 
-        is_manual_obj = object_ID.startswith('Manual') # some mandatory attributes are not mandatory for objects which inherit the Manual attributes
+        is_manual_obj = object_UID.startswith('Manual') # some mandatory attributes are not mandatory for objects which inherit the Manual attributes
 
         # required attributes
-        self.check_attribute_value(object_ID, lines_list, 'Name', ATTR_TYPE_STRING, is_manual_obj)
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfLogicalKeys', ATTR_TYPE_INTEGER, is_manual_obj, 1, 192)
+        self.check_attribute_value(object_UID, lines_list, 'Name', ATTR_TYPE_STRING, is_manual_obj)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfLogicalKeys', ATTR_TYPE_INTEGER, is_manual_obj, 1, 192)
         if ret.isdigit() and int(ret) > 0:
             for idx in range(1, int(ret)+1):
                 # attributes Key999xxx
-                image = self.check_attribute_value(object_ID, lines_list, f'Key{str(idx).zfill(3)}ImageOn', ATTR_TYPE_FILE_NAME, False)
+                image = self.check_attribute_value(object_UID, lines_list, f'Key{str(idx).zfill(3)}ImageOn', ATTR_TYPE_FILE_NAME, False)
                 if image != "":
                     # check the other attributes for this key only if an image on is defined
-                    self.check_attribute_value(object_ID, lines_list, f'Key{str(idx).zfill(3)}ImageOff', ATTR_TYPE_FILE_NAME, False)
-                    self.check_attribute_value(object_ID, lines_list, f'Key{str(idx).zfill(3)}MaskOn', ATTR_TYPE_FILE_NAME, False)
-                    self.check_attribute_value(object_ID, lines_list, f'Key{str(idx).zfill(3)}MaskOff', ATTR_TYPE_FILE_NAME, False)
-                    self.check_attribute_value(object_ID, lines_list, f'Key{str(idx).zfill(3)}Width', ATTR_TYPE_INTEGER, False, 0, 500)
-                    self.check_attribute_value(object_ID, lines_list, f'Key{str(idx).zfill(3)}Offset', ATTR_TYPE_INTEGER, False, -500, 500)
-                    self.check_attribute_value(object_ID, lines_list, f'Key{str(idx).zfill(3)}YOffset', ATTR_TYPE_INTEGER, False, 0, 500)
+                    self.check_attribute_value(object_UID, lines_list, f'Key{str(idx).zfill(3)}ImageOff', ATTR_TYPE_FILE_NAME, False)
+                    self.check_attribute_value(object_UID, lines_list, f'Key{str(idx).zfill(3)}MaskOn', ATTR_TYPE_FILE_NAME, False)
+                    self.check_attribute_value(object_UID, lines_list, f'Key{str(idx).zfill(3)}MaskOff', ATTR_TYPE_FILE_NAME, False)
+                    self.check_attribute_value(object_UID, lines_list, f'Key{str(idx).zfill(3)}Width', ATTR_TYPE_INTEGER, False, 0, 500)
+                    self.check_attribute_value(object_UID, lines_list, f'Key{str(idx).zfill(3)}Offset', ATTR_TYPE_INTEGER, False, -500, 500)
+                    self.check_attribute_value(object_UID, lines_list, f'Key{str(idx).zfill(3)}YOffset', ATTR_TYPE_INTEGER, False, 0, 500)
 
                     # get the dimensions of the key bitmap
                     # an image is defined to display the key
                     if self.check_files_names:
                         # get the sizes of the image in the file which is existing
-                        modif_path = image.replace('\\', '/')
-                        photo = PhotoImage(file = os.path.dirname(self.odf_file_name) + '/' + modif_path)
-                        bitmap_width = photo.width()
-                        bitmap_height = photo.height()
+                        im = Image.open(os.path.dirname(self.odf_file_name) + os.sep + image.replace('\\', os.sep))
+                        bitmap_width = im.size[1]
+                        bitmap_height = im.size[0]
                     else:
                         bitmap_width = 100  # arbritrary default value
                         bitmap_height = 300 # arbritrary default value
 
-                    self.check_attribute_value(object_ID, lines_list, f'Key{str(idx).zfill(3)}MouseRectLeft', ATTR_TYPE_INTEGER, False, 0, bitmap_width)
-                    self.check_attribute_value(object_ID, lines_list, f'Key{str(idx).zfill(3)}MouseRectTop', ATTR_TYPE_INTEGER, False, 0, bitmap_height)
-                    self.check_attribute_value(object_ID, lines_list, f'Key{str(idx).zfill(3)}MouseRectWidth', ATTR_TYPE_INTEGER, False, 0, bitmap_width)
-                    self.check_attribute_value(object_ID, lines_list, f'Key{str(idx).zfill(3)}MouseRectHeight', ATTR_TYPE_INTEGER, False, 0, bitmap_height)
+                    self.check_attribute_value(object_UID, lines_list, f'Key{str(idx).zfill(3)}MouseRectLeft', ATTR_TYPE_INTEGER, False, 0, bitmap_width)
+                    self.check_attribute_value(object_UID, lines_list, f'Key{str(idx).zfill(3)}MouseRectTop', ATTR_TYPE_INTEGER, False, 0, bitmap_height)
+                    self.check_attribute_value(object_UID, lines_list, f'Key{str(idx).zfill(3)}MouseRectWidth', ATTR_TYPE_INTEGER, False, 0, bitmap_width)
+                    self.check_attribute_value(object_UID, lines_list, f'Key{str(idx).zfill(3)}MouseRectHeight', ATTR_TYPE_INTEGER, False, 0, bitmap_height)
 
         logical_keys_nb = int(ret) if ret.isdigit() else 192
-        self.check_attribute_value(object_ID, lines_list, 'FirstAccessibleKeyLogicalKeyNumber', ATTR_TYPE_INTEGER, is_manual_obj, 1, logical_keys_nb)
-        self.check_attribute_value(object_ID, lines_list, 'FirstAccessibleKeyMIDINoteNumber', ATTR_TYPE_INTEGER, is_manual_obj, 0, 127)
+        self.check_attribute_value(object_UID, lines_list, 'FirstAccessibleKeyLogicalKeyNumber', ATTR_TYPE_INTEGER, is_manual_obj, 1, logical_keys_nb)
+        self.check_attribute_value(object_UID, lines_list, 'FirstAccessibleKeyMIDINoteNumber', ATTR_TYPE_INTEGER, is_manual_obj, 0, 127)
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfAccessibleKeys', ATTR_TYPE_INTEGER, is_manual_obj, 0, 85)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfAccessibleKeys', ATTR_TYPE_INTEGER, is_manual_obj, 0, 85)
         accessible_keys_nb = int(ret) if ret.isdigit() else 85
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfCouplers', ATTR_TYPE_INTEGER, False, 0, 999)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfCouplers', ATTR_TYPE_INTEGER, False, 0, 999)
         if ret.isdigit() and int(ret) > 0:
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f'Coupler{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'Coupler{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfDivisionals', ATTR_TYPE_INTEGER, False, 0, 999)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfDivisionals', ATTR_TYPE_INTEGER, False, 0, 999)
         if ret.isdigit() and int(ret) > 0:
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f'Divisional{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'Divisional{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfStops', ATTR_TYPE_INTEGER, False, 0, 999)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfStops', ATTR_TYPE_INTEGER, False, 0, 999)
         if ret.isdigit() and int(ret) > 0:
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f'Stop{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'Stop{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
         max = self.objects_type_count('Switch')
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, max)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, max)
         if ret.isdigit() and int(ret) > 0:
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f'Switch{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'Switch{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
         max = self.objects_type_count('Tremulant')
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, False, 0, max)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, False, 0, max)
         if ret.isdigit() and int(ret) > 0:
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f'Tremulant{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'Tremulant{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
         # optional attributes
         for idx in range(0, 128):
-            self.check_attribute_value(object_ID, lines_list, f'MIDIKey{str(idx).zfill(3)}', ATTR_TYPE_INTEGER, False, 0, 127)
+            self.check_attribute_value(object_UID, lines_list, f'MIDIKey{str(idx).zfill(3)}', ATTR_TYPE_INTEGER, False, 0, 127)
 
-        self.check_attribute_value(object_ID, lines_list, 'MIDIInputNumber', ATTR_TYPE_INTEGER, False, 0, 200)
-        self.check_attribute_value(object_ID, lines_list, 'Displayed', ATTR_TYPE_BOOLEAN, False)
+        self.check_attribute_value(object_UID, lines_list, 'MIDIInputNumber', ATTR_TYPE_INTEGER, False, 0, 200)
+        self.check_attribute_value(object_UID, lines_list, 'Displayed', ATTR_TYPE_BOOLEAN, False)
 
         # get the dimensions of the parent panel
-        parent_panel_ID = self.object_get_parent_panel_ID(object_ID)
-        (value, idx) = self.object_get_attribute_value(parent_panel_ID, 'DispScreenSizeHoriz')
+        parent_panel_UID = self.object_get_parent_panel_UID(object_UID)
+        (value, idx) = self.object_get_attribute_value(parent_panel_UID, 'DispScreenSizeHoriz')
         panel_width = int(value) if value.isdigit() else 3000
-        (value, idx) = self.object_get_attribute_value(parent_panel_ID, 'DispScreenSizeVert')
+        (value, idx) = self.object_get_attribute_value(parent_panel_UID, 'DispScreenSizeVert')
         panel_height = int(value) if value.isdigit() else 2000
 
-        self.check_attribute_value(object_ID, lines_list, 'PositionX', ATTR_TYPE_INTEGER, False, 0, panel_width)
-        self.check_attribute_value(object_ID, lines_list, 'PositionY', ATTR_TYPE_INTEGER, False, 0, panel_height)
+        self.check_attribute_value(object_UID, lines_list, 'PositionX', ATTR_TYPE_INTEGER, False, 0, panel_width)
+        self.check_attribute_value(object_UID, lines_list, 'PositionY', ATTR_TYPE_INTEGER, False, 0, panel_height)
 
-        self.check_attribute_value(object_ID, lines_list, 'DispKeyColourInverted', ATTR_TYPE_BOOLEAN, False)
-        self.check_attribute_value(object_ID, lines_list, 'DispKeyColourWooden', ATTR_TYPE_BOOLEAN, False)
-        self.check_attribute_value(object_ID, lines_list, 'DisplayFirstNote', ATTR_TYPE_INTEGER, False, 0, 127)
+        self.check_attribute_value(object_UID, lines_list, 'DispKeyColourInverted', ATTR_TYPE_BOOLEAN, False)
+        self.check_attribute_value(object_UID, lines_list, 'DispKeyColourWooden', ATTR_TYPE_BOOLEAN, False)
+        self.check_attribute_value(object_UID, lines_list, 'DisplayFirstNote', ATTR_TYPE_INTEGER, False, 0, 127)
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'DisplayKeys', ATTR_TYPE_INTEGER, False, 1, accessible_keys_nb)
+        ret = self.check_attribute_value(object_UID, lines_list, 'DisplayKeys', ATTR_TYPE_INTEGER, False, 1, accessible_keys_nb)
         if ret.isdigit() and int(ret) > 0:
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f'DisplayKey{str(idx).zfill(3)}', ATTR_TYPE_INTEGER, False, 0, 127)
-                self.check_attribute_value(object_ID, lines_list, f'DisplayKey{str(idx).zfill(3)}Note', ATTR_TYPE_INTEGER, False, 0, 127)
+                self.check_attribute_value(object_UID, lines_list, f'DisplayKey{str(idx).zfill(3)}', ATTR_TYPE_INTEGER, False, 0, 127)
+                self.check_attribute_value(object_UID, lines_list, f'DisplayKey{str(idx).zfill(3)}Note', ATTR_TYPE_INTEGER, False, 0, 127)
 
         # optional attributes with the KEYTYPE format
         ImageOn_First_keytype = '' # variable to store if the first attribute have been already checked for the ImageOn key type
@@ -1461,458 +1501,456 @@ class C_ODF:
         YOffset_Last_keytype = ''
 
         for keytype in ('C', 'Cis', 'D', 'Dis', 'E', 'F', 'Fis', 'G', 'Gis', 'A', 'Ais', 'B'):
-            if self.check_attribute_value(object_ID, lines_list, f'ImageOn_{keytype}', ATTR_TYPE_FILE_NAME, False) == '':
-                # if there is no ImageOn_C attribute in the object so we can skip the other KEYTYPE attributes checks to not waste checking time
-                break
-            self.check_attribute_value(object_ID, lines_list, f'ImageOff_{keytype}', ATTR_TYPE_FILE_NAME, False)
-            self.check_attribute_value(object_ID, lines_list, f'MaskOn_{keytype}', ATTR_TYPE_FILE_NAME, False)
-            self.check_attribute_value(object_ID, lines_list, f'MaskOff_{keytype}', ATTR_TYPE_FILE_NAME, False)
-            self.check_attribute_value(object_ID, lines_list, f'Width_{keytype}', ATTR_TYPE_INTEGER, False, 0, 500)
-            self.check_attribute_value(object_ID, lines_list, f'Offset_{keytype}', ATTR_TYPE_INTEGER, False, -500, 500)
-            self.check_attribute_value(object_ID, lines_list, f'YOffset_{keytype}', ATTR_TYPE_INTEGER, False, 0, 500)
+            self.check_attribute_value(object_UID, lines_list, f'ImageOn_{keytype}', ATTR_TYPE_FILE_NAME, False)
+            self.check_attribute_value(object_UID, lines_list, f'ImageOff_{keytype}', ATTR_TYPE_FILE_NAME, False)
+            self.check_attribute_value(object_UID, lines_list, f'MaskOn_{keytype}', ATTR_TYPE_FILE_NAME, False)
+            self.check_attribute_value(object_UID, lines_list, f'MaskOff_{keytype}', ATTR_TYPE_FILE_NAME, False)
+            self.check_attribute_value(object_UID, lines_list, f'Width_{keytype}', ATTR_TYPE_INTEGER, False, 0, 500)
+            self.check_attribute_value(object_UID, lines_list, f'Offset_{keytype}', ATTR_TYPE_INTEGER, False, -500, 500)
+            self.check_attribute_value(object_UID, lines_list, f'YOffset_{keytype}', ATTR_TYPE_INTEGER, False, 0, 500)
             # the First and Last attributes are checked only once for each key property
             # so if there is more than one First or Last definition it will appear in the warning logs because it will not have been checked here
-            if ImageOn_First_keytype == '' : ImageOn_First_keytype = self.check_attribute_value(object_ID, lines_list, f'ImageOn_First{keytype}', ATTR_TYPE_FILE_NAME, False)
-            if ImageOff_First_keytype == '' : ImageOff_First_keytype = self.check_attribute_value(object_ID, lines_list, f'ImageOff_First{keytype}', ATTR_TYPE_FILE_NAME, False)
-            if MaskOn_First_keytype == '' : MaskOn_First_keytype = self.check_attribute_value(object_ID, lines_list, f'MaskOn_First{keytype}', ATTR_TYPE_FILE_NAME, False)
-            if MaskOff_First_keytype == '' : MaskOff_First_keytype = self.check_attribute_value(object_ID, lines_list, f'MaskOff_First{keytype}', ATTR_TYPE_FILE_NAME, False)
-            if Width_First_keytype == '' : Width_First_keytype = self.check_attribute_value(object_ID, lines_list, f'Width_First{keytype}', ATTR_TYPE_INTEGER, False, 0, 500)
-            if Offset_First_keytype == '' : Offset_First_keytype = self.check_attribute_value(object_ID, lines_list, f'Offset_First{keytype}', ATTR_TYPE_INTEGER, False, -500, 500)
-            if YOffset_First_keytype == '' : YOffset_First_keytype = self.check_attribute_value(object_ID, lines_list, f'YOffset_First{keytype}', ATTR_TYPE_INTEGER, False, 0, 500)
+            if ImageOn_First_keytype == '' : ImageOn_First_keytype = self.check_attribute_value(object_UID, lines_list, f'ImageOn_First{keytype}', ATTR_TYPE_FILE_NAME, False)
+            if ImageOff_First_keytype == '' : ImageOff_First_keytype = self.check_attribute_value(object_UID, lines_list, f'ImageOff_First{keytype}', ATTR_TYPE_FILE_NAME, False)
+            if MaskOn_First_keytype == '' : MaskOn_First_keytype = self.check_attribute_value(object_UID, lines_list, f'MaskOn_First{keytype}', ATTR_TYPE_FILE_NAME, False)
+            if MaskOff_First_keytype == '' : MaskOff_First_keytype = self.check_attribute_value(object_UID, lines_list, f'MaskOff_First{keytype}', ATTR_TYPE_FILE_NAME, False)
+            if Width_First_keytype == '' : Width_First_keytype = self.check_attribute_value(object_UID, lines_list, f'Width_First{keytype}', ATTR_TYPE_INTEGER, False, 0, 500)
+            if Offset_First_keytype == '' : Offset_First_keytype = self.check_attribute_value(object_UID, lines_list, f'Offset_First{keytype}', ATTR_TYPE_INTEGER, False, -500, 500)
+            if YOffset_First_keytype == '' : YOffset_First_keytype = self.check_attribute_value(object_UID, lines_list, f'YOffset_First{keytype}', ATTR_TYPE_INTEGER, False, 0, 500)
 
-            if ImageOn_Last_keytype == '' : ImageOn_Last_keytype = self.check_attribute_value(object_ID, lines_list, f'ImageOn_Last{keytype}', ATTR_TYPE_FILE_NAME, False)
-            if ImageOff_Last_keytype == '' : ImageOff_Last_keytype = self.check_attribute_value(object_ID, lines_list, f'ImageOff_Last{keytype}', ATTR_TYPE_FILE_NAME, False)
-            if MaskOn_Last_keytype == '' : MaskOn_Last_keytype = self.check_attribute_value(object_ID, lines_list, f'MaskOn_Last{keytype}', ATTR_TYPE_FILE_NAME, False)
-            if MaskOff_Last_keytype == '' : MaskOff_Last_keytype = self.check_attribute_value(object_ID, lines_list, f'MaskOff_Last{keytype}', ATTR_TYPE_FILE_NAME, False)
-            if Width_Last_keytype == '' : Width_Last_keytype = self.check_attribute_value(object_ID, lines_list, f'Width_Last{keytype}', ATTR_TYPE_INTEGER, False, 0, 500)
-            if Offset_Last_keytype == '' : Offset_Last_keytype = self.check_attribute_value(object_ID, lines_list, f'Offset_Last{keytype}', ATTR_TYPE_INTEGER, False, -500, 500)
-            if YOffset_Last_keytype == '' : YOffset_Last_keytype = self.check_attribute_value(object_ID, lines_list, f'YOffset_Last{keytype}', ATTR_TYPE_INTEGER, False, 0, 500)
+            if ImageOn_Last_keytype == '' : ImageOn_Last_keytype = self.check_attribute_value(object_UID, lines_list, f'ImageOn_Last{keytype}', ATTR_TYPE_FILE_NAME, False)
+            if ImageOff_Last_keytype == '' : ImageOff_Last_keytype = self.check_attribute_value(object_UID, lines_list, f'ImageOff_Last{keytype}', ATTR_TYPE_FILE_NAME, False)
+            if MaskOn_Last_keytype == '' : MaskOn_Last_keytype = self.check_attribute_value(object_UID, lines_list, f'MaskOn_Last{keytype}', ATTR_TYPE_FILE_NAME, False)
+            if MaskOff_Last_keytype == '' : MaskOff_Last_keytype = self.check_attribute_value(object_UID, lines_list, f'MaskOff_Last{keytype}', ATTR_TYPE_FILE_NAME, False)
+            if Width_Last_keytype == '' : Width_Last_keytype = self.check_attribute_value(object_UID, lines_list, f'Width_Last{keytype}', ATTR_TYPE_INTEGER, False, 0, 500)
+            if Offset_Last_keytype == '' : Offset_Last_keytype = self.check_attribute_value(object_UID, lines_list, f'Offset_Last{keytype}', ATTR_TYPE_INTEGER, False, -500, 500)
+            if YOffset_Last_keytype == '' : YOffset_Last_keytype = self.check_attribute_value(object_UID, lines_list, f'YOffset_Last{keytype}', ATTR_TYPE_INTEGER, False, 0, 500)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_Panel(self, object_ID, lines_list):
+    def check_object_Panel(self, object_UID, lines_list):
         #--- check the data of a Panel object section which the lines are in the given lines list
 
-        is_additional_panel = not(object_ID in ('Panel000', 'Organ')) # it is an additional panel, in addition to the Panel000 or Organ (old format) panel
+        is_additional_panel = not(object_UID in ('Panel000', 'Organ')) # it is an additional panel, in addition to the Panel000 or Organ (old format) panel
 
         if self.new_panel_format:
 
             # required attributes (new panel format)
-            self.check_attribute_value(object_ID, lines_list, 'Name', ATTR_TYPE_STRING, is_additional_panel)
-            self.check_attribute_value(object_ID, lines_list, 'HasPedals', ATTR_TYPE_BOOLEAN, True)
+            self.check_attribute_value(object_UID, lines_list, 'Name', ATTR_TYPE_STRING, is_additional_panel)
+            self.check_attribute_value(object_UID, lines_list, 'HasPedals', ATTR_TYPE_BOOLEAN, True)
 
-            ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfGUIElements', ATTR_TYPE_INTEGER, True, 0, 999)
+            ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfGUIElements', ATTR_TYPE_INTEGER, True, 0, 999)
             if ret.isdigit() and int(ret) >= 0:
-                count = self.objects_type_count(f'{object_ID}Element')
+                count = self.objects_type_count(f'{object_UID}Element')
                 if count != int(ret):
-                    self.events_log_add(f"Error in {object_ID} : NumberOfGUIElements={ret} whereas {count} {object_ID}Element object(s) defined")
+                    self.events_log_add(f"Error in {object_UID} : NumberOfGUIElements={ret} whereas {count} {object_UID}Element object(s) defined")
 
             # optional attributes (new panel format)
-            self.check_attribute_value(object_ID, lines_list, 'Group', ATTR_TYPE_STRING, False)
+            self.check_attribute_value(object_UID, lines_list, 'Group', ATTR_TYPE_STRING, False)
 
-            ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfImages', ATTR_TYPE_INTEGER, False, 0, 999)
+            ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfImages', ATTR_TYPE_INTEGER, False, 0, 999)
             if ret.isdigit() and int(ret) >= 0:
-                count = self.objects_type_count(f'{object_ID}Image')
+                count = self.objects_type_count(f'{object_UID}Image')
                 if count != int(ret):
-                    self.events_log_add(f"Error in {object_ID} : NumberOfImages={ret} whereas {count} {object_ID}Image object(s) defined")
+                    self.events_log_add(f"Error in {object_UID} : NumberOfImages={ret} whereas {count} {object_UID}Image object(s) defined")
 
         elif is_additional_panel:  # additional panel in the old panel format (for the main panel, the non display metrics attributes are defined in the Organ object)
 
             # required attributes (old panel format, additional panel)
-            self.check_attribute_value(object_ID, lines_list, 'Name', ATTR_TYPE_STRING, True)
-            self.check_attribute_value(object_ID, lines_list, 'HasPedals', ATTR_TYPE_BOOLEAN, True)
+            self.check_attribute_value(object_UID, lines_list, 'Name', ATTR_TYPE_STRING, True)
+            self.check_attribute_value(object_UID, lines_list, 'HasPedals', ATTR_TYPE_BOOLEAN, True)
 
-            ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfCouplers', ATTR_TYPE_INTEGER, True, 0, 999)
+            ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfCouplers', ATTR_TYPE_INTEGER, True, 0, 999)
             if ret.isdigit() and int(ret) >= 0:
                 for idx in range(1, int(ret)+1):
-                    self.check_attribute_value(object_ID, lines_list, f"Coupler{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
-                    self.check_attribute_value(object_ID, lines_list, f"Coupler{str(idx).zfill(3)}Manual", ATTR_TYPE_OBJECT_REF, True)
-                count = self.objects_type_count(f'{object_ID}Coupler')
+                    self.check_attribute_value(object_UID, lines_list, f"Coupler{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
+                    self.check_attribute_value(object_UID, lines_list, f"Coupler{str(idx).zfill(3)}Manual", ATTR_TYPE_OBJECT_REF, True)
+                count = self.objects_type_count(f'{object_UID}Coupler')
                 if count != int(ret):
-                    self.events_log_add(f"Error in {object_ID} : NumberOfCouplers={ret} whereas {count} {object_ID}Coupler object(s) defined")
+                    self.events_log_add(f"Error in {object_UID} : NumberOfCouplers={ret} whereas {count} {object_UID}Coupler object(s) defined")
 
-            ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfDivisionals', ATTR_TYPE_INTEGER, True, 0, 999)
+            ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfDivisionals', ATTR_TYPE_INTEGER, True, 0, 999)
             if ret.isdigit() and int(ret) >= 0:
                 for idx in range(1, int(ret)+1):
-                    self.check_attribute_value(object_ID, lines_list, f"Divisional{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
-                    self.check_attribute_value(object_ID, lines_list, f"Divisional{str(idx).zfill(3)}Manual", ATTR_TYPE_OBJECT_REF, True)
-                count = self.objects_type_count(f'{object_ID}Divisional')
+                    self.check_attribute_value(object_UID, lines_list, f"Divisional{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
+                    self.check_attribute_value(object_UID, lines_list, f"Divisional{str(idx).zfill(3)}Manual", ATTR_TYPE_OBJECT_REF, True)
+                count = self.objects_type_count(f'{object_UID}Divisional')
                 if count != int(ret):
-                    self.events_log_add(f"Error in {object_ID} : NumberOfDivisionals={ret} whereas {count} {object_ID}Divisional object(s) defined")
+                    self.events_log_add(f"Error in {object_UID} : NumberOfDivisionals={ret} whereas {count} {object_UID}Divisional object(s) defined")
 
-            ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfDivisionalCouplers', ATTR_TYPE_INTEGER, True, 0, 8)
+            ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfDivisionalCouplers', ATTR_TYPE_INTEGER, True, 0, 8)
             if ret.isdigit() and int(ret) >= 0:
                 for idx in range(1, int(ret)+1):
-                    self.check_attribute_value(object_ID, lines_list, f"DivisionalCoupler{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
-                count = self.objects_type_count(f'{object_ID}DivisionalCoupler')
+                    self.check_attribute_value(object_UID, lines_list, f"DivisionalCoupler{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
+                count = self.objects_type_count(f'{object_UID}DivisionalCoupler')
                 if count != int(ret):
-                    self.events_log_add(f"Error in {object_ID} : NumberOfDivisionalCouplers={ret} whereas {count} {object_ID}DivisionalCoupler object(s) defined")
+                    self.events_log_add(f"Error in {object_UID} : NumberOfDivisionalCouplers={ret} whereas {count} {object_UID}DivisionalCoupler object(s) defined")
 
-            ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfEnclosures', ATTR_TYPE_INTEGER, True, 0, 50)
+            ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfEnclosures', ATTR_TYPE_INTEGER, True, 0, 50)
             if ret.isdigit() and int(ret) >= 0:
                 for idx in range(1, int(ret)+1):
-                    self.check_attribute_value(object_ID, lines_list, f"Enclosure{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
-                count = self.objects_type_count(f'{object_ID}Enclosure')
+                    self.check_attribute_value(object_UID, lines_list, f"Enclosure{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
+                count = self.objects_type_count(f'{object_UID}Enclosure')
                 if count != int(ret):
-                    self.events_log_add(f"Error in {object_ID} : NumberOfEnclosures={ret} whereas {count} {object_ID}Enclosure object(s) defined")
+                    self.events_log_add(f"Error in {object_UID} : NumberOfEnclosures={ret} whereas {count} {object_UID}Enclosure object(s) defined")
 
-            ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfGenerals', ATTR_TYPE_INTEGER, True, 0, 99)
+            ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfGenerals', ATTR_TYPE_INTEGER, True, 0, 99)
             if ret.isdigit() and int(ret) >= 0:
                 for idx in range(1, int(ret)+1):
-                    self.check_attribute_value(object_ID, lines_list, f"General{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
-                count = self.objects_type_count(f'{object_ID}General')
+                    self.check_attribute_value(object_UID, lines_list, f"General{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
+                count = self.objects_type_count(f'{object_UID}General')
                 if count != int(ret):
-                    self.events_log_add(f"Error in {object_ID} : NumberOfGenerals={ret} whereas {count} {object_ID}General object(s) defined")
+                    self.events_log_add(f"Error in {object_UID} : NumberOfGenerals={ret} whereas {count} {object_UID}General object(s) defined")
 
-            ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfImages', ATTR_TYPE_INTEGER, True, 0, 999)
+            ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfImages', ATTR_TYPE_INTEGER, True, 0, 999)
             if ret.isdigit() and int(ret) >= 0:
-                count = self.objects_type_count(f'{object_ID}Image')
+                count = self.objects_type_count(f'{object_UID}Image')
                 if count != int(ret):
-                    self.events_log_add(f"Error in {object_ID} : NumberOfImages={ret} whereas {count} {object_ID}Image object(s) defined")
+                    self.events_log_add(f"Error in {object_UID} : NumberOfImages={ret} whereas {count} {object_UID}Image object(s) defined")
 
-            ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfLabels', ATTR_TYPE_INTEGER, True, 0, 999)
+            ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfLabels', ATTR_TYPE_INTEGER, True, 0, 999)
             if ret.isdigit() and int(ret) >= 0:
-                count = self.objects_type_count(f'{object_ID}Label')
+                count = self.objects_type_count(f'{object_UID}Label')
                 if count != int(ret):
-                    self.events_log_add(f"Error in {object_ID} : NumberOfLabels={ret} whereas {count} {object_ID}Label object(s) defined")
+                    self.events_log_add(f"Error in {object_UID} : NumberOfLabels={ret} whereas {count} {object_UID}Label object(s) defined")
 
-            ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfManuals', ATTR_TYPE_INTEGER, True, 0, 16)
-            if ret.isdigit() and int(ret) >= 0:
-                for idx in range(1, int(ret)+1):
-                    self.check_attribute_value(object_ID, lines_list, f"Manual{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
-
-            ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfReversiblePistons', ATTR_TYPE_INTEGER, True, 0, 32)
+            ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfManuals', ATTR_TYPE_INTEGER, True, 0, 16)
             if ret.isdigit() and int(ret) >= 0:
                 for idx in range(1, int(ret)+1):
-                    self.check_attribute_value(object_ID, lines_list, f"ReversiblePiston{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
-                count = self.objects_type_count(f'{object_ID}ReversiblePiston')
-                if count != int(ret):
-                    self.events_log_add(f"Error in {object_ID} : NumberOfReversiblePistons={ret} whereas {count} {object_ID}ReversiblePiston object(s) defined")
+                    self.check_attribute_value(object_UID, lines_list, f"Manual{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
 
-            ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfStops', ATTR_TYPE_INTEGER, True, 0, 999)
+            ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfReversiblePistons', ATTR_TYPE_INTEGER, True, 0, 32)
             if ret.isdigit() and int(ret) >= 0:
                 for idx in range(1, int(ret)+1):
-                    self.check_attribute_value(object_ID, lines_list, f"Stop{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
-                    self.check_attribute_value(object_ID, lines_list, f"Stop{str(idx).zfill(3)}Manual", ATTR_TYPE_OBJECT_REF, True)
-                count = self.objects_type_count(f'{object_ID}Stop')
+                    self.check_attribute_value(object_UID, lines_list, f"ReversiblePiston{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
+                count = self.objects_type_count(f'{object_UID}ReversiblePiston')
                 if count != int(ret):
-                    self.events_log_add(f"Error in {object_ID} : NumberOfStops={ret} whereas {count} {object_ID}Stop object(s) defined")
+                    self.events_log_add(f"Error in {object_UID} : NumberOfReversiblePistons={ret} whereas {count} {object_UID}ReversiblePiston object(s) defined")
 
-            ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, True, 0, 10)
+            ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfStops', ATTR_TYPE_INTEGER, True, 0, 999)
             if ret.isdigit() and int(ret) >= 0:
                 for idx in range(1, int(ret)+1):
-                    self.check_attribute_value(object_ID, lines_list, f"Tremulant{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
-                count = self.objects_type_count(f'{object_ID}Tremulant')
+                    self.check_attribute_value(object_UID, lines_list, f"Stop{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
+                    self.check_attribute_value(object_UID, lines_list, f"Stop{str(idx).zfill(3)}Manual", ATTR_TYPE_OBJECT_REF, True)
+                count = self.objects_type_count(f'{object_UID}Stop')
                 if count != int(ret):
-                    self.events_log_add(f"Error in {object_ID} : NumberOfTremulants={ret} whereas {count} {object_ID}Tremulant object(s) defined")
+                    self.events_log_add(f"Error in {object_UID} : NumberOfStops={ret} whereas {count} {object_UID}Stop object(s) defined")
+
+            ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, True, 0, 10)
+            if ret.isdigit() and int(ret) >= 0:
+                for idx in range(1, int(ret)+1):
+                    self.check_attribute_value(object_UID, lines_list, f"Tremulant{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
+                count = self.objects_type_count(f'{object_UID}Tremulant')
+                if count != int(ret):
+                    self.events_log_add(f"Error in {object_UID} : NumberOfTremulants={ret} whereas {count} {object_UID}Tremulant object(s) defined")
 
             # optional attributes (old panel format, additional panel)
-            self.check_attribute_value(object_ID, lines_list, 'Group', ATTR_TYPE_STRING, False)
+            self.check_attribute_value(object_UID, lines_list, 'Group', ATTR_TYPE_STRING, False)
 
-            ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfSetterElements', ATTR_TYPE_INTEGER, False, 0, 8)
+            ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfSetterElements', ATTR_TYPE_INTEGER, False, 0, 8)
             if ret.isdigit() and int(ret) >= 0:
-                count = self.objects_type_count(f'{object_ID}SetterElement')
+                count = self.objects_type_count(f'{object_UID}SetterElement')
                 if count != int(ret):
-                    self.events_log_add(f"Error in {object_ID} : NumberOfSetterElements={ret} whereas {count} {object_ID}SetterElement object(s) defined")
+                    self.events_log_add(f"Error in {object_UID} : NumberOfSetterElements={ret} whereas {count} {object_UID}SetterElement object(s) defined")
 
-            ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, 999)
+            ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, 999)
             if ret.isdigit() and int(ret) >= 0:
                 for idx in range(1, int(ret)+1):
-                    self.check_attribute_value(object_ID, lines_list, f"Switch{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
-                count = self.objects_type_count(f'{object_ID}Switch')
+                    self.check_attribute_value(object_UID, lines_list, f"Switch{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
+                count = self.objects_type_count(f'{object_UID}Switch')
                 if count != int(ret):
-                    self.events_log_add(f"Error in {object_ID} : NumberOfSwitches={ret} whereas {count} {object_ID}Switch object(s) defined")
+                    self.events_log_add(f"Error in {object_UID} : NumberOfSwitches={ret} whereas {count} {object_UID}Switch object(s) defined")
 
 
         # display metrics (common to old and new panel formats)
 
         # required attributes (panel display metrics)
-        self.check_attribute_value(object_ID, lines_list, 'DispScreenSizeHoriz', ATTR_TYPE_PANEL_SIZE, True)
-        self.check_attribute_value(object_ID, lines_list, 'DispScreenSizeVert', ATTR_TYPE_PANEL_SIZE, True)
-        self.check_attribute_value(object_ID, lines_list, 'DispDrawstopBackgroundImageNum', ATTR_TYPE_INTEGER, True, 1, 64)
-        self.check_attribute_value(object_ID, lines_list, 'DispConsoleBackgroundImageNum', ATTR_TYPE_INTEGER, True, 1, 64)
-        self.check_attribute_value(object_ID, lines_list, 'DispKeyHorizBackgroundImageNum', ATTR_TYPE_INTEGER, True, 1, 64)
-        self.check_attribute_value(object_ID, lines_list, 'DispKeyVertBackgroundImageNum', ATTR_TYPE_INTEGER, True, 1, 64)
-        self.check_attribute_value(object_ID, lines_list, 'DispDrawstopInsetBackgroundImageNum', ATTR_TYPE_INTEGER, True, 1, 64)
-        self.check_attribute_value(object_ID, lines_list, 'DispControlLabelFont', ATTR_TYPE_STRING, True)
-        self.check_attribute_value(object_ID, lines_list, 'DispShortcutKeyLabelFont', ATTR_TYPE_STRING, True)
-        self.check_attribute_value(object_ID, lines_list, 'DispShortcutKeyLabelColour', ATTR_TYPE_COLOR, True)
-        self.check_attribute_value(object_ID, lines_list, 'DispGroupLabelFont', ATTR_TYPE_STRING, True)
-        self.check_attribute_value(object_ID, lines_list, 'DispDrawstopCols', ATTR_TYPE_INTEGER, True, 2, 12)
-        self.check_attribute_value(object_ID, lines_list, 'DispDrawstopRows', ATTR_TYPE_INTEGER, True, 1, 20)
-        cols_offset = self.check_attribute_value(object_ID, lines_list, 'DispDrawstopColsOffset', ATTR_TYPE_BOOLEAN, True)
-        self.check_attribute_value(object_ID, lines_list, 'DispPairDrawstopCols', ATTR_TYPE_BOOLEAN, True)
-        self.check_attribute_value(object_ID, lines_list, 'DispExtraDrawstopRows', ATTR_TYPE_INTEGER, True, 0, 99)
-        self.check_attribute_value(object_ID, lines_list, 'DispExtraDrawstopCols', ATTR_TYPE_INTEGER, True, 0, 40)
-        self.check_attribute_value(object_ID, lines_list, 'DispButtonCols', ATTR_TYPE_INTEGER, True, 1, 32)
-        self.check_attribute_value(object_ID, lines_list, 'DispExtraButtonRows', ATTR_TYPE_INTEGER, True, 0, 99)
-        extra_pedal_buttons = self.check_attribute_value(object_ID, lines_list, 'DispExtraPedalButtonRow', ATTR_TYPE_BOOLEAN, True)
-        self.check_attribute_value(object_ID, lines_list, 'DispButtonsAboveManuals', ATTR_TYPE_BOOLEAN, True)
-        self.check_attribute_value(object_ID, lines_list, 'DispExtraDrawstopRowsAboveExtraButtonRows', ATTR_TYPE_BOOLEAN, True)
-        self.check_attribute_value(object_ID, lines_list, 'DispTrimAboveManuals', ATTR_TYPE_BOOLEAN, True)
-        self.check_attribute_value(object_ID, lines_list, 'DispTrimBelowManuals', ATTR_TYPE_BOOLEAN, True)
-        self.check_attribute_value(object_ID, lines_list, 'DispTrimAboveExtraRows', ATTR_TYPE_BOOLEAN, True)
+        self.check_attribute_value(object_UID, lines_list, 'DispScreenSizeHoriz', ATTR_TYPE_PANEL_SIZE, True)
+        self.check_attribute_value(object_UID, lines_list, 'DispScreenSizeVert', ATTR_TYPE_PANEL_SIZE, True)
+        self.check_attribute_value(object_UID, lines_list, 'DispDrawstopBackgroundImageNum', ATTR_TYPE_INTEGER, True, 1, 64)
+        self.check_attribute_value(object_UID, lines_list, 'DispConsoleBackgroundImageNum', ATTR_TYPE_INTEGER, True, 1, 64)
+        self.check_attribute_value(object_UID, lines_list, 'DispKeyHorizBackgroundImageNum', ATTR_TYPE_INTEGER, True, 1, 64)
+        self.check_attribute_value(object_UID, lines_list, 'DispKeyVertBackgroundImageNum', ATTR_TYPE_INTEGER, True, 1, 64)
+        self.check_attribute_value(object_UID, lines_list, 'DispDrawstopInsetBackgroundImageNum', ATTR_TYPE_INTEGER, True, 1, 64)
+        self.check_attribute_value(object_UID, lines_list, 'DispControlLabelFont', ATTR_TYPE_STRING, True)
+        self.check_attribute_value(object_UID, lines_list, 'DispShortcutKeyLabelFont', ATTR_TYPE_STRING, True)
+        self.check_attribute_value(object_UID, lines_list, 'DispShortcutKeyLabelColour', ATTR_TYPE_COLOR, True)
+        self.check_attribute_value(object_UID, lines_list, 'DispGroupLabelFont', ATTR_TYPE_STRING, True)
+        self.check_attribute_value(object_UID, lines_list, 'DispDrawstopCols', ATTR_TYPE_INTEGER, True, 2, 12)
+        self.check_attribute_value(object_UID, lines_list, 'DispDrawstopRows', ATTR_TYPE_INTEGER, True, 1, 20)
+        cols_offset = self.check_attribute_value(object_UID, lines_list, 'DispDrawstopColsOffset', ATTR_TYPE_BOOLEAN, True)
+        self.check_attribute_value(object_UID, lines_list, 'DispPairDrawstopCols', ATTR_TYPE_BOOLEAN, True)
+        self.check_attribute_value(object_UID, lines_list, 'DispExtraDrawstopRows', ATTR_TYPE_INTEGER, True, 0, 99)
+        self.check_attribute_value(object_UID, lines_list, 'DispExtraDrawstopCols', ATTR_TYPE_INTEGER, True, 0, 40)
+        self.check_attribute_value(object_UID, lines_list, 'DispButtonCols', ATTR_TYPE_INTEGER, True, 1, 32)
+        self.check_attribute_value(object_UID, lines_list, 'DispExtraButtonRows', ATTR_TYPE_INTEGER, True, 0, 99)
+        extra_pedal_buttons = self.check_attribute_value(object_UID, lines_list, 'DispExtraPedalButtonRow', ATTR_TYPE_BOOLEAN, True)
+        self.check_attribute_value(object_UID, lines_list, 'DispButtonsAboveManuals', ATTR_TYPE_BOOLEAN, True)
+        self.check_attribute_value(object_UID, lines_list, 'DispExtraDrawstopRowsAboveExtraButtonRows', ATTR_TYPE_BOOLEAN, True)
+        self.check_attribute_value(object_UID, lines_list, 'DispTrimAboveManuals', ATTR_TYPE_BOOLEAN, True)
+        self.check_attribute_value(object_UID, lines_list, 'DispTrimBelowManuals', ATTR_TYPE_BOOLEAN, True)
+        self.check_attribute_value(object_UID, lines_list, 'DispTrimAboveExtraRows', ATTR_TYPE_BOOLEAN, True)
 
         # optional attributes (panel display metrics)
-        self.check_attribute_value(object_ID, lines_list, 'DispDrawstopWidth', ATTR_TYPE_INTEGER, False, 1, 150)
-        self.check_attribute_value(object_ID, lines_list, 'DispDrawstopHeight', ATTR_TYPE_INTEGER, False, 1, 150)
-        self.check_attribute_value(object_ID, lines_list, 'DispDrawstopOuterColOffsetUp', ATTR_TYPE_BOOLEAN, True if cols_offset == 'Y' else False)
-        self.check_attribute_value(object_ID, lines_list, 'DispExtraPedalButtonRowOffset', ATTR_TYPE_BOOLEAN, True if extra_pedal_buttons == 'Y' else False)
-        self.check_attribute_value(object_ID, lines_list, 'DispExtraPedalButtonRowOffsetRight', ATTR_TYPE_BOOLEAN, False)
-        self.check_attribute_value(object_ID, lines_list, 'DispPistonWidth', ATTR_TYPE_INTEGER, False, 1, 150)
-        self.check_attribute_value(object_ID, lines_list, 'DispPistonHeight', ATTR_TYPE_INTEGER, False, 1, 150)
-        self.check_attribute_value(object_ID, lines_list, 'DispEnclosureWidth', ATTR_TYPE_INTEGER, False, 1, 150)
-        self.check_attribute_value(object_ID, lines_list, 'DispEnclosureHeight', ATTR_TYPE_INTEGER, False, 1, 150)
-        self.check_attribute_value(object_ID, lines_list, 'DispPedalHeight', ATTR_TYPE_INTEGER, False, 1, 500)
-        self.check_attribute_value(object_ID, lines_list, 'DispPedalKeyWidth', ATTR_TYPE_INTEGER, False, 1, 500)
-        self.check_attribute_value(object_ID, lines_list, 'DispManualHeight', ATTR_TYPE_INTEGER, False, 1, 500)
-        self.check_attribute_value(object_ID, lines_list, 'DispManualKeyWidth', ATTR_TYPE_INTEGER, False, 1, 500)
+        self.check_attribute_value(object_UID, lines_list, 'DispDrawstopWidth', ATTR_TYPE_INTEGER, False, 1, 150)
+        self.check_attribute_value(object_UID, lines_list, 'DispDrawstopHeight', ATTR_TYPE_INTEGER, False, 1, 150)
+        self.check_attribute_value(object_UID, lines_list, 'DispDrawstopOuterColOffsetUp', ATTR_TYPE_BOOLEAN, True if cols_offset == 'Y' else False)
+        self.check_attribute_value(object_UID, lines_list, 'DispExtraPedalButtonRowOffset', ATTR_TYPE_BOOLEAN, True if extra_pedal_buttons == 'Y' else False)
+        self.check_attribute_value(object_UID, lines_list, 'DispExtraPedalButtonRowOffsetRight', ATTR_TYPE_BOOLEAN, False)
+        self.check_attribute_value(object_UID, lines_list, 'DispPistonWidth', ATTR_TYPE_INTEGER, False, 1, 150)
+        self.check_attribute_value(object_UID, lines_list, 'DispPistonHeight', ATTR_TYPE_INTEGER, False, 1, 150)
+        self.check_attribute_value(object_UID, lines_list, 'DispEnclosureWidth', ATTR_TYPE_INTEGER, False, 1, 150)
+        self.check_attribute_value(object_UID, lines_list, 'DispEnclosureHeight', ATTR_TYPE_INTEGER, False, 1, 150)
+        self.check_attribute_value(object_UID, lines_list, 'DispPedalHeight', ATTR_TYPE_INTEGER, False, 1, 500)
+        self.check_attribute_value(object_UID, lines_list, 'DispPedalKeyWidth', ATTR_TYPE_INTEGER, False, 1, 500)
+        self.check_attribute_value(object_UID, lines_list, 'DispManualHeight', ATTR_TYPE_INTEGER, False, 1, 500)
+        self.check_attribute_value(object_UID, lines_list, 'DispManualKeyWidth', ATTR_TYPE_INTEGER, False, 1, 500)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_PanelElement(self, object_ID, lines_list):
+    def check_object_PanelElement(self, object_UID, lines_list):
         #--- check the data of a Panel Element object section which the lines are in the given lines list
 
         # required attributes
-        type = self.check_attribute_value(object_ID, lines_list, 'Type', ATTR_TYPE_ELEMENT_TYPE, True)
+        type = self.check_attribute_value(object_UID, lines_list, 'Type', ATTR_TYPE_ELEMENT_TYPE, True)
 
         if type == 'Coupler':
-            self.check_attribute_value(object_ID, lines_list, 'Manual', ATTR_TYPE_OBJECT_REF, True)
-            self.check_attribute_value(object_ID, lines_list, 'Coupler', ATTR_TYPE_OBJECT_REF, True)
-            self.check_object_Coupler(object_ID, lines_list)
+            self.check_attribute_value(object_UID, lines_list, 'Manual', ATTR_TYPE_OBJECT_REF, True)
+            self.check_attribute_value(object_UID, lines_list, 'Coupler', ATTR_TYPE_OBJECT_REF, True)
+            self.check_object_Coupler(object_UID, lines_list)
         elif type == 'Divisional':
-            self.check_attribute_value(object_ID, lines_list, 'Manual', ATTR_TYPE_OBJECT_REF, True)
-            self.check_attribute_value(object_ID, lines_list, 'Divisional', ATTR_TYPE_OBJECT_REF, True)
-            self.check_object_Divisional(object_ID, lines_list)
+            self.check_attribute_value(object_UID, lines_list, 'Manual', ATTR_TYPE_OBJECT_REF, True)
+            self.check_attribute_value(object_UID, lines_list, 'Divisional', ATTR_TYPE_OBJECT_REF, True)
+            self.check_object_Divisional(object_UID, lines_list)
         elif type == 'DivisionalCoupler':
-            self.check_attribute_value(object_ID, lines_list, 'DivisionalCoupler', ATTR_TYPE_OBJECT_REF, True)
-            self.check_object_DivisionalCoupler(object_ID, lines_list)
+            self.check_attribute_value(object_UID, lines_list, 'DivisionalCoupler', ATTR_TYPE_OBJECT_REF, True)
+            self.check_object_DivisionalCoupler(object_UID, lines_list)
         elif type == 'Enclosure':
-            self.check_attribute_value(object_ID, lines_list, 'Enclosure', ATTR_TYPE_OBJECT_REF, True)
-            self.check_object_Enclosure(object_ID, lines_list)
+            self.check_attribute_value(object_UID, lines_list, 'Enclosure', ATTR_TYPE_OBJECT_REF, True)
+            self.check_object_Enclosure(object_UID, lines_list)
         elif type == 'General':
-            self.check_attribute_value(object_ID, lines_list, 'General', ATTR_TYPE_OBJECT_REF, True)
-            self.check_object_General(object_ID, lines_list)
+            self.check_attribute_value(object_UID, lines_list, 'General', ATTR_TYPE_OBJECT_REF, True)
+            self.check_object_General(object_UID, lines_list)
         elif type == 'Label':
-            self.check_object_Label(object_ID, lines_list)
+            self.check_object_Label(object_UID, lines_list)
         elif type == 'Manual':
-            self.check_attribute_value(object_ID, lines_list, 'Manual', ATTR_TYPE_OBJECT_REF, True)
-            self.check_object_Manual(object_ID, lines_list)
+            self.check_attribute_value(object_UID, lines_list, 'Manual', ATTR_TYPE_OBJECT_REF, True)
+            self.check_object_Manual(object_UID, lines_list)
         elif type == 'ReversiblePiston':
-            self.check_attribute_value(object_ID, lines_list, 'ReversiblePiston', ATTR_TYPE_OBJECT_REF, True)
-            self.check_object_ReversiblePiston(object_ID, lines_list)
+            self.check_attribute_value(object_UID, lines_list, 'ReversiblePiston', ATTR_TYPE_OBJECT_REF, True)
+            self.check_object_ReversiblePiston(object_UID, lines_list)
         elif type == 'Stop':
-            self.check_attribute_value(object_ID, lines_list, 'Manual', ATTR_TYPE_OBJECT_REF, True)
-            self.check_attribute_value(object_ID, lines_list, 'Stop', ATTR_TYPE_OBJECT_REF, True)
-            self.check_object_Stop(object_ID, lines_list)
+            self.check_attribute_value(object_UID, lines_list, 'Manual', ATTR_TYPE_OBJECT_REF, True)
+            self.check_attribute_value(object_UID, lines_list, 'Stop', ATTR_TYPE_OBJECT_REF, True)
+            self.check_object_Stop(object_UID, lines_list)
         elif type == 'Swell':
-            self.check_object_Enclosure(object_ID, lines_list)
+            self.check_object_Enclosure(object_UID, lines_list)
         elif type == 'Switch':
-            self.check_attribute_value(object_ID, lines_list, 'Switch', ATTR_TYPE_OBJECT_REF, True)
-            self.check_object_Switch(object_ID, lines_list)
+            self.check_attribute_value(object_UID, lines_list, 'Switch', ATTR_TYPE_OBJECT_REF, True)
+            self.check_object_Switch(object_UID, lines_list)
         elif type == 'Tremulant':
-            self.check_attribute_value(object_ID, lines_list, 'Tremulant', ATTR_TYPE_OBJECT_REF, True)
-            self.check_object_Tremulant(object_ID, lines_list)
+            self.check_attribute_value(object_UID, lines_list, 'Tremulant', ATTR_TYPE_OBJECT_REF, True)
+            self.check_object_Tremulant(object_UID, lines_list)
         else:
-            self.check_object_SetterElement(object_ID, lines_list, type)
+            self.check_object_SetterElement(object_UID, lines_list, type)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_PanelOther(self, object_ID, lines_list):
+    def check_object_PanelOther(self, object_UID, lines_list):
         #--- check the data of an other kind of Panel object section (Panel999Coupler999, Panel999Divisional999, ...) which the lines are in the given lines list
 
         # get the object type from the object ID (for example Coupler from Panel999Coupler999)
-        object_type = object_ID[8:-3]
-        object_type_plur = object_ID[8:-3] + 's' if object_type != 'Switch' else object_ID[8:-3] + 'es'
+        HW_object_type_str = object_UID[8:-3]
+        object_type_plur = object_UID[8:-3] + 's' if HW_object_type_str != 'Switch' else object_UID[8:-3] + 'es'
 
         # check the attributes of the object depending on the object type
-        if object_type == 'Coupler':
-            self.check_object_Coupler(object_ID, lines_list)
-        elif object_type == 'Divisional':
-            self.check_object_Divisional(object_ID, lines_list)
-        elif object_type == 'DivisionalCoupler':
-            self.check_object_DivisionalCoupler(object_ID, lines_list)
-        elif object_type == 'Enclosure':
-            self.check_object_Enclosure(object_ID, lines_list)
-        elif object_type == 'General':
-            self.check_object_General(object_ID, lines_list)
-        elif object_type == 'Image':
-            self.check_object_Image(object_ID, lines_list)
-        elif object_type == 'Label':
-            self.check_object_Label(object_ID, lines_list)
-        elif object_type == 'ReversiblePiston':
-            self.check_object_ReversiblePiston(object_ID, lines_list)
-        elif object_type == 'SetterElement':
-            self.check_object_SetterElement(object_ID, lines_list)
-        elif object_type == 'Stop':
-            self.check_object_Stop(object_ID, lines_list)
-        elif object_type == 'Switch':
-            self.check_object_Switch(object_ID, lines_list)
-        elif object_type == 'Tremulant':
-            self.check_object_Tremulant(object_ID, lines_list)
+        if HW_object_type_str == 'Coupler':
+            self.check_object_Coupler(object_UID, lines_list)
+        elif HW_object_type_str == 'Divisional':
+            self.check_object_Divisional(object_UID, lines_list)
+        elif HW_object_type_str == 'DivisionalCoupler':
+            self.check_object_DivisionalCoupler(object_UID, lines_list)
+        elif HW_object_type_str == 'Enclosure':
+            self.check_object_Enclosure(object_UID, lines_list)
+        elif HW_object_type_str == 'General':
+            self.check_object_General(object_UID, lines_list)
+        elif HW_object_type_str == 'Image':
+            self.check_object_Image(object_UID, lines_list)
+        elif HW_object_type_str == 'Label':
+            self.check_object_Label(object_UID, lines_list)
+        elif HW_object_type_str == 'ReversiblePiston':
+            self.check_object_ReversiblePiston(object_UID, lines_list)
+        elif HW_object_type_str == 'SetterElement':
+            self.check_object_SetterElement(object_UID, lines_list)
+        elif HW_object_type_str == 'Stop':
+            self.check_object_Stop(object_UID, lines_list)
+        elif HW_object_type_str == 'Switch':
+            self.check_object_Switch(object_UID, lines_list)
+        elif HW_object_type_str == 'Tremulant':
+            self.check_object_Tremulant(object_UID, lines_list)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_Piston(self, object_ID, lines_list):
+    def check_object_Piston(self, object_UID, lines_list):
         #--- check the data of a Piston object section which the lines are in the given lines list
 
         # required attributes
-        ret = self.check_attribute_value(object_ID, lines_list, 'ObjectType', ATTR_TYPE_PISTON_TYPE, True)
-        self.check_attribute_value(object_ID, lines_list, 'ManualNumber', ATTR_TYPE_OBJECT_REF, ret in ('STOP', 'COUPLER'))
-        self.check_attribute_value(object_ID, lines_list, 'ObjectNumber', ATTR_TYPE_INTEGER, False, 1, 200)
+        ret = self.check_attribute_value(object_UID, lines_list, 'ObjectType', ATTR_TYPE_PISTON_TYPE, True)
+        self.check_attribute_value(object_UID, lines_list, 'ManualNumber', ATTR_TYPE_OBJECT_REF, ret in ('STOP', 'COUPLER'))
+        self.check_attribute_value(object_UID, lines_list, 'ObjectNumber', ATTR_TYPE_INTEGER, False, 1, 200)
 
         # a Piston has also the attributes of a Push Button
-        self.check_object_PushButton(object_ID, lines_list)
+        self.check_object_PushButton(object_UID, lines_list)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_PushButton(self, object_ID, lines_list):
+    def check_object_PushButton(self, object_UID, lines_list):
         #--- check the data of a Push Button object section which the lines are in the given lines list
 
         # a Push Button has only the attributes of a Button
-        self.check_object_Button(object_ID, lines_list)
+        self.check_object_Button(object_UID, lines_list)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_Rank(self, object_ID, lines_list):
+    def check_object_Rank(self, object_UID, lines_list):
         #--- check the data of a Rank object section which the lines are in the given lines list
 
-        is_rank_obj = object_ID.startswith('Rank') # some mandatory attributes are not mandatory for objects which inherit the Rank attributes (like Stop)
+        is_rank_obj = object_UID.startswith('Rank') # some mandatory attributes are not mandatory for objects which inherit the Rank attributes (like Stop)
 
         # required attributes
-        self.check_attribute_value(object_ID, lines_list, 'Name', ATTR_TYPE_STRING, True)
-        self.check_attribute_value(object_ID, lines_list, 'FirstMidiNoteNumber', ATTR_TYPE_INTEGER, is_rank_obj, 0, 256)
-        self.check_attribute_value(object_ID, lines_list, 'WindchestGroup', ATTR_TYPE_OBJECT_REF, True)
-        self.check_attribute_value(object_ID, lines_list, 'Percussive', ATTR_TYPE_BOOLEAN, True)
+        self.check_attribute_value(object_UID, lines_list, 'Name', ATTR_TYPE_STRING, True)
+        self.check_attribute_value(object_UID, lines_list, 'FirstMidiNoteNumber', ATTR_TYPE_INTEGER, is_rank_obj, 0, 256)
+        self.check_attribute_value(object_UID, lines_list, 'WindchestGroup', ATTR_TYPE_OBJECT_REF, True)
+        self.check_attribute_value(object_UID, lines_list, 'Percussive', ATTR_TYPE_BOOLEAN, True)
 
         # optional attributes
-        self.check_attribute_value(object_ID, lines_list, 'AmplitudeLevel', ATTR_TYPE_FLOAT, False, 0, 1000)
-        self.check_attribute_value(object_ID, lines_list, 'Gain', ATTR_TYPE_FLOAT, False, -120, 40)
-        self.check_attribute_value(object_ID, lines_list, 'PitchTuning', ATTR_TYPE_FLOAT, False, -1200, 1200)
-        self.check_attribute_value(object_ID, lines_list, 'TrackerDelay', ATTR_TYPE_INTEGER, False, 0, 10000)
-        self.check_attribute_value(object_ID, lines_list, 'HarmonicNumber', ATTR_TYPE_FLOAT, False, 1, 1024)
-        self.check_attribute_value(object_ID, lines_list, 'PitchCorrection', ATTR_TYPE_FLOAT, False, -1200, 1200)
-        self.check_attribute_value(object_ID, lines_list, 'MinVelocityVolume', ATTR_TYPE_FLOAT, False, 0, 1000)
-        self.check_attribute_value(object_ID, lines_list, 'MaxVelocityVolume', ATTR_TYPE_FLOAT, False, 0, 1000)
-        self.check_attribute_value(object_ID, lines_list, 'AcceptsRetuning', ATTR_TYPE_BOOLEAN, False)
+        self.check_attribute_value(object_UID, lines_list, 'AmplitudeLevel', ATTR_TYPE_FLOAT, False, 0, 1000)
+        self.check_attribute_value(object_UID, lines_list, 'Gain', ATTR_TYPE_FLOAT, False, -120, 40)
+        self.check_attribute_value(object_UID, lines_list, 'PitchTuning', ATTR_TYPE_FLOAT, False, -1200, 1200)
+        self.check_attribute_value(object_UID, lines_list, 'TrackerDelay', ATTR_TYPE_INTEGER, False, 0, 10000)
+        self.check_attribute_value(object_UID, lines_list, 'HarmonicNumber', ATTR_TYPE_FLOAT, False, 1, 1024)
+        self.check_attribute_value(object_UID, lines_list, 'PitchCorrection', ATTR_TYPE_FLOAT, False, -1200, 1200)
+        self.check_attribute_value(object_UID, lines_list, 'MinVelocityVolume', ATTR_TYPE_FLOAT, False, 0, 1000)
+        self.check_attribute_value(object_UID, lines_list, 'MaxVelocityVolume', ATTR_TYPE_FLOAT, False, 0, 1000)
+        self.check_attribute_value(object_UID, lines_list, 'AcceptsRetuning', ATTR_TYPE_BOOLEAN, False)
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfLogicalPipes', ATTR_TYPE_INTEGER, is_rank_obj, 1, 192)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfLogicalPipes', ATTR_TYPE_INTEGER, is_rank_obj, 1, 192)
         if ret.isdigit():
             for idx in range(1, int(ret)+1):  # Pipe999xxx attributes
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}', ATTR_TYPE_PIPE_WAVE, True)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Percussive', ATTR_TYPE_BOOLEAN, False)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}AmplitudeLevel', ATTR_TYPE_FLOAT, False, 0, 1000)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Gain', ATTR_TYPE_FLOAT, False, -120, 40)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}PitchTuning', ATTR_TYPE_FLOAT, False, -1200, 1200)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}TrackerDelay', ATTR_TYPE_FLOAT, False, 0, 10000)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}LoadRelease', ATTR_TYPE_BOOLEAN, False)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}AttackVelocity', ATTR_TYPE_INTEGER, False, 0, 127)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}MaxTimeSinceLastRelease', ATTR_TYPE_INTEGER, False, -1, 100000)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}IsTremulant', ATTR_TYPE_INTEGER, False, -1, 1)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}MaxKeyPressTime', ATTR_TYPE_INTEGER, False, -1, 100000)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}AttackStart', ATTR_TYPE_INTEGER, False, 0, 158760000)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}CuePoint', ATTR_TYPE_INTEGER, False, -1, 158760000)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}ReleaseEnd', ATTR_TYPE_INTEGER, False, -1, 158760000)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}HarmonicNumber', ATTR_TYPE_FLOAT, False, 1, 1024)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}MIDIKeyNumber', ATTR_TYPE_INTEGER, False, -1, 127)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}PitchCorrection', ATTR_TYPE_FLOAT, False, -1200, 1200)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}AcceptsRetuning', ATTR_TYPE_BOOLEAN, False)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}WindchestGroup', ATTR_TYPE_OBJECT_REF, False)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}MinVelocityVolume', ATTR_TYPE_FLOAT, False, 0, 1000)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}MaxVelocityVolume', ATTR_TYPE_FLOAT, False, 0, 1000)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}', ATTR_TYPE_PIPE_WAVE, True)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Percussive', ATTR_TYPE_BOOLEAN, False)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}AmplitudeLevel', ATTR_TYPE_FLOAT, False, 0, 1000)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Gain', ATTR_TYPE_FLOAT, False, -120, 40)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}PitchTuning', ATTR_TYPE_FLOAT, False, -1200, 1200)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}TrackerDelay', ATTR_TYPE_FLOAT, False, 0, 10000)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}LoadRelease', ATTR_TYPE_BOOLEAN, False)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}AttackVelocity', ATTR_TYPE_INTEGER, False, 0, 127)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}MaxTimeSinceLastRelease', ATTR_TYPE_INTEGER, False, -1, 100000)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}IsTremulant', ATTR_TYPE_INTEGER, False, -1, 1)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}MaxKeyPressTime', ATTR_TYPE_INTEGER, False, -1, 100000)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}AttackStart', ATTR_TYPE_INTEGER, False, 0, 158760000)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}CuePoint', ATTR_TYPE_INTEGER, False, -1, 158760000)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}ReleaseEnd', ATTR_TYPE_INTEGER, False, -1, 158760000)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}HarmonicNumber', ATTR_TYPE_FLOAT, False, 1, 1024)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}MIDIKeyNumber', ATTR_TYPE_INTEGER, False, -1, 127)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}PitchCorrection', ATTR_TYPE_FLOAT, False, -1200, 1200)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}AcceptsRetuning', ATTR_TYPE_BOOLEAN, False)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}WindchestGroup', ATTR_TYPE_OBJECT_REF, False)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}MinVelocityVolume', ATTR_TYPE_FLOAT, False, 0, 1000)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}MaxVelocityVolume', ATTR_TYPE_FLOAT, False, 0, 1000)
 
-                ret1 = self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}LoopCount', ATTR_TYPE_INTEGER, False, 1, 100)
+                ret1 = self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}LoopCount', ATTR_TYPE_INTEGER, False, 1, 100)
                 if ret1.isdigit():
                     for idx1 in range(1, int(ret1)+1):  # Pipe999Loop999xxx attributes
-                        ret = self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Loop{str(idx1).zfill(3)}Start', ATTR_TYPE_INTEGER, False, 0, 158760000)
+                        ret = self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Loop{str(idx1).zfill(3)}Start', ATTR_TYPE_INTEGER, False, 0, 158760000)
                         loop_start = int(ret) if ret.isdigit() else 1
-                        self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Loop{str(idx1).zfill(3)}End', ATTR_TYPE_INTEGER, False, loop_start + 1, 158760000)
+                        self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Loop{str(idx1).zfill(3)}End', ATTR_TYPE_INTEGER, False, loop_start + 1, 158760000)
 
-                ret1 = self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}AttackCount', ATTR_TYPE_INTEGER, False, 1, 100)
+                ret1 = self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}AttackCount', ATTR_TYPE_INTEGER, False, 1, 100)
                 if ret1.isdigit():
                     for idx1 in range(1, int(ret1)+1):  # Pipe999Attack999xxx attributes
-                        self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}', ATTR_TYPE_FILE_NAME, True)
-                        self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}LoadRelease', ATTR_TYPE_BOOLEAN, False)
-                        self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}AttackVelocity', ATTR_TYPE_INTEGER, False, 0, 127)
-                        self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}MaxTimeSinceLastRelease', ATTR_TYPE_INTEGER, False, -1, 100000)
-                        self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}IsTremulant', ATTR_TYPE_INTEGER, False, -1, 1)
-                        self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}MaxKeyPressTime', ATTR_TYPE_INTEGER, False, -1, 100000)
-                        self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}AttackStart', ATTR_TYPE_INTEGER, False, 0, 158760000)
-                        self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}CuePoint', ATTR_TYPE_INTEGER, False, -1, 158760000)
-                        self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}ReleaseEnd', ATTR_TYPE_INTEGER, False, -1, 158760000)
+                        self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}', ATTR_TYPE_FILE_NAME, True)
+                        self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}LoadRelease', ATTR_TYPE_BOOLEAN, False)
+                        self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}AttackVelocity', ATTR_TYPE_INTEGER, False, 0, 127)
+                        self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}MaxTimeSinceLastRelease', ATTR_TYPE_INTEGER, False, -1, 100000)
+                        self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}IsTremulant', ATTR_TYPE_INTEGER, False, -1, 1)
+                        self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}MaxKeyPressTime', ATTR_TYPE_INTEGER, False, -1, 100000)
+                        self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}AttackStart', ATTR_TYPE_INTEGER, False, 0, 158760000)
+                        self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}CuePoint', ATTR_TYPE_INTEGER, False, -1, 158760000)
+                        self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}ReleaseEnd', ATTR_TYPE_INTEGER, False, -1, 158760000)
 
-                        ret2 = self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}LoopCount', ATTR_TYPE_INTEGER, False, 1, 100)
+                        ret2 = self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}LoopCount', ATTR_TYPE_INTEGER, False, 1, 100)
                         if ret2.isdigit():
                             for idx2 in range(1, int(ret2)+1):  # Pipe999Attack999Loop999xxx attributes
-                                ret = self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}Loop{str(idx2).zfill(3)}Start', ATTR_TYPE_INTEGER, True, 0, 158760000)
+                                ret = self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}Loop{str(idx2).zfill(3)}Start', ATTR_TYPE_INTEGER, True, 0, 158760000)
                                 loop_start = int(ret) if ret.isdigit() else 1
-                                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}Loop{str(idx2).zfill(3)}End', ATTR_TYPE_INTEGER, True, loop_start + 1, 158760000)
+                                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Attack{str(idx1).zfill(3)}Loop{str(idx2).zfill(3)}End', ATTR_TYPE_INTEGER, True, loop_start + 1, 158760000)
 
-                ret1 = self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}ReleaseCount', ATTR_TYPE_INTEGER, False, 1, 100)
+                ret1 = self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}ReleaseCount', ATTR_TYPE_INTEGER, False, 1, 100)
                 if ret1.isdigit():
                     for idx1 in range(1, int(ret1)+1):  # Pipe999Release999xxx attributes
-                        self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Release{str(idx1).zfill(3)}', ATTR_TYPE_FILE_NAME, True)
-                        self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Release{str(idx1).zfill(3)}IsTremulant', ATTR_TYPE_INTEGER, False, -1, 1)
-                        self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Release{str(idx1).zfill(3)}MaxKeyPressTime', ATTR_TYPE_INTEGER, False, -1, 100000)
-                        self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Release{str(idx1).zfill(3)}CuePoint', ATTR_TYPE_INTEGER, False, -1, 158760000)
-                        self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}Release{str(idx1).zfill(3)}ReleaseEnd', ATTR_TYPE_INTEGER, False, -1, 158760000)
+                        self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Release{str(idx1).zfill(3)}', ATTR_TYPE_FILE_NAME, True)
+                        self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Release{str(idx1).zfill(3)}IsTremulant', ATTR_TYPE_INTEGER, False, -1, 1)
+                        self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Release{str(idx1).zfill(3)}MaxKeyPressTime', ATTR_TYPE_INTEGER, False, -1, 100000)
+                        self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Release{str(idx1).zfill(3)}CuePoint', ATTR_TYPE_INTEGER, False, -1, 158760000)
+                        self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}Release{str(idx1).zfill(3)}ReleaseEnd', ATTR_TYPE_INTEGER, False, -1, 158760000)
 
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}LoopCrossfadeLength', ATTR_TYPE_INTEGER, False, 0, 120)
-                self.check_attribute_value(object_ID, lines_list, f'Pipe{str(idx).zfill(3)}ReleaseCrossfadeLength', ATTR_TYPE_INTEGER, False, 0, 120)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}LoopCrossfadeLength', ATTR_TYPE_INTEGER, False, 0, 120)
+                self.check_attribute_value(object_UID, lines_list, f'Pipe{str(idx).zfill(3)}ReleaseCrossfadeLength', ATTR_TYPE_INTEGER, False, 0, 120)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_ReversiblePiston(self, object_ID, lines_list):
+    def check_object_ReversiblePiston(self, object_UID, lines_list):
         #--- check the data of a Reversible Piston object section which the lines are in the given lines list
 
         # unkown expected attributes...
         pass
 
      #-------------------------------------------------------------------------------------------------
-    def check_object_SetterElement(self, object_ID, lines_list, type = ''):
+    def check_object_SetterElement(self, object_UID, lines_list, type = ''):
         #--- check the data of a Setter Element object section which the lines are in the given lines list
 
         # required attributes
         if type == '':
             # type not provided by the caller, recover it from the object lines list
-            type = self.check_attribute_value(object_ID, lines_list, 'Type', ATTR_TYPE_ELEMENT_TYPE, True)
+            type = self.check_attribute_value(object_UID, lines_list, 'Type', ATTR_TYPE_ELEMENT_TYPE, True)
 
         if type == 'CrescendoLabel':
-            self.check_object_Label(object_ID, lines_list)
+            self.check_object_Label(object_UID, lines_list)
         elif type in ('CrescendoA', 'CrescendoB', 'CrescendoC', 'CrescendoD'):
-            self.check_object_Button(object_ID, lines_list)
+            self.check_object_Button(object_UID, lines_list)
         elif type in ('CrescendoPrev', 'CrescendoNext', 'CrescendoCurrent'):
-            self.check_object_Button(object_ID, lines_list)
+            self.check_object_Button(object_UID, lines_list)
         elif type in ('Current', 'Full', 'GC'):
-            self.check_object_Button(object_ID, lines_list)
+            self.check_object_Button(object_UID, lines_list)
         elif type[:7] == "General" and len(type) == 9 and type[7:9].isdigit() and int(type[7:9]) in range(1, 51):
-            self.check_object_Button(object_ID, lines_list)
+            self.check_object_Button(object_UID, lines_list)
         elif type == 'GeneralLabel':
-            self.check_object_Label(object_ID, lines_list)
+            self.check_object_Label(object_UID, lines_list)
         elif type in ('GeneralPrev', 'GeneralNext', 'Home', 'Insert', 'Delete'):
-            self.check_object_Button(object_ID, lines_list)
+            self.check_object_Button(object_UID, lines_list)
         elif type[:1] == "L" and len(type) == 2 and type[1:2].isdigit() and int(type[1:2]) in range(0, 10):
-            self.check_object_Button(object_ID, lines_list)
+            self.check_object_Button(object_UID, lines_list)
         elif type in ('M100', 'M10', 'M1', 'P1', 'P10', 'P100'):
-            self.check_object_Button(object_ID, lines_list)
+            self.check_object_Button(object_UID, lines_list)
         elif type == 'PitchLabel':
-            self.check_object_Label(object_ID, lines_list)
+            self.check_object_Label(object_UID, lines_list)
         elif type in ('PitchM100', 'PitchM10', 'PitchM1', 'PitchP1', 'PitchP10', 'PitchP100'):
-            self.check_object_Button(object_ID, lines_list)
+            self.check_object_Button(object_UID, lines_list)
         elif type in ('Prev', 'Next', 'Set'):
-            self.check_object_Button(object_ID, lines_list)
+            self.check_object_Button(object_UID, lines_list)
         elif type in ('Regular', 'Scope', 'Scoped', 'Save'):
-            self.check_object_Button(object_ID, lines_list)
+            self.check_object_Button(object_UID, lines_list)
         elif type in ('SequencerLabel', 'TemperamentLabel'):
-            self.check_object_Label(object_ID, lines_list)
+            self.check_object_Label(object_UID, lines_list)
         elif type in ('TemperamentPrev', 'TemperamentNext'):
-            self.check_object_Button(object_ID, lines_list)
+            self.check_object_Button(object_UID, lines_list)
         elif type in ('TransposeDown', 'TransposeUp'):
-            self.check_object_Button(object_ID, lines_list)
+            self.check_object_Button(object_UID, lines_list)
         elif type == 'TransposeLabel':
-            self.check_object_Label(object_ID, lines_list)
+            self.check_object_Label(object_UID, lines_list)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_Stop(self, object_ID, lines_list):
+    def check_object_Stop(self, object_UID, lines_list):
         #--- check the data of a Stop object section which the lines are in the given lines list
 
-        is_stop_obj = object_ID.startswith('Stop') # some mandatory attributes are not mandatory for objects which inherit the Stop attributes
+        is_stop_obj = object_UID.startswith('Stop') # some mandatory attributes are not mandatory for objects which inherit the Stop attributes
 
         # optional attribute
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfRanks', ATTR_TYPE_INTEGER, False, 0, 999)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfRanks', ATTR_TYPE_INTEGER, False, 0, 999)
         if ret == '' or not ret.isdigit():
             # number of ranks not defined or not a number
             nb_ranks = 0
@@ -1920,81 +1958,81 @@ class C_ODF:
             nb_ranks = int(ret)
 
         # required attributes
-        self.check_attribute_value(object_ID, lines_list, 'FirstAccessiblePipeLogicalKeyNumber', ATTR_TYPE_INTEGER, is_stop_obj, 1, 128)
-        self.check_attribute_value(object_ID, lines_list, 'FirstAccessiblePipeLogicalPipeNumber', ATTR_TYPE_INTEGER, nb_ranks == 0, 1, 192)
+        self.check_attribute_value(object_UID, lines_list, 'FirstAccessiblePipeLogicalKeyNumber', ATTR_TYPE_INTEGER, is_stop_obj, 1, 128)
+        self.check_attribute_value(object_UID, lines_list, 'FirstAccessiblePipeLogicalPipeNumber', ATTR_TYPE_INTEGER, nb_ranks == 0, 1, 192)
 
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfAccessiblePipes', ATTR_TYPE_INTEGER, True, 1, 192)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfAccessiblePipes', ATTR_TYPE_INTEGER, True, 1, 192)
         nb_pipes = int(ret) if ret.isdigit() else 192
 
         # optional attributes
         if nb_ranks > 0:
             for idx in range(1, nb_ranks+1):
-                self.check_attribute_value(object_ID, lines_list, f'Rank{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
-                self.check_attribute_value(object_ID, lines_list, f'Rank{str(idx).zfill(3)}FirstPipeNumber', ATTR_TYPE_INTEGER, False, 1, nb_pipes)
-                self.check_attribute_value(object_ID, lines_list, f'Rank{str(idx).zfill(3)}PipeCount', ATTR_TYPE_INTEGER, False, 0, nb_pipes)
-                self.check_attribute_value(object_ID, lines_list, f'Rank{str(idx).zfill(3)}FirstAccessibleKeyNumber', ATTR_TYPE_INTEGER, False, 1, nb_pipes)
+                self.check_attribute_value(object_UID, lines_list, f'Rank{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'Rank{str(idx).zfill(3)}FirstPipeNumber', ATTR_TYPE_INTEGER, False, 1, nb_pipes)
+                self.check_attribute_value(object_UID, lines_list, f'Rank{str(idx).zfill(3)}PipeCount', ATTR_TYPE_INTEGER, False, 0, nb_pipes)
+                self.check_attribute_value(object_UID, lines_list, f'Rank{str(idx).zfill(3)}FirstAccessibleKeyNumber', ATTR_TYPE_INTEGER, False, 1, nb_pipes)
         elif nb_ranks == 0:
             # number of ranks set at 0, the Stop must contain rank attributes
-            self.check_object_Rank(object_ID, lines_list)
+            self.check_object_Rank(object_UID, lines_list)
 
         # a Stop has also the attributes of a Drawstop
-        self.check_object_DrawStop(object_ID, lines_list)
+        self.check_object_DrawStop(object_UID, lines_list)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_Switch(self, object_ID, lines_list):
+    def check_object_Switch(self, object_UID, lines_list):
         #--- check the data of a Switch object section which the lines are in the given lines list
 
         # a Switch has only the attributes of a Drawstop
-        self.check_object_DrawStop(object_ID, lines_list)
+        self.check_object_DrawStop(object_UID, lines_list)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_Tremulant(self, object_ID, lines_list):
+    def check_object_Tremulant(self, object_UID, lines_list):
         #--- check the data of a Tremulant object section which the lines are in the given lines list
 
         # optional attributes
-        ret = self.check_attribute_value(object_ID, lines_list, 'TremulantType', ATTR_TYPE_TREMULANT_TYPE, False)
+        ret = self.check_attribute_value(object_UID, lines_list, 'TremulantType', ATTR_TYPE_TREMULANT_TYPE, False)
         is_synth = (ret == 'Synth')
-        self.check_attribute_value(object_ID, lines_list, 'Period', ATTR_TYPE_INTEGER, is_synth, 32, 44100)
-        self.check_attribute_value(object_ID, lines_list, 'StartRate', ATTR_TYPE_INTEGER, is_synth, 1, 100)
-        self.check_attribute_value(object_ID, lines_list, 'StopRate', ATTR_TYPE_INTEGER, is_synth, 1, 100)
-        self.check_attribute_value(object_ID, lines_list, 'AmpModDepth', ATTR_TYPE_INTEGER, is_synth, 1, 100)
+        self.check_attribute_value(object_UID, lines_list, 'Period', ATTR_TYPE_INTEGER, is_synth, 32, 44100)
+        self.check_attribute_value(object_UID, lines_list, 'StartRate', ATTR_TYPE_INTEGER, is_synth, 1, 100)
+        self.check_attribute_value(object_UID, lines_list, 'StopRate', ATTR_TYPE_INTEGER, is_synth, 1, 100)
+        self.check_attribute_value(object_UID, lines_list, 'AmpModDepth', ATTR_TYPE_INTEGER, is_synth, 1, 100)
 
         # a Tremulant has also the attributes of a Drawstop
-        self.check_object_DrawStop(object_ID, lines_list)
+        self.check_object_DrawStop(object_UID, lines_list)
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_WindchestGroup(self, object_ID, lines_list):
+    def check_object_WindchestGroup(self, object_UID, lines_list):
         #--- check the data of a WindChest Group object section which the lines are in the given lines list
 
         # required attributes
         max = self.objects_type_count('Enclosure')
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfEnclosures', ATTR_TYPE_INTEGER, True, 0, max)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfEnclosures', ATTR_TYPE_INTEGER, True, 0, max)
         if ret.isdigit():
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f'Enclosure{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'Enclosure{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
         max = self.objects_type_count('Tremulant')
-        ret = self.check_attribute_value(object_ID, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, True, 0, max)
+        ret = self.check_attribute_value(object_UID, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, True, 0, max)
         if ret.isdigit():
             for idx in range(1, int(ret)+1):
-                self.check_attribute_value(object_ID, lines_list, f'Tremulant{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+                self.check_attribute_value(object_UID, lines_list, f'Tremulant{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
         # optional attributes
-        self.check_attribute_value(object_ID, lines_list, 'Name', ATTR_TYPE_STRING, False)
+        self.check_attribute_value(object_UID, lines_list, 'Name', ATTR_TYPE_STRING, False)
 
     #-------------------------------------------------------------------------------------------------
-    def check_attribute_value(self, object_ID, lines_list, attribute_name, attribute_value_type, required_attribute, attribute_value_min=0, attribute_value_max=0):
+    def check_attribute_value(self, object_UID, lines_list, attribute_name, attribute_value_type, required_attribute, attribute_value_min=0, attribute_value_max=0):
         #--- check if the given attribute name is present in the given object lines list, and if its value is correct for its value type and min/max values
         #--- the min and max values are ignored if max <= min. The given lines list is considered to be sorted
         #--- returns the value of the attribute if it has been found and without error, else return ''
 
         # check that the given max value is higher or equal to the min value (this should never happen)
         if attribute_value_max < attribute_value_max:
-            self.events_log_add(f"INTERNAL ERROR : check_attribute_value called with max < min for {object_ID} / {attribute_name} : min={attribute_value_min}, max={attribute_value_max}")
+            self.events_log_add(f"INTERNAL ERROR : check_attribute_value called with max < min for {object_UID} / {attribute_name} : min={attribute_value_min}, max={attribute_value_max}")
             return ''
 
         # recover the value of the attribute to check
-        (attr_value, attr_idx) = self.object_get_attribute_value(lines_list, attribute_name, True)
+        (attr_value_str, attr_idx) = self.object_get_attribute_value(lines_list, attribute_name, True)
 
         if attr_idx != -1:
             # the attribute has been found
@@ -2005,51 +2043,42 @@ class C_ODF:
             # check the attribute value according to the given type
 
             if attribute_value_type == ATTR_TYPE_INTEGER:
-                if (not attr_value.lstrip("-+").isdigit() or
-                    ((int(attr_value) < attribute_value_min or int(attr_value) > attribute_value_max))):
-                    self.events_log_add(f"Error in {object_ID} / {line} : the assigned value must be an integer in the range [{attribute_value_min} - {attribute_value_max}]")
-                    # return an attribute value which is limited to the min or max value, if it is a decimal value
-                    attr_value = attr_value.lstrip("-+")
-                    if attr_value.isdigit():
-                        if int(attr_value) < attribute_value_min:
-                            attr_value = str(attribute_value_min)
-                        else:
-                            attr_value = str(attribute_value_max)
-                    else:
-                        attr_value = ''
+                if (not attr_value_str.lstrip("-+").isdigit() or
+                    ((int(attr_value_str) < attribute_value_min or int(attr_value_str) > attribute_value_max))):
+                    self.events_log_add(f"Error in {object_UID} / {line} : the assigned value must be an integer in the range [{attribute_value_min} - {attribute_value_max}]")
 
             elif attribute_value_type == ATTR_TYPE_FLOAT:
-                if (not(attr_value.lstrip("-+").replace('.', '', 1).isdigit()) or
-                    ((float(attr_value) < attribute_value_min or float(attr_value) > attribute_value_max))):
-                    self.events_log_add(f"Error in {object_ID} / {line} : the assigned value must be an integer or decimal in the range [{attribute_value_min} - {attribute_value_max}]")
-                    attr_value = ''
+                if (not(attr_value_str.lstrip("-+").replace('.', '', 1).isdigit()) or
+                    ((float(attr_value_str) < attribute_value_min or float(attr_value_str) > attribute_value_max))):
+                    self.events_log_add(f"Error in {object_UID} / {line} : the assigned value must be an integer or decimal in the range [{attribute_value_min} - {attribute_value_max}]")
+                    attr_value_str = ''
 
             elif attribute_value_type == ATTR_TYPE_BOOLEAN:
-                if attr_value.upper() not in ('Y', 'N'):
-                    self.events_log_add(f"Error in {object_ID} / {line} : the assigned value must be Y or N (boolean attribute)")
-                    attr_value = ''
+                if attr_value_str.upper() not in ('Y', 'N'):
+                    self.events_log_add(f"Error in {object_UID} / {line} : the assigned value must be Y or N (boolean attribute)")
+                    attr_value_str = ''
 
             elif attribute_value_type == ATTR_TYPE_STRING:
                 pass # nothing to check in case of string value
 
             elif attribute_value_type == ATTR_TYPE_COLOR:
-                if (not(attr_value.upper() in ('BLACK', 'BLUE', 'DARK BLUE', 'GREEN', 'DARK GREEN', 'CYAN', 'DARK CYAN', 'RED', 'DARK RED',
+                if (not(attr_value_str.upper() in ('BLACK', 'BLUE', 'DARK BLUE', 'GREEN', 'DARK GREEN', 'CYAN', 'DARK CYAN', 'RED', 'DARK RED',
                                                'MAGENTA', 'DARK MAGENTA', 'YELLOW', 'DARK YELLOW', 'LIGHT GREY', 'DARK GREY', 'WHITE', 'BROWN')) and
-                    not(len(attr_value) == 7 and attr_value[0] == '#' and attr_value[1:].isdigit())):  # check of the HTML format #RRGGBB
-                    self.events_log_add(f"Error in {object_ID} / {line} : the assigned value is not a valid color (look at the help)")
-                    attr_value = ''
+                    not(len(attr_value_str) == 7 and attr_value_str[0] == '#' and attr_value_str[1:].isalnum())):  # check of the HTML format #RRGGBB
+                    self.events_log_add(f"Error in {object_UID} / {line} : the assigned value is not a valid color (look at the help)")
+                    attr_value_str = ''
 
             elif attribute_value_type == ATTR_TYPE_FONT_SIZE:
-                if (not(attr_value.upper() in ('SMALL', 'NORMAL', 'LARGE')) and
-                    not(attr_value.isdigit() and int(attr_value) >= 1 and int(attr_value) <= 50)):
-                    self.events_log_add(f"Error in {object_ID} / {line} : the assigned value is not a valid font size (look at the help)")
-                    attr_value = ''
+                if (not(attr_value_str.upper() in ('SMALL', 'NORMAL', 'LARGE')) and
+                    not(attr_value_str.isdigit() and int(attr_value_str) >= 1 and int(attr_value_str) <= 50)):
+                    self.events_log_add(f"Error in {object_UID} / {line} : the assigned value is not a valid font size (look at the help)")
+                    attr_value_str = ''
 
             elif attribute_value_type == ATTR_TYPE_PANEL_SIZE:
-                if (not(attr_value.upper() in ('SMALL', 'MEDIUM', 'MEDIUM LARGE', 'LARGE')) and
-                    not(attr_value.isdigit() and int(attr_value) >= 100 and int(attr_value) <= 4000)):
-                    self.events_log_add(f"Error in {object_ID} / {line} : the assigned value is not a valid panel size (look at the help)")
-                    attr_value = ''
+                if (not(attr_value_str.upper() in ('SMALL', 'MEDIUM', 'MEDIUM LARGE', 'LARGE')) and
+                    not(attr_value_str.isdigit() and int(attr_value_str) >= 100 and int(attr_value_str) <= 4000)):
+                    self.events_log_add(f"Error in {object_UID} / {line} : the assigned value is not a valid panel size (look at the help)")
+                    attr_value_str = ''
 
             elif attribute_value_type == ATTR_TYPE_OBJECT_REF:  # for example Switch002=12 or ManualNumber=2 or Stop003Manual=2 or Pipe015WindchestGroup=1
                 if attribute_name[-3:].isdigit():
@@ -2062,86 +2091,84 @@ class C_ODF:
                 elif attribute_name[-14:] == 'WindchestGroup':
                     attribute_name = 'WindchestGroup' # keep only the 'WindchestGroup' string, used in Rank object
 
-                attr_value = attr_value.lstrip("+-") # remove possible + or - at the beginning of the value, used in General or Divisional objects
+                attr_value_str = attr_value_str.lstrip("+-") # remove possible + or - at the beginning of the value, used in General or Divisional objects
 
-                if not(attribute_name + attr_value.zfill(3)) in self.odf_objects_dict:
-                    self.events_log_add(f"Error in {object_ID} / {line} : the object {attribute_name + attr_value.zfill(3)} does not exist")
-                    attr_value = ''
+                if not(attribute_name + attr_value_str.zfill(3)) in self.odf_objects_dic:
+                    self.events_log_add(f"Error in {object_UID} / {line} : the object {attribute_name + attr_value_str.zfill(3)} does not exist")
+                    attr_value_str = ''
 
             elif attribute_value_type == ATTR_TYPE_ELEMENT_TYPE:
-                if (not(attr_value in ('Coupler', 'Divisional', 'DivisionalCoupler', 'Enclosure', 'General', 'Label', 'Manual', 'ReversiblePiston', 'Stop', 'Swell',
+                if (not(attr_value_str in ('Coupler', 'Divisional', 'DivisionalCoupler', 'Enclosure', 'General', 'Label', 'Manual', 'ReversiblePiston', 'Stop', 'Swell',
                                       'Switch', 'Tremulant', 'CrescendoA', 'CrescendoB', 'CrescendoC', 'CrescendoD', 'CrescendoPrev', 'CrescendoNext', 'CrescendoCurrent',
                                       'Current', 'Full', 'GC', 'GeneralLabel', 'GeneralPrev', 'GeneralNext', 'Home', 'Insert', 'Delete', 'M100', 'M10', 'M1', 'P1', 'P10', 'P100',
                                       'PitchLabel', 'PitchP1', 'PitchP10', 'PitchP100', 'PitchM1', 'PitchM10', 'PitchM100', 'Prev', 'Next', 'Set', 'Regular', 'Scope', 'Scoped',
                                       'Save', 'SequencerLabel', 'TemperamentLabel', 'TemperamentPrev', 'TemperamentNext', 'TransposeDown', 'TransposeUp', 'TransposeLabel')) and
-                    not(attr_value[0] == 'L' and attr_value[1].isdigit() and int(attr_value[1]) in range(0, 10)) and
-                    not(attr_value[:14] == 'CrescendoLabel' and attr_value[14:].isdigit() and int(attr_value[14:]) in range(1, 33)) and
-                    not(attr_value[:7] == 'General' and attr_value[7:].isdigit() and int(attr_value[7:]) in range(1, 51))):
-                    self.events_log_add(f"Error in {object_ID} / {line} : the assigned value is not a valid panel element type (look at the help)")
-                    attr_value = ''
+                    not(attr_value_str[0] == 'L' and attr_value_str[1].isdigit() and int(attr_value_str[1]) in range(0, 10)) and
+                    not(attr_value_str[:14] == 'CrescendoLabel' and attr_value_str[14:].isdigit() and int(attr_value_str[14:]) in range(1, 33)) and
+                    not(attr_value_str[:7] == 'General' and attr_value_str[7:].isdigit() and int(attr_value_str[7:]) in range(1, 51))):
+                    self.events_log_add(f"Error in {object_UID} / {line} : the assigned value is not a valid panel element type (look at the help)")
+                    attr_value_str = ''
                 pass
 
             elif attribute_value_type == ATTR_TYPE_COUPLER_TYPE:
-                if not(attr_value.upper() in ('NORMAL', 'BASS', 'MELODY')):
-                    self.events_log_add(f"Error in {object_ID} / {line} : the assigned value is not a valid coupler type (look at the help)")
-                    attr_value = ''
+                if not(attr_value_str.upper() in ('NORMAL', 'BASS', 'MELODY')):
+                    self.events_log_add(f"Error in {object_UID} / {line} : the assigned value is not a valid coupler type (look at the help)")
+                    attr_value_str = ''
 
             elif attribute_value_type == ATTR_TYPE_TREMULANT_TYPE:
-                if not(attr_value.upper() in ('SYNTH', 'WAVE')):
-                    self.events_log_add(f"Error in {object_ID} / {line} : the assigned value is not a valid tremulant type (look at the help)")
-                    attr_value = ''
+                if not(attr_value_str.upper() in ('SYNTH', 'WAVE')):
+                    self.events_log_add(f"Error in {object_UID} / {line} : the assigned value is not a valid tremulant type (look at the help)")
+                    attr_value_str = ''
 
             elif attribute_value_type == ATTR_TYPE_PISTON_TYPE:
-                if not(attr_value.upper() in ('STOP', 'COUPLER', 'SWITCH', 'TREMULANT')):
-                    self.events_log_add(f"Error in {object_ID} / {line} : the assigned value is not a valid piston type (look at the help)")
-                    attr_value = ''
+                if not(attr_value_str.upper() in ('STOP', 'COUPLER', 'SWITCH', 'TREMULANT')):
+                    self.events_log_add(f"Error in {object_UID} / {line} : the assigned value is not a valid piston type (look at the help)")
+                    attr_value_str = ''
 
             elif attribute_value_type == ATTR_TYPE_DRAWSTOP_FCT:
-                if not(attr_value.upper() in ('INPUT', 'NOT', 'AND', 'XOR', 'NAND', 'NOR', 'OR')):
-                    self.events_log_add(f"Error in {object_ID} / {line} : the assigned value is not a valid drawstop function (look at the help)")
-                    attr_value = ''
+                if not(attr_value_str.upper() in ('INPUT', 'NOT', 'AND', 'XOR', 'NAND', 'NOR', 'OR')):
+                    self.events_log_add(f"Error in {object_UID} / {line} : the assigned value is not a valid drawstop function (look at the help)")
+                    attr_value_str = ''
 
             elif attribute_value_type == ATTR_TYPE_FILE_NAME:
-                modif_path = attr_value.replace('\\', '/')
-                if self.check_files_names and not os.path.isfile(os.path.dirname(self.odf_file_name) + '/' + modif_path):
-                    self.events_log_add(f"Error in {object_ID} / {line} : file does not exist")
-                    attr_value = ''
+                if self.check_files_names and not os.path.isfile(os.path.dirname(self.odf_file_name) + os.sep + attr_value_str.replace('\\', os.sep)):
+                    self.events_log_add(f"Error in {object_UID} / {line} : file does not exist")
+                    attr_value_str = ''
 
-            elif attribute_value_type == ATTR_TYPE_PIPE_WAVE:
-                if attr_value.upper()[-4:] == '.WAV':
-                    modif_path = attr_value.replace('\\', '/')
-                    if self.check_files_names and not os.path.isfile(os.path.dirname(self.odf_file_name) + '/' + modif_path):
-                        self.events_log_add(f"Error in {object_ID} / {line} : file not found")
-                        attr_value = ''
-                elif attr_value[:4] == 'REF:':  # for example REF:001:005:007
-                    if not (attr_value[5:7].isdigit and attr_value[7] == ':' and
-                            attr_value[8:11].isdigit and attr_value[11] == ':' and
-                            attr_value[12:15].isdigit and len(attr_value) == 15):
-                        self.events_log_add(f"Error in {object_ID} / {line} : wrong pipe referencing, expected REF:999:999:999")
-                        attr_value = ''
-                elif attr_value != 'EMPTY':
-                    self.events_log_add(f"Error in {object_ID} / {line} : wrong pipe definition")
-                    attr_value = ''
+            elif attribute_value_type == ATTR_TYPE_PIPE_WAVE and self.check_files_names :
+                if attr_value_str.upper()[-4:] == '.WAV':
+                    if self.check_files_names and not os.path.isfile(os.path.dirname(self.odf_file_name) + os.sep + attr_value_str.replace('\\', os.sep)):
+                        self.events_log_add(f"Error in {object_UID} / {line} : file not found")
+                        attr_value_str = ''
+                elif attr_value_str[:4] == 'REF:':  # for example REF:001:005:007
+                    if not (attr_value_str[5:7].isdigit and attr_value_str[7] == ':' and
+                            attr_value_str[8:11].isdigit and attr_value_str[11] == ':' and
+                            attr_value_str[12:15].isdigit and len(attr_value_str) == 15):
+                        self.events_log_add(f"Error in {object_UID} / {line} : wrong pipe referencing, expected REF:999:999:999")
+                        attr_value_str = ''
+                elif attr_value_str != 'EMPTY':
+                    self.events_log_add(f"Error in {object_UID} / {line} : wrong pipe definition")
+                    attr_value_str = ''
 
              # remove the line of the found attribute, to know at the end of the object check which of its attributes have not been checked
             lines_list.pop(attr_idx)
 
         elif required_attribute:
             # the attribute has not been found and it is required
-            self.events_log_add(f"Error in {object_ID} : the attribute {attribute_name} is expected, it is missing or misspelled")
+            self.events_log_add(f"Error in {object_UID} : the attribute {attribute_name} is expected, it is missing or misspelled")
 
-        return attr_value
+        return attr_value_str
 
     #-------------------------------------------------------------------------------------------------
-    def check_attributes_unicity(self, object_ID, lines_list):
+    def check_attributes_unicity(self, object_UID, lines_list):
         #--- check in the given object lines list if each attribute is unique
 
         # copy the attributes names of the given lines list in an attributes list
         attributes_list = []
         for line in lines_list:
             if self.is_line_with_attribute(line):
-                (attr_name, attr_value) = line.split("=", 1)
-                attributes_list.append(attr_name)
+                (attr_name_str, attr_value_str) = line.split("=", 1)
+                attributes_list.append(attr_name_str)
 
         # sort the attributes list
         attributes_list.sort()
@@ -2149,14 +2176,2970 @@ class C_ODF:
         # check if there are consecutive names in the sorted list
         for i in range(0, len(attributes_list) - 1):
             if attributes_list[i] == attributes_list[i+1]:
-                self.events_log_add(f"Error in {object_ID} : the attribute {attributes_list[i]} is defined more than once")
+                self.events_log_add(f"Error in {object_UID} : the attribute {attributes_list[i]} is defined more than once")
+
+#-------------------------------------------------------------------------------------------------
+class C_HW2GO():
+    #--- class to manage the conversion of a Hauptwerk ODF in a GrandOrgue ODF
+
+    HW_ODF_file_name_str = ''   # path/name of the loaded Hauptwerk ODF
+    HW_sample_set_path_str = '' # path of the folder containing the loaded Hauptwerk sample set (which contains the sub-folders OrganDefinitions and OrganInstallationPackages)
+
+    silent_loop_file_used = False  # flag to indicate that the file SilentLoop.wav is used by a built GO Stop
+
+    HW_ODF_dic = {}  # dictionary in which are stored the data of the loaded Hauptwerk ODF file (XML file)
+                      # it has the following structure with three nested dictionaries :
+                      #   {ObjectType:                      -> string, for example _General, KeyImageSet, DisplayPage
+                      #       {ObjectID:                    -> integer, from 1 to 999999, recovered from the HW ODF objects ID when possible, else set by increment
+                      #           {Attribute: Value, ...},  -> string: string
+                      #        ...
+                      #       },
+                      #       ...
+                      #    ...
+                      #   }
+                      # the ObjectUID (unique ID) is a string made by the concatenation of the ObjectType and the ObjectID on 6 digits, for example DisplayPage000006
+                      # exception : the ObjectType _General has the ObjectUID _General
+
+    GO_ODF_dic = {}  # dictionary in which are stored the data of the GrandOrgue ODF built from the Hauptwerk ODF dictionary
+                      # it has the following structure with two nested dictionaries :
+                      #   {ObjectUID:                   -> string, for example Organ, Panel001, Rank003
+                      #       {Attribute: Value, ...}   -> string: string or integer if number / dimension / code
+                      #    ...
+                      #   }
+
+    HW_ODF_attr_dic = {} # dictionary which contains the definition of the various HW object types and their attributes (loaded from the file HwObjectsAttributesDict.txt)
+                          # it has the following structure with two nested dictionaries :
+                          #   {ObjectType:                                  -> string, for example _General, KeyImageSet, DisplayPage
+                          #       {AttributeLetter: AttributeFullName, ...} -> string: string
+                          #    ...
+                          #   }
+
+    GO_objects_type_nb_dic = {}  # dictionary with GO objects types names as keys and the associated number of these objects types as integer values
+
+    available_HW_packages_id_list = []  # list storing the ID of the installation packages which are actually accessible in the sample set package
+
+    HW_default_display_page_id = 0  # ID of the HW default display page (which is displayed by default on organ loading and will be the GO Panel000)
+    HW_console_display_page_id = 0  # ID of the HW console display page (which contains the displayed keyboards, can be different from the default display page)
+
+    events_log_list = []    # list of events logs (errors or messages resulting from the conversion or files operations)
+
+    progress_status_show_function = None # address of a callback function to call to show a progression message during the ODF building
+
+    #-------------------------------------------------------------------------------------------------
+    def HW_ODF_load_from_file(self, file_name_str):
+        # fill the Hauptwerk ODF dictionary from the data of the given Hauptwerk ODF XML file
+        # return True or False whether the operation has succeeded or not
+
+        """
+        the considered Hauptwerk ODF XML syntax is :
+
+        <Hauptwerk FileFormat="Organ" FileFormatVersion="xxxxxx">
+            <ObjectList ObjectType="ObjectTypeName">
+                <"ObjectTypeName">
+                    <"Attribute1">Value</"Attribute1">
+                    <"Attribute2">Value</"Attribute2">
+                    ...
+                </"ObjectTypeName">
+                ...
+                <o>                    -> compressed format
+                    <a>Value</a>
+                    <b>Value</b>
+                    ...
+                </o>
+                ...
+            </ObjectList>
+               ...
+        </Hauptwerk>
+
+        the attributes letters are converted to attributes full name thanks to the dictionary HW_ODF_attr_dic
+        """
+
+        # check the extension of the given file name
+        filename_str, file_extension_str = os.path.splitext(file_name_str)
+        if file_extension_str != '.Organ_Hauptwerk_xml':
+            self.events_log_add(f'ERROR : The file "{file_name_str}" does not have the expected extension .Organ_Hauptwerk_xml')
+            return False
+
+        # check the existence of the given file name
+        if not(os.path.isfile(file_name_str)):
+            self.events_log_add(f'ERROR : The file "{file_name_str}" does not exist')
+            return False
+
+        # load the dictionnary HwObjectsAttributesDict if not already loaded
+        if not self.HW_ODF_attr_dic_file_load():
+            # error occurred while loading the dictionary
+            return False
+
+        # clear the content of the dictionary HW_ODF_dic
+        self.HW_ODF_dic.clear()
+
+        # load the content of the HW XML file as an elements tree
+        HW_ODF_xml_tree = etree.parse(file_name_str)
+
+        # check that it is actually an Hauptwerk ODF and recover the file format version
+        HW_xml_id_tag_str = HW_ODF_xml_tree.xpath("/Hauptwerk")
+        HW_file_format_str = HW_xml_id_tag_str[0].get("FileFormat")
+        HW_file_format_version_str = HW_xml_id_tag_str[0].get("FileFormatVersion")
+        if HW_file_format_str != 'Organ':
+            # it is not an ODF
+            self.events_log_add(f'ERROR : The file "{file_name_str}" is not a supported Hauptwerk organ definition file')
+            return False
+
+        object_type_nb_int = 0  # total number of object types found
+        object_elem_nb_int = 0  # total number of object elements found
+        object_attr_nb_int = 0  # total number of object attributes found
+        for xml_object_type in HW_ODF_xml_tree.xpath("/Hauptwerk/ObjectList"):
+            # parse the object types defined in the XML file (in the tags <ObjectList ObjectType="xxxx">)
+            object_type_nb_int += 1
+
+            # recover the name of the current object type
+            HW_object_type_str = xml_object_type.get("ObjectType")
+
+            self.progress_status_show_function(f'Loading the Hauptwerk ODF... {HW_object_type_str}')
+
+            # create an entry in the HW dictionary for the current object type
+            object_type_dic = self.HW_ODF_dic[HW_object_type_str] = {}
+
+            if HW_object_type_str in self.HW_ODF_attr_dic.keys():
+                # the current object type is defined in the HW attributes dictionary
+                # get the dictionary defining the attributes of the current object type
+                object_type_attr_dic = self.HW_ODF_attr_dic[HW_object_type_str]
+                # recover the name of the attribute of the object elements of the current object type which define the ID of each element, if it exists
+                object_id_attr_name_str = object_type_attr_dic['IDattr']
+
+                object_id_counter_int = 0  # ID which can be assigned to the current object element inside the current object type if it has not an ID defined in the attributes
+                for xml_object_element in xml_object_type:
+                    # parse the object elements defined in the current object type
+                    object_elem_nb_int += 1
+                    object_id_counter_int += 1
+                    object_id_int = 0
+
+                    # create a new object element dictionary
+                    object_dic = {}
+
+                    # add at the beginning of the current object element dictionary some custom attributes used for the GO ODF building
+                    object_dic['_HW_uid'] = ''  # Unique ID of the HW object
+                    object_dic['_GO_uid'] = ''  # Unique ID of the corresponding built GO object
+                    object_dic['_parents'] = []   # list of the parent HW objects dictionaries
+                    object_dic['_children'] = []  # list of the children HW objects dictionaries
+
+                    for xml_object_attribute in xml_object_element:
+                        # parse the attributes defined in the current object element
+                        object_attr_nb_int += 1
+                        attribute_name_str = xml_object_attribute.tag
+                        attribute_value_str = xml_object_attribute.text
+
+                        if attribute_value_str != '' and attribute_value_str != None:
+                            # the attributes with an empty or undefined value are ignored
+                            if len(attribute_name_str) <= 2:
+                                # the attribute name is defined by a tag of one or two characters (this is the Hauptwerk XML compressed format)
+                                # recover the attribute long name corresponding to this tag
+                                try:
+                                    attribute_name_str = object_type_attr_dic[attribute_name_str]
+                                except:
+                                    # no attribute long name known
+                                    attribute_name_str = attribute_name_str + '???'
+
+                            # add the current attribute name and value to the current object
+                            object_dic[attribute_name_str] = attribute_value_str
+
+                            if object_id_int == 0 and object_id_attr_name_str != '' and attribute_name_str == object_id_attr_name_str:
+                                # the current attribute is the attribute which contains the ID of the object in the current object type
+                                if not attribute_value_str.isnumeric():
+                                    self.events_log_add(f'ERROR : attribute {attribute_name_str}={attribute_value_str} has not a numeric value in the object {HW_object_type_str} #{object_id_counter_int}')
+                                else:
+                                    object_id_int = int(attribute_value_str)
+
+                    if object_id_int == 0:
+                        # no object ID recovered from the attributes
+                        if object_id_attr_name_str != '':
+                            # the object should have had an ID attribute
+                            self.events_log_add(f'ERROR : attribute {object_id_attr_name_str} with integer value not found in the object {HW_object_type_str} #{object_id_counter_int}')
+                        # use as object ID the objects counter
+                        object_id_int = object_id_counter_int
+
+                    # store in the object its UID (unique ID)
+                    if HW_object_type_str == '_General':
+                        object_dic['_HW_uid'] = '_General'
+                    else:
+                        object_dic['_HW_uid'] = HW_object_type_str + str(object_id_int).zfill(6)
+
+                    if object_id_int in object_type_dic.keys():
+                        self.events_log_add(f'WARNING: HW object {object_dic["_HW_uid"]} has an ID which is not unique !')
+
+                    # add the object dictionary to the current object type dictionary
+                    object_type_dic[object_id_int] = object_dic
+
+            else:
+                self.events_log_add(f'INTERNAL ERROR : object type {HW_object_type_str} unknown in the HW attributes dictionary')
+
+        self.events_log_add(f'Hauptwerk ODF loaded "{file_name_str}"')
+        self.events_log_add(f'Hauptwerk organ file format version {HW_file_format_version_str}')
+        self.events_log_add(f'{object_attr_nb_int:,} attributes among {object_elem_nb_int:,} objects among {object_type_nb_int} object types')
+
+        self.HW_ODF_file_name_str = file_name_str
+        self.HW_sample_set_path_str = os.path.dirname(os.path.dirname(file_name_str))
+
+        return True
+
+    #-------------------------------------------------------------------------------------------------
+    def HW_ODF_attr_dic_file_load(self):
+        # load the Hauptwerk attributes dictionary from the file HwObjectsAttributesDict.txt (if it is present and there is no error)
+        # return True or False whether the operation has succeeded or not
+
+        if len(self.HW_ODF_attr_dic) == 0:
+            # the dictionary has not been loaded yet
+
+            file_name_str = os.path.dirname(__file__) + os.sep + 'HwObjectsAttributesDict.txt'
+
+            try:
+                with open(file_name_str, 'r') as f:
+                    self.HW_ODF_attr_dic = eval(f.read())
+                    return True
+            except OSError as err:
+                # it has not be possible to open the file
+                self.events_log_add(f'ERROR : Cannot open the file "{file_name_str}" : {err}')
+            except SyntaxError as err:
+                # syntax error in the dictionary structure which is in the file
+                self.events_log_add(f'ERROR : Syntax error in the file "{file_name_str}" : {err}')
+            except:
+                # other error
+                self.events_log_add(f'ERROR : Error while opening the file "{file_name_str}"')
+
+            return False
+
+        else:
+            return True
+
+    #-------------------------------------------------------------------------------------------------
+    def HW_ODF_do_links_between_objects(self):
+        # set in the Hauptwerk ODF dictionary the relationships (parent, children) between the various objects
+        # add in the objects of the HW_ODF_dic the attributes "_parents" and "_children" with as value the list of the respective parent or child objects
+
+        HW_general_object_dic = None
+        HW_object_type_str = '_General'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'OrganInfo_InstallationPackageID', 'RequiredInstallationPackage', TO_CHILD)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'SpecialObjects_DefaultDisplayPageID', 'DisplayPage', TO_CHILD)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'SpecialObjects_MasterCaptureSwitchID', 'Switch', TO_CHILD)
+                HW_general_object_dic = HW_object_dic
+        if HW_general_object_dic == None:
+            self.events_log_add(f'ERROR : no _General object defined in the Hauptwerk ODF')
+            return False
+
+        HW_object_type_str = 'DivisionInput'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'DivisionID', 'Division', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'SwitchID', 'Switch', TO_PARENT)
+
+        HW_object_type_str = 'Keyboard'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'KeyGen_DisplayPageID', 'DisplayPage', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'KeyGen_KeyImageSetID', 'KeyImageSet',  TO_CHILD)
+                # link the keyboard to its division
+                HW_division_dic = self.HW_ODF_get_object_dic_by_ref_id('Division', HW_object_dic, 'Hint_PrimaryAssociatedDivisionID')
+                if HW_division_dic == None:
+                    # find the division ID from the keyboard code, supposing to the following matching :
+                    #     keyboard code 1 = division 1 = Pedal
+                    #     keyboard code 2 = division 2 = Manual 1
+                    #     keyboard code 3 = division 3 = Manual 2
+                    #     ...
+                    HW_division_dic = self.HW_ODF_get_object_dic_by_ref_id('Division', HW_object_dic, 'DefaultInputOutputKeyboardAsgnCode')
+                if HW_division_dic != None:
+                    self.HW_ODF_do_link_between_obj(HW_object_dic, HW_division_dic, TO_PARENT)
+
+        HW_object_type_str = 'KeyAction'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'SourceKeyboardID', 'Keyboard', TO_PARENT)
+                HW_cond_switch_dic = self.HW_ODF_get_attribute_value(HW_object_dic, 'ConditionSwitchID')
+                if self.HW_ODF_get_attribute_value(HW_object_dic, 'DestDivisionID') != None:
+                    # the key action destination is a division
+                    self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'DestDivisionID', 'Division', TO_CHILD)
+                    # link directly the source keyboard to the destination division if there is no conditional switch
+                    # this link may have been done already while processing the Keyboard objects above
+                    if HW_cond_switch_dic == None:
+                        HW_source_keyboard_dic = self.HW_ODF_get_object_dic_by_ref_id('Keyboard', HW_object_dic, 'SourceKeyboardID')
+                        HW_dest_division_dic = self.HW_ODF_get_object_dic_by_ref_id('Division', HW_object_dic, 'DestDivisionID')
+                        self.HW_ODF_do_link_between_obj(HW_source_keyboard_dic, HW_dest_division_dic, TO_PARENT)
+                else:
+                    # the key action destination is a keyboard
+                    self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'DestKeyboardID', 'Keyboard', TO_CHILD)
+                    # link directly the source keyboard to the destination keyboard
+                    # this link may have been done already while processing the Keyboard objects above
+                    if HW_cond_switch_dic == None:
+                        HW_source_keyboard_dic = self.HW_ODF_get_object_dic_by_ref_id('Keyboard', HW_object_dic, 'SourceKeyboardID')
+                        HW_dest_keyboard_dic = self.HW_ODF_get_object_dic_by_ref_id('Keyboard', HW_object_dic, 'DestKeyboardID')
+                        self.HW_ODF_do_link_between_obj(HW_source_keyboard_dic, HW_dest_keyboard_dic, TO_CHILD)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ConditionSwitchID', 'Switch', TO_PARENT)
+
+        HW_object_type_str = 'KeyboardKey'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'KeyboardID', 'Keyboard', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'SwitchID', 'Switch', TO_PARENT)
+
+        HW_object_type_str = 'KeyImageSet'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                for obj_attr_name_str in list(HW_object_dic.keys()):
+                    if obj_attr_name_str.startswith('KeyShapeImageSetID'):
+                        self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, obj_attr_name_str, 'ImageSet', TO_CHILD)
+
+        HW_object_type_str = 'ImageSetElement'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ImageSetID', 'ImageSet', TO_PARENT)
+
+        HW_object_type_str = 'TextInstance'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'DisplayPageID', 'DisplayPage', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'TextStyleID', 'TextStyle', TO_CHILD)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'AttachedToImageSetInstanceID', 'ImageSetInstance', TO_CHILD)
+
+        HW_object_type_str = 'Switch'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'Disp_ImageSetInstanceID', 'ImageSetInstance', TO_CHILD)
+                # if the Switch is linked to an ImageSetInstance object, link it to the DisplayPage in which it is displayed
+                HW_image_set_inst_dic = self.HW_ODF_get_object_dic_by_ref_id('ImageSetInstance', HW_object_dic, 'Disp_ImageSetInstanceID')
+                if HW_image_set_inst_dic != None:
+                    HW_display_page_dic = self.HW_ODF_get_object_dic_by_ref_id('DisplayPage', HW_image_set_inst_dic, 'DisplayPageID')
+                    self.HW_ODF_do_link_between_obj(HW_object_dic, HW_display_page_dic, TO_PARENT)
+
+        HW_object_type_str = 'SwitchLinkage'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'SourceSwitchID', 'Switch', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'DestSwitchID', 'Switch', TO_CHILD)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ConditionSwitchID', 'Switch', TO_PARENT)
+                # make direct link between source and destination switches
+                HW_source_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'SourceSwitchID')
+                HW_dest_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'DestSwitchID')
+                HW_cond_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'ConditionSwitchID')
+                if HW_source_switch_dic != None and HW_dest_switch_dic != None :
+                    self.HW_ODF_do_link_between_obj(HW_source_switch_dic, HW_dest_switch_dic, TO_CHILD)
+                    if HW_cond_switch_dic != None:
+                        self.HW_ODF_do_link_between_obj(HW_cond_switch_dic, HW_dest_switch_dic, TO_CHILD)
+
+        HW_object_type_str = 'SwitchExclusiveSelectGroupElement'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'SwitchID', 'Switch', TO_CHILD)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'GroupID', 'SwitchExclusiveSelectGroup', TO_PARENT)
+
+        HW_object_type_str = 'WindCompartment'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'PressureOutputContinuousControlID', 'ContinuousControl', TO_PARENT)
+
+        HW_object_type_str = 'WindCompartmentLinkage'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'FirstWindCompartmentID', 'WindCompartment', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'SecondWindCompartmentID', 'WindCompartment', TO_CHILD)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ValveControllingContinuousControlID', 'ContinuousControl', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ValveControllingSwitchID', 'Switch', TO_PARENT)
+                # make direct link between source and destination wind compartments
+                HW_first_wind_comp_dic = self.HW_ODF_get_object_dic_by_ref_id('WindCompartment', HW_object_dic, 'FirstWindCompartmentID')
+                HW_second_wind_comp_dic = self.HW_ODF_get_object_dic_by_ref_id('WindCompartment', HW_object_dic, 'SecondWindCompartmentID')
+                if HW_first_wind_comp_dic != None and HW_second_wind_comp_dic != None :
+                    self.HW_ODF_do_link_between_obj(HW_first_wind_comp_dic, HW_second_wind_comp_dic, TO_CHILD)
+
+        HW_object_type_str = 'Stop'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'DivisionID', 'Division', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ControllingSwitchID', 'Switch', TO_PARENT)
+
+        HW_object_type_str = 'StopRank'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'StopID', 'Stop', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'RankID', 'Rank', TO_CHILD)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'SwitchIDToSwitchToAlternateRank', 'Switch', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'AlternateRankID', 'Rank', TO_CHILD)
+
+        HW_object_type_str = 'Combination'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ActivatingSwitchID', 'Switch', TO_PARENT)
+
+        HW_object_type_str = 'CombinationElement'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'CombinationID', 'Combination', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ControlledSwitchID', 'Switch', TO_CHILD)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'CapturedSwitchID', 'Switch', TO_CHILD)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'MemorySwitchID', 'Switch', TO_CHILD)
+
+        HW_object_type_str = 'Pipe_SoundEngine01'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'RankID', 'Rank', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ControllingPalletSwitchID', 'Switch', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'WindSupply_SourceWindCompartmentID', 'WindCompartment', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'WindSupply_OutputWindCompartmentID', 'WindCompartment', TO_CHILD)
+
+        HW_object_type_str = 'Pipe_SoundEngine01_Layer'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'PipeID', 'Pipe_SoundEngine01', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'Main_AttackSelCriteria_ContinuousControlID', 'ContinuousControl', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'Main_ReleaseSelCriteria_ContinuousControlID', 'ContinuousControl', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'AmpLvl_ScalingContinuousControlID', 'ContinuousControl', TO_PARENT)
+
+        HW_object_type_str = 'Pipe_SoundEngine01_AttackSample'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'LayerID', 'Pipe_SoundEngine01_Layer', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'SampleID', 'Sample', TO_CHILD)
+
+        HW_object_type_str = 'Pipe_SoundEngine01_ReleaseSample'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'LayerID', 'Pipe_SoundEngine01_Layer', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'SampleID', 'Sample', TO_CHILD)
+
+        HW_object_type_str = 'ContinuousControlStageSwitch'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ContinuousControlID', 'ContinuousControl', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ControlledSwitchID', 'Switch', TO_CHILD)
+
+        HW_object_type_str = 'ContinuousControlLinkage'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'SourceControlID', 'ContinuousControl', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'DestControlID', 'ContinuousControl', TO_CHILD)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ConditionSwitchID', 'Switch', TO_PARENT)
+
+        HW_object_type_str = 'ContinuousControl'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ImageSetInstanceID', 'ImageSetInstance', TO_CHILD)
+                # if the ContinuousControl is linked to an ImageSetInstance object, link it to the DisplayPage in which it is displayed
+                HW_image_set_inst_dic = self.HW_ODF_get_object_dic_by_ref_id('ImageSetInstance', HW_object_dic, 'ImageSetInstanceID')
+                if HW_image_set_inst_dic != None:
+                    HW_display_page_dic = self.HW_ODF_get_object_dic_by_ref_id('DisplayPage', HW_image_set_inst_dic, 'DisplayPageID')
+                    self.HW_ODF_do_link_between_obj(HW_object_dic, HW_display_page_dic, TO_PARENT)
+
+        HW_object_type_str = 'ContinuousControlImageSetStage'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ImageSetID', 'ImageSet', TO_PARENT)
+
+        HW_object_type_str = 'ContinuousControlDoubleLinkage'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'FirstSourceControl_UID', 'ContinuousControl', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'SecondSourceControl_UID', 'ContinuousControl', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'DestControl_UID', 'ContinuousControl', TO_CHILD)
+
+        HW_object_type_str = 'Enclosure'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ShutterPositionContinuousControlID', 'ContinuousControl', TO_PARENT)
+
+        HW_object_type_str = 'EnclosurePipe'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'EnclosureID', 'Enclosure', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'PipeID', 'Pipe_SoundEngine01', TO_CHILD)
+
+##        HW_object_type_str = 'TremulantWaveformPipe'
+##        if HW_object_type_str in self.HW_ODF_dic.keys():
+##            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+##                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'PipeID', 'Pipe_SoundEngine01', TO_CHILD)
+## put in comment, when used in some sample set, it points to PipeID values which none exits
+
+        HW_object_type_str = 'Tremulant'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ControllingSwitchID', 'Switch', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'PhaseAngleOutputContinuousControlID', 'ContinuousControl', TO_PARENT)
+
+        HW_object_type_str = 'TremulantWaveform'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'TremulantID', 'Tremulant', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'PhaseAngleOutputContinuousControlID', 'ContinuousControl', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'PitchOutputContinuousControlID', 'ContinuousControl', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'PitchAndFundamentalWaveformSampleID', 'Sample', TO_CHILD)
+
+        HW_object_type_str = 'ImageSetInstance'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                if len(HW_object_dic['_parents']) == 0:
+                    # this ImageSetInstance object has none parent, link it with its DisplayPage
+                    self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'DisplayPageID', 'DisplayPage', TO_PARENT)
+                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ImageSetID', 'ImageSet', TO_CHILD)
+
+        # link to _General all the Division objects
+        HW_object_type_str = 'Division'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj(HW_object_dic, HW_general_object_dic, TO_PARENT)
+
+        # link to _General all the DisplayPage objects
+        HW_object_type_str = 'DisplayPage'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                self.HW_ODF_do_link_between_obj(HW_object_dic, HW_general_object_dic, TO_PARENT)
+
+        # link to _General all the WindCompartment objects which have no parent
+        HW_object_type_str = 'WindCompartment'
+        self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
+        if HW_object_type_str in self.HW_ODF_dic.keys():
+            for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
+                if len(HW_object_dic['_parents']) == 0:
+                    self.HW_ODF_do_link_between_obj(HW_object_dic, HW_general_object_dic, TO_PARENT)
+
+        return True
+
+    #-------------------------------------------------------------------------------------------------
+    def HW_ODF_do_link_between_obj_by_id(self, HW_object_dic, HW_attr_id_name_str, linked_object_type_str, link_type_int):
+        # do a link between the given HW object dict and the given linked HW object type dict based on an ID
+        # the given link_type_int must be TO_PARENT or TO_CHILD
+
+        # recover the value of the ID permitting to establish a linkage between the two objects
+        linkage_id_value_int = myint(self.HW_ODF_get_attribute_value(HW_object_dic, HW_attr_id_name_str))
+
+        if linkage_id_value_int != None:
+            try:
+                linked_object_dic = self.HW_ODF_dic[linked_object_type_str][linkage_id_value_int]
+            except:
+                self.events_log_add(f'INTERNAL ERROR : object type {linked_object_type_str} with ID {linkage_id_value_int} not found')
+                return False
+            else:
+                return self.HW_ODF_do_link_between_obj(HW_object_dic, linked_object_dic, link_type_int)
+        else:
+            return False
+
+    #-------------------------------------------------------------------------------------------------
+    def HW_ODF_do_link_between_obj(self, HW_object_dic, linked_HW_object_dic, link_type_int):
+        # do a link between the given HW object dict and the given linked HW object dict
+        # the given link_type_int must be TO_PARENT or TO_CHILD
+
+        if link_type_int == TO_CHILD:
+            self.HW_ODF_add_attribute_value(HW_object_dic, '_children', linked_HW_object_dic)
+            self.HW_ODF_add_attribute_value(linked_HW_object_dic, '_parents', HW_object_dic)
+        elif link_type_int == TO_PARENT:
+            self.HW_ODF_add_attribute_value(HW_object_dic, '_parents', linked_HW_object_dic)
+            self.HW_ODF_add_attribute_value(linked_HW_object_dic, '_children', HW_object_dic)
+        else:
+            self.events_log_add('INTERNAL ERROR : undefined link type given to HW_ODF_do_link_between_obj')
+            return False
+
+        return True
+
+    #-------------------------------------------------------------------------------------------------
+    def HW_ODF_add_attribute_value(self, HW_object_dic, attr_name_str, attr_value):
+        # add the given attribute value to the list of the given object dictionary of the Hauptwerk ODF dictionary (for _xxx attributes which contain a list)
+        # if the given value already exists in the list, it is not added to avoid doubles
+        # return True or False whether the operation has succeeded or not
+
+        try:
+            if attr_value not in HW_object_dic[attr_name_str]:
+                HW_object_dic[attr_name_str].append(attr_value)
+        except:
+            # the attr_name_str doesn't exist, create it and add the value
+            HW_object_dic[attr_name_str] = []
+            HW_object_dic[attr_name_str].append(attr_value)
+
+        return True
+
+    #-------------------------------------------------------------------------------------------------
+    def HW_ODF_get_attribute_value(self, HW_object_dic, attr_name_str, mandatory_bool=False):
+        # return the string value string of the given attribute defined in the given object sub-dictionary of the Hauptwerk ODF dictionary
+        # generate a log in case of attribute not found and if mandatory_bool=True, mandatory_bool=False permits to get silently an attribute which the presence is optional
+        # return None if the attribute name is not defined in the given dictionary
+
+        if HW_object_dic == None:
+            return None
+
+        try:
+            attr_value = HW_object_dic[attr_name_str]
+        except:
+            attr_value = None
+            if mandatory_bool:
+                self.events_log_add(f'ERROR : unable to read the attribute "{attr_name_str}" in the sample set object {HW_object_dic["_HW_uid"]}')
+
+        return attr_value
+
+    #-------------------------------------------------------------------------------------------------
+    def HW_ODF_get_object_dic(self, HW_object_type_or_uid_str, HW_object_id_int = None):
+        # return the HW object dictionary having the given object type and ID or only the given UID (unique ID) if object_id_int = -1 or not defined
+        # if the HW object type is '_General' then the object ID parameter has not to be provided
+        # return None if the object has not been found with the given data
+
+        # define the object type and ID
+        if HW_object_id_int == None:
+            # no object ID provided : object UID is provided
+            if HW_object_type_or_uid_str == '_General':
+                HW_object_type_str = '_General'
+                HW_object_id_int = 1
+            else:
+                HW_object_type_str = HW_object_type_or_uid_str[:-6]    # remove the last 6 digits of the UID
+                HW_object_id_int = myint(HW_object_type_or_uid_str[-6:])  # keep only the last 6 digits of the UID
+        else:
+            # object type + ID is provided
+            HW_object_type_str = HW_object_type_or_uid_str
+
+        if HW_object_id_int == 0:
+            return None
+
+        try:
+            # recover the dictionary of the object having the given type and ID
+            return self.HW_ODF_dic[HW_object_type_str][HW_object_id_int]
+        except:
+            # object dictionary not existing for the given type and/or ID
+            return None
+
+    #-------------------------------------------------------------------------------------------------
+    def HW_ODF_get_object_dic_by_ref_id(self, HW_object_type_str, ref_HW_object_dic, ref_HW_attr_id_name_str):
+        # return the HW object dictionary having the given object type and which the ID is defined in the given referencing object dictionary and its referencing attribute ID
+
+        # get the ID of the referenced object
+        HW_object_id_int = myint(self.HW_ODF_get_attribute_value(ref_HW_object_dic, ref_HW_attr_id_name_str))
+
+        if HW_object_id_int != None:
+            return self.HW_ODF_get_object_dic(HW_object_type_str, HW_object_id_int)
+        else:
+            return None
+
+    #-------------------------------------------------------------------------------------------------
+    def HW_ODF_get_linked_objects_dic_by_type(self, HW_object_dic, object_type_str, link_type_int, only_first_one_bool=False):
+        # return a list containing the dictionary of the objects which are parent/child of the given object and which has the given object type
+        # the given link_type_int must be TO_PARENT or TO_CHILD
+        # if only_first_one_bool = True, only the first occurence is returned as a dictionary, not as a list
+        # return an empty list or None (if only first one) if there is no parent/child found
+
+        HW_linked_objects_dic_list = []
+        HW_linked_object_dic = None
+
+        if HW_object_dic != None:
+            if link_type_int == TO_PARENT:
+                for HW_obj_dic in HW_object_dic['_parents']:
+                    if HW_obj_dic['_HW_uid'][:-6] == object_type_str:
+                        if only_first_one_bool:
+                            HW_linked_object_dic = HW_obj_dic
+                            break
+                        else:
+                            HW_linked_objects_dic_list.append(HW_obj_dic)
+
+            elif link_type_int == TO_CHILD:
+                for HW_obj_dic in HW_object_dic['_children']:
+                    if HW_obj_dic['_HW_uid'][:-6] == object_type_str:
+                        if only_first_one_bool:
+                            HW_linked_object_dic = HW_obj_dic
+                            break
+                        else:
+                            HW_linked_objects_dic_list.append(HW_obj_dic)
+            else:
+                self.events_log_add('INTERNAL ERROR : undefined link type given to HW_ODF_get_linked_objects_dic_by_type')
+
+        if only_first_one_bool:
+            return HW_linked_object_dic
+        else:
+            return HW_linked_objects_dic_list
+
+    #-------------------------------------------------------------------------------------------------
+    def HW_ODF_get_object_data_list(self, HW_object_uid_str):
+        # return a list containing the object attributes name/value of the given object UID (for display purpose in the GUI)
+
+        HW_object_dic = self.HW_ODF_get_object_dic(HW_object_uid_str)
+        data_list = []
+
+        if HW_object_dic != None:
+            for obj_attr_name_str, obj_attr_value in HW_object_dic.items():
+                if obj_attr_name_str in ('_parents', '_children'):
+                    # this attribute contains a list of objects dictionaries
+                    obj_attr_value_str = ''
+                    for HW_object_dic2 in obj_attr_value:
+                        obj_attr_value_str += HW_object_dic2['_HW_uid'] + '  '
+                else:
+                    obj_attr_value_str = str(obj_attr_value)
+                data_list.append(f'{obj_attr_name_str}={obj_attr_value_str}')
+
+        return data_list
+
+    #-------------------------------------------------------------------------------------------------
+    def HW_ODF_get_image_attributes(self, HW_object_dic, HW_image_attr_dic, HW_image_index_in_set_int = None):
+        # fill the given image dictionary with the following HW attributes of the given object dictionary (can be ImageSetInstance or ImageSet) and the related ImageSet / ImageSetElement
+        # the not defined attributes are set at None
+        #    Name (string)
+        #    LeftXPosPixels (integer)
+        #    TopYPosPixels (integer)
+        #    ImageWidthPixels (integer)
+        #    ImageHeightPixels (integer)
+        #    ImageWidthPixelsTiling (integer)
+        #    ImageHeightPixelsTiling (integer)
+        #    ClickableAreaLeftRelativeXPosPixels (integer)
+        #    ClickableAreaRightRelativeXPosPixels (integer)
+        #    ClickableAreaTopRelativeYPosPixels (integer)
+        #    ClickableAreaBottomRelativeYPosPixels (integer)
+        #    InstallationPackageID (integer)
+        #    BitmapFilename (string, with \ as folders separator)
+        #    TransparencyMaskBitmapFilename (string, with \ as folders separator)
+        # in case of an ImageSetInstance as object type, use the object default image index in set to know which ImageSetElement to recover
+        # in case of an ImageSet as object type, use the given image index in set to know which ImageSetElement to recover
+        # return True or False whether the operation has succeeded or not
+
+        if HW_object_dic['_HW_uid'][:-6] == 'ImageSetInstance':
+            # ImageSetInstance object provided
+
+            HW_image_set_inst_dic = HW_object_dic
+
+            # recover the dictionary of the associated ImageSet object
+            HW_image_set_dic = self.HW_ODF_get_object_dic_by_ref_id('ImageSet', HW_image_set_inst_dic, 'ImageSetID')
+            if HW_image_set_dic == None: return False
+
+            HW_image_attr_dic['Name'] = self.HW_ODF_get_attribute_value(HW_image_set_inst_dic, 'Name')
+
+            HW_image_attr_dic['LeftXPosPixels'] = myint(self.HW_ODF_get_attribute_value(HW_image_set_inst_dic, 'LeftXPosPixels'))
+            HW_image_attr_dic['TopYPosPixels'] = myint(self.HW_ODF_get_attribute_value(HW_image_set_inst_dic, 'TopYPosPixels'))
+
+            HW_image_attr_dic['ImageWidthPixelsTiling'] = myint(self.HW_ODF_get_attribute_value(HW_image_set_inst_dic, 'RightXPosPixelsIfTiling'))
+            if HW_image_attr_dic['ImageWidthPixelsTiling'] == 0: HW_image_attr_dic['ImageWidthPixelsTiling'] = None
+
+            HW_image_attr_dic['ImageHeightPixelsTiling'] = myint(self.HW_ODF_get_attribute_value(HW_image_set_inst_dic, 'BottomYPosPixelsIfTiling'))
+            if HW_image_attr_dic['ImageHeightPixelsTiling'] == 0: HW_image_attr_dic['ImageHeightPixelsTiling'] = None
+
+            if HW_image_index_in_set_int == None:
+                # image index not provided in parameter of the function : set a default index
+                HW_image_index_in_set_int = myint(self.HW_ODF_get_attribute_value(HW_image_set_inst_dic, 'DefaultImageIndexWithinSet'))
+                # if the attribute ImageIndexWithinSet is not defined, set the index at 1 by default
+                if HW_image_index_in_set_int == None: HW_image_index_in_set_int = 1
+
+        elif HW_object_dic['_HW_uid'][:-6] == 'ImageSet':
+            # ImageSet object provided
+            HW_image_set_inst_dic = None
+            HW_image_set_dic = HW_object_dic
+
+            HW_image_attr_dic['Name'] = self.HW_ODF_get_attribute_value(HW_image_set_dic, 'Name')
+            HW_image_attr_dic['LeftXPosPixels'] = None
+            HW_image_attr_dic['TopYPosPixels'] = None
+            HW_image_attr_dic['ImageWidthPixelsTiling'] = None
+            HW_image_attr_dic['ImageHeightPixelsTiling'] = None
+
+        else:
+            return False
+
+        # recover the data from the ImageSet
+        HW_image_attr_dic['InstallationPackageID'] = myint(self.HW_ODF_get_attribute_value(HW_image_set_dic, 'InstallationPackageID', True))
+
+        if HW_image_attr_dic['ImageWidthPixelsTiling'] != None:
+            HW_image_attr_dic['ImageWidthPixels'] = HW_image_attr_dic['ImageWidthPixelsTiling']
+        else:
+            HW_image_attr_dic['ImageWidthPixels'] = myint(self.HW_ODF_get_attribute_value(HW_image_set_dic, 'ImageWidthPixels'))
+
+        if HW_image_attr_dic['ImageHeightPixelsTiling'] != None:
+            HW_image_attr_dic['ImageHeightPixels'] = HW_image_attr_dic['ImageHeightPixelsTiling']
+        else:
+            HW_image_attr_dic['ImageHeightPixels'] = myint(self.HW_ODF_get_attribute_value(HW_image_set_dic, 'ImageHeightPixels'))
+
+        # recover the bitmap file of the transparency image
+        ret = self.HW_ODF_get_attribute_value(HW_image_set_dic, 'TransparencyMaskBitmapFilename')
+        if ret != None:
+            HW_image_attr_dic['TransparencyMaskBitmapFilename'] = self.convert_HW2GO_file_name(ret, HW_image_attr_dic['InstallationPackageID'])
+        else:
+            HW_image_attr_dic['TransparencyMaskBitmapFilename'] = None
+
+        # recover the bitmap file of the displayed image (from the ImageSetElement associated to the ImageSet and having the proper image index within set)
+        HW_image_attr_dic['BitmapFilename'] = None
+        for image_set_elem_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_image_set_dic, 'ImageSetElement', TO_CHILD):
+            # parse the ImageSetElement objects which are children of the ImageSet object to find the one having the right image index
+            image_index = myint(self.HW_ODF_get_attribute_value(image_set_elem_dic, 'ImageIndexWithinSet'))
+            if image_index == None: image_index = 1  # if the attribute ImageIndexWithinSet is not defined, it is the index 1 by default
+            if image_index == HW_image_index_in_set_int:
+                # it is the expected ImageSetElement object
+                ret = self.HW_ODF_get_attribute_value(image_set_elem_dic, 'BitmapFilename', True)
+                if ret != None:
+                    HW_image_attr_dic['BitmapFilename'] = self.convert_HW2GO_file_name(ret, HW_image_attr_dic['InstallationPackageID'])
+                else:
+                    HW_image_attr_dic['BitmapFilename'] = None
+                break
+
+        HW_image_attr_dic['ClickableAreaLeftRelativeXPosPixels'] = myint(self.HW_ODF_get_attribute_value(HW_image_set_dic, 'ClickableAreaLeftRelativeXPosPixels'))
+        HW_image_attr_dic['ClickableAreaRightRelativeXPosPixels'] = myint(self.HW_ODF_get_attribute_value(HW_image_set_dic, 'ClickableAreaRightRelativeXPosPixels'))
+        HW_image_attr_dic['ClickableAreaTopRelativeYPosPixels'] = myint(self.HW_ODF_get_attribute_value(HW_image_set_dic, 'ClickableAreaTopRelativeYPosPixels'))
+        HW_image_attr_dic['ClickableAreaBottomRelativeYPosPixels'] = myint(self.HW_ODF_get_attribute_value(HW_image_set_dic, 'ClickableAreaBottomRelativeYPosPixels'))
+
+        # correct the clickable width if greater than the image width
+        if (HW_image_attr_dic['ImageWidthPixels'] != None and HW_image_attr_dic['ClickableAreaRightRelativeXPosPixels'] != None and
+            HW_image_attr_dic['ClickableAreaRightRelativeXPosPixels'] > HW_image_attr_dic['ImageWidthPixels'] - 1):
+            HW_image_attr_dic['ClickableAreaRightRelativeXPosPixels'] = HW_image_attr_dic['ImageWidthPixels'] - 1
+        # correct the clickable height if greater than the image height
+        if (HW_image_attr_dic['ImageHeightPixels'] != None and HW_image_attr_dic['ClickableAreaBottomRelativeYPosPixels'] != None and
+            HW_image_attr_dic['ClickableAreaBottomRelativeYPosPixels'] > HW_image_attr_dic['ImageHeightPixels'] - 1):
+            HW_image_attr_dic['ClickableAreaBottomRelativeYPosPixels'] = HW_image_attr_dic['ImageHeightPixels'] - 1
+
+        # set some default values if not defined
+        if HW_image_attr_dic['LeftXPosPixels'] == None: HW_image_attr_dic['LeftXPosPixels'] = 0
+        if HW_image_attr_dic['TopYPosPixels'] == None: HW_image_attr_dic['TopYPosPixels'] = 0
+
+        return True
+
+    #-------------------------------------------------------------------------------------------------
+    def HW_ODF_get_text_attributes(self, HW_text_inst_dic, HW_text_attr_dic):
+        # fill the given HW_text_attr_dic dictionary with the following HW attributes of the given TextInstance object dictionary (+ ImageSetInstance if any) and the related TextStyle
+        # the not defined attributes are set at None
+        #    Text (string)
+        #    XPosPixels (integer)
+        #    YPosPixels (integer)
+        #    AttachedToAnImageSetInstance : Y or N (string)
+        #    PosRelativeToTopLeftOfImage : Y or N (string)
+        #    BoundingBoxWidthPixelsIfWordWrap (integer)
+        #    BoundingBoxHeightPixelsIfWordWrap (integer)
+        #    Face_WindowsName (string)
+        #    Font_SizePixels (integer)
+        #    Font_WeightCode : 1 = light, 2 = normal, 3 = bold (integer)
+        #    Colour_Red (integer)
+        #    Colour_Green (integer)
+        #    Colour_Blue (integer)
+        #    HorizontalAlignmentCode : 0 = center, 1 = left, 2 = right (integer)
+        #    VerticalAlignmentCode   : 0 = center, 1 or not defined = top, 2 = bottom (integer)
+        #    + the attributes returned by HW_ODF_get_image_attributes if an image is attached to this TextInstance object
+        #    ImageSetInstanceDic : dictionary of the linked ImageSetInstance if any, else None
+
+        if not HW_text_inst_dic['_HW_uid'][:-6] == 'TextInstance':
+            return False
+
+        HW_text_attr_dic['Text'] = self.HW_ODF_get_attribute_value(HW_text_inst_dic, 'Text', True)
+        HW_text_attr_dic['XPosPixels'] = myint(self.HW_ODF_get_attribute_value(HW_text_inst_dic, 'XPosPixels'))
+        HW_text_attr_dic['YPosPixels'] = myint(self.HW_ODF_get_attribute_value(HW_text_inst_dic, 'YPosPixels'))
+        HW_text_attr_dic['AttachedToAnImageSetInstance'] = self.HW_ODF_get_attribute_value(HW_text_inst_dic, 'AttachedToAnImageSetInstance')
+        HW_text_attr_dic['PosRelativeToTopLeftOfImage'] = self.HW_ODF_get_attribute_value(HW_text_inst_dic, 'PosRelativeToTopLeftOfImageSetInstance')
+        HW_text_attr_dic['BoundingBoxWidthPixelsIfWordWrap'] = myint(self.HW_ODF_get_attribute_value(HW_text_inst_dic, 'BoundingBoxWidthPixelsIfWordWrap'))
+        HW_text_attr_dic['BoundingBoxHeightPixelsIfWordWrap'] = myint(self.HW_ODF_get_attribute_value(HW_text_inst_dic, 'BoundingBoxHeightPixelsIfWordWrap'))
+
+        # recover the data from the associated TextStyle object
+        HW_text_style_dic = self.HW_ODF_get_object_dic_by_ref_id('TextStyle', HW_text_inst_dic, 'TextStyleID')
+        if HW_text_style_dic != None:
+            HW_text_attr_dic['Face_WindowsName'] = self.HW_ODF_get_attribute_value(HW_text_style_dic, 'Face_WindowsName')
+            HW_text_attr_dic['Font_SizePixels'] = myint(self.HW_ODF_get_attribute_value(HW_text_style_dic, 'Font_SizePixels'))
+
+            HW_text_attr_dic['Font_WeightCode'] = myint(self.HW_ODF_get_attribute_value(HW_text_style_dic, 'Font_WeightCode'))
+
+            HW_text_attr_dic['Colour_Red'] = myint(self.HW_ODF_get_attribute_value(HW_text_style_dic, 'Colour_Red'))
+            HW_text_attr_dic['Colour_Green'] = myint(self.HW_ODF_get_attribute_value(HW_text_style_dic, 'Colour_Green'))
+            HW_text_attr_dic['Colour_Blue'] = myint(self.HW_ODF_get_attribute_value(HW_text_style_dic, 'Colour_Blue'))
+
+            HW_text_attr_dic['HorizontalAlignmentCode'] = myint(self.HW_ODF_get_attribute_value(HW_text_style_dic, 'HorizontalAlignmentCode'))
+            HW_text_attr_dic['VerticalAlignmentCode'] = myint(self.HW_ODF_get_attribute_value(HW_text_style_dic, 'VerticalAlignmentCode'))
+        else:
+            HW_text_attr_dic['Face_WindowsName'] = None
+            HW_text_attr_dic['Font_SizePixels'] = None
+            HW_text_attr_dic['Font_WeightCode'] = None
+            HW_text_attr_dic['Colour_Red'] = None
+            HW_text_attr_dic['Colour_Green'] = None
+            HW_text_attr_dic['Colour_Blue'] = None
+            HW_text_attr_dic['HorizontalAlignmentCode'] = None
+            HW_text_attr_dic['VerticalAlignmentCode'] = None
+
+        # set some default values if not defined
+        if HW_text_attr_dic['Face_WindowsName'] == None: HW_text_attr_dic['Face_WindowsName'] = 'Arial'
+        if HW_text_attr_dic['Font_SizePixels'] == None: HW_text_attr_dic['Font_SizePixels'] = 10
+        if HW_text_attr_dic['Font_WeightCode'] == None: HW_text_attr_dic['Font_WeightCode'] = 2
+        if HW_text_attr_dic['HorizontalAlignmentCode'] == None: HW_text_attr_dic['HorizontalAlignmentCode'] = 0
+        if HW_text_attr_dic['VerticalAlignmentCode'] == None: HW_text_attr_dic['VerticalAlignmentCode'] = 1
+        if HW_text_attr_dic['XPosPixels'] == None: HW_text_attr_dic['XPosPixels'] = 0
+        if HW_text_attr_dic['YPosPixels'] == None: HW_text_attr_dic['YPosPixels'] = 0
+
+        # add in the HW_text_attr_dic the attributes of the associated ImageSetInstance object if one is defined
+        HW_image_set_inst_dic = self.HW_ODF_get_object_dic_by_ref_id('ImageSetInstance', HW_text_inst_dic, 'AttachedToImageSetInstanceID')
+        HW_text_attr_dic['ImageSetInstanceDic'] = HW_image_set_inst_dic
+        if HW_image_set_inst_dic != None:
+            self.HW_ODF_get_image_attributes(HW_image_set_inst_dic, HW_text_attr_dic)
+
+        return True
+
+    #-------------------------------------------------------------------------------------------------
+    def HW_ODF_get_controlling_switches(self, HW_object_dic, HW_switch_data_dic, branch_nb = 0):
+        # recursive fonction to make the list of the displayed HW Switch objects which control the given HW object (Stop, KeyAction, Switch)
+        # return in the given HW_switch_data_dic the following data :
+        #     controlling_switches : dictionary with as keys the branch number (0 is the main controlling branch without condition, higher numbers are for conditional branches)
+        #                            and as values the list of displayed HW Switch objects having control on the given HW object
+        #     switch_branches_nb : number of conditional switch branches involved in the control
+        #     switch_asgn_code : value of the attribute DefaultInputOutputSwitchAsgnCode if found in one of the controlling switches
+        #     checked_switches : list of HW Switch objects checked during the scan of the controlling switches
+
+        if len(HW_switch_data_dic) == 0:
+            # dictionary empty, create the two keys
+            HW_switch_data_dic['controlling_switches'] = {0: []}
+            HW_switch_data_dic['switch_branches_nb'] = 0
+            HW_switch_data_dic['switch_asgn_code'] = None
+            HW_switch_data_dic['checked_switches'] = []
+
+        HW_object_type = HW_object_dic['_HW_uid'][:-6]
+        if HW_object_type == 'Stop':
+            # the given HW object is a Stop, recover its controlling switch
+            HW_cntrl_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'ControllingSwitchID')
+            self.HW_ODF_get_controlling_switches(HW_cntrl_switch_dic, HW_switch_data_dic, branch_nb)
+        elif HW_object_type == 'KeyAction':
+            # the given HW object is a KeyAction, recover its controlling switch
+            HW_cntrl_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'ConditionSwitchID')
+            if HW_cntrl_switch_dic != None:
+                self.HW_ODF_get_controlling_switches(HW_cntrl_switch_dic, HW_switch_data_dic, branch_nb)
+
+        elif HW_object_type == 'Switch' and HW_object_dic not in HW_switch_data_dic['checked_switches']:
+            # the given HW object is a Switch and has not been already checked
+
+            HW_switch_data_dic['checked_switches'].append(HW_object_dic)
+
+            asgn_code = myint(self.HW_ODF_get_attribute_value(HW_object_dic, 'DefaultInputOutputSwitchAsgnCode'))
+            if asgn_code != None:
+                # recover the assignment code of the HW Switch
+                HW_switch_data_dic['switch_asgn_code'] = asgn_code
+
+            if self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'ImageSetInstance', TO_CHILD, True) != None:
+                # the HW Switch has a child ImageSetInstance object, so it is displayed in a panel, add it to the controlling switches list
+                if branch_nb not in HW_switch_data_dic['controlling_switches'].keys():
+                    # no dictionary entry created yet for the current branch number, create it
+                    HW_switch_data_dic['controlling_switches'][branch_nb] = []
+                HW_switch_data_dic['controlling_switches'][branch_nb].append(HW_object_dic)
+
+            for HW_switch_linkage_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'SwitchLinkage', TO_PARENT):
+                # parse the parent SwitchLinkage objects of the given HW Switch
+                HW_cntrl_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_switch_linkage_dic, 'SourceSwitchID')
+                self.HW_ODF_get_controlling_switches(HW_cntrl_switch_dic, HW_switch_data_dic, branch_nb)
+
+                HW_cond_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_switch_linkage_dic, 'ConditionSwitchID')
+                if HW_cond_switch_dic != None:
+                    # the given HW Switch is controlled as well by a condition switch
+                    # new conditional controlling branch to create
+                    HW_switch_data_dic['switch_branches_nb'] += 1
+                    HW_switch_data_dic['controlling_switches'][HW_object_dic['_HW_uid'][-6:]] = []
+                    self.HW_ODF_get_controlling_switches(HW_cond_switch_dic, HW_switch_data_dic, HW_switch_data_dic['switch_branches_nb'])  # HW_object_dic['_HW_uid'][-6:])
+
+    #-------------------------------------------------------------------------------------------------
+    def HW_ODF_save2organfile(self, file_name_str):
+        # save the Hauptwerk ODF objects dictionary into the given .organ ODF file in a GrandOrgue like format (for development/debug purpose)
+
+        with open(file_name_str, 'w', encoding=ENCODING_UTF8_BOM) as f:
+            f.write(';Hauptwerk ODF XML formatted in a GrandOrgue ODF manner\n')
+            f.write('\n')
+            for object_type_dic in self.HW_ODF_dic.values():
+                for HW_object_dic in object_type_dic.values():
+                    f.write(f'[{HW_object_dic["_HW_uid"]}]\n')
+                    for obj_attr_name_str, obj_attr_value in HW_object_dic.items():
+                        if obj_attr_name_str in ('_parents', '_children'):
+                            # this attribute contains a list of objects dictionaries
+                            obj_attr_value_str = ''
+                            for HW_object_dic2 in obj_attr_value:
+                                obj_attr_value_str += HW_object_dic2['_HW_uid'] + '  '
+                        else:
+                            obj_attr_value_str = str(obj_attr_value)
+                        f.write(f'{obj_attr_name_str}={obj_attr_value_str}\n')
+                    f.write('\n')
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_save2organfile(self, file_name_str):
+        # save the GrandOrgue ODF objects dictionary into the given .organ ODF file
+        # return True or False whether the saving has succeeded or not
+
+        # check the extension of the given file name
+        filename_str, file_extension_str = os.path.splitext(file_name_str)
+        if file_extension_str != '.organ':
+            self.events_log_add(f'The file "{file_name_str}" does not have the expected extension .organ')
+            return False
+
+        with open(file_name_str, 'w', encoding=ENCODING_UTF8_BOM) as f:
+            f.write(';GrandOrgue ODF automatically generated from a Hauptwerk ODF by the OdfEdit tool (github.com/GrandOrgue/ODFEdit)\n')
+            f.write('\n')
+            for obj_id, obj_attr_dic in self.GO_ODF_dic.items():
+                f.write(f'[{obj_id}]\n')
+                for obj_attr_name_str, obj_attr_value_str in obj_attr_dic.items():
+                    f.write(f'{obj_attr_name_str}={obj_attr_value_str}\n')
+                f.write('\n')
+
+        self.events_log_add(f'\nGrandOrgue ODF built and saved in "{file_name_str}"')
+        return True
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_from_HW_ODF(self, HW_ODF_file_name_str, GO_ODF_file_name, progress_status_update_fct):
+        # build and save a GrandOrgue ODF from the given Hauptwerk ODF and its associated sample set (which is not touched)
+        # use the given function callback to display a progression status in the GUI
+        # return False if an issue has occured, else return True
+
+        self.progress_status_show_function = progress_status_update_fct
+
+        # load the HW ODF in the HW ODF dictionary
+        progress_status_update_fct('Loading the Hauptwerk ODF...')
+        if self.HW_ODF_load_from_file(HW_ODF_file_name_str):
+
+            # link the HW objects together
+            progress_status_update_fct('Building the Hauptwerk ODF objects tree...')
+            self.HW_ODF_do_links_between_objects()
+
+            # clear the content of the GO ODF dictionary
+            self.GO_ODF_dic.clear()
+
+            # reset the content of the GO object types numbers dictionary
+            self.GO_objects_type_nb_dic.clear()
+            self.GO_objects_type_nb_dic['Stop'] = 0
+            self.GO_objects_type_nb_dic['Coupler'] = 0
+
+            # build the various GO objects in the GO ODF dictionary from the HW ODF
+            # the order of calling the below functions is important, there are dependencies between some of them
+
+            progress_status_update_fct('Building the GrandOrgue Organ object...')
+            if self.GO_ODF_build_Organ_object() == None :
+                self.events_log_add(f'ERROR : issue occured while building the GO Organ object')
+                return False
+
+##            progress_status_update_fct('Building the GrandOrgue WindchestGroup objects...')
+##            if self.GO_ODF_build_WindchestGroup_objects() == 0 :
+##                self.events_log_add(f'ERROR : no GO WindchestGroup object could be created')
+##                return False
+
+##            progress_status_update_fct('Building the GrandOrgue Rank objects...')
+##            if self.GO_ODF_build_Rank_objects() == 0 :
+##                self.events_log_add(f'ERROR : no GO Rank object could be created')
+##                return False
+
+            # build the GO Panel objects by sorted HW DisplayPage ID
+            progress_status_update_fct('Building the GrandOrgue Panel objects...')
+            for HW_disp_page_id in sorted(self.HW_ODF_dic['DisplayPage'].keys()):
+                HW_disp_page_dic = self.HW_ODF_get_object_dic('DisplayPage', HW_disp_page_id)
+                self.GO_ODF_build_Panel_object(HW_disp_page_dic)
+
+            # build the GO Manual objects by HW DisplayPage
+            progress_status_update_fct('Building the GrandOrgue Manual objects...')
+            for HW_division_id in sorted(self.HW_ODF_dic['Division'].keys()):
+                # parse the defined HW Division objects by increasing ID order
+                HW_division_dic = self.HW_ODF_dic['Division'][HW_division_id]
+                self.GO_ODF_build_Manual_object(HW_division_dic)
+
+            # build the GO Coupler objects linked to the HW Division / Keyboard / KeyAction objects
+            for HW_division_dic in self.HW_ODF_dic['Division'].values():
+                # parse the defined HW Division objects
+                for HW_keyboard_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_division_dic, 'Keyboard', TO_CHILD):
+                    # parse the HW Keyboard objects belonging to the current HW Division
+                    for HW_key_action_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_keyboard_dic, 'KeyAction', TO_CHILD):
+                        # parse the HW KeyAction objects belonging to the current HW Keyboard
+                        if self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_key_action_dic, 'ConditionSwitchID') != None:
+                            # the current KeyAction is controlled by a switch, it is a normally a keyboards coupler
+                            progress_status_update_fct(f'Building the GrandOrgue Coupler objects... {HW_key_action_dic["Name"]}')
+                            self.GO_ODF_build_Coupler_object(HW_key_action_dic)
+
+            # build the GO Stop objects linked to the HW Division objects
+            for HW_division_dic in self.HW_ODF_dic['Division'].values():
+                # parse the defined HW Division objects
+                for HW_stop_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_division_dic, 'Stop', TO_CHILD):
+                    # parse the HW Stop objects belonging to the current HW Division
+                    progress_status_update_fct(f'Building the GrandOrgue Stop objects... {HW_stop_dic["Name"]}')
+                    self.GO_ODF_build_Stop_object(HW_stop_dic)
+
+            # build the other GO objects based on the HW visible control objects which have not been yet associated to a GO object
+            progress_status_update_fct('Building the other GrandOrgue control objects...')
+            for HW_disp_page_dic in self.HW_ODF_dic['DisplayPage'].values():
+                # parse the various HW DisplayPage objects
+                for HW_switch_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_disp_page_dic, 'Switch', TO_CHILD):
+                    # parse the HW Switch objects displayed in the current HW DisplayPage
+                    if HW_switch_dic['_GO_uid'] == '':
+                        # the HW Switch is not already assigned to a GO object, try it
+                        self.GO_ODF_build_Stop_object(HW_switch_dic)
+
+            progress_status_update_fct('Completing the build...')
+##            print(self.GO_objects_type_nb_dic)
+
+            if self.silent_loop_file_used:
+                # copy the file SilentLoop.wav in the root folder of the HW sample set if used by a GO Stop
+                if not(os.path.isfile(self.HW_sample_set_path_str + os.sep + 'SilentLoop.wav')):
+                    # the file is not already copied in the HW sample set root folder
+                    shutil.copy(f"{os.path.dirname(__file__) + os.sep + 'SilentLoop.wav'}", self.HW_sample_set_path_str)
+
+            # remove from the GO ODF the attributes _GO_uid added in Panel and Manual objects for building the ODF
+            for obj_uid, obj_attr_dic in self.GO_ODF_dic.items():
+                if obj_uid[:-3] in ('Panel', 'Manual'):
+                    obj_attr_list = list(obj_attr_dic.keys())
+                    for obj_attr_name_str in obj_attr_list:
+                        if obj_attr_name_str == '_GO_uid':
+                            del self.GO_ODF_dic[obj_uid][obj_attr_name_str]
+
+            # save the HW ODF data in a GO ODF format (for development/debug purpose)
+##            self.HW_ODF_save2organfile(HW_ODF_file_name_str + '.organ')
+
+            # save the built GO ODF data in a .organ file
+            self.GO_ODF_save2organfile(GO_ODF_file_name)
+
+        progress_status_update_fct('')
+        return True
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Organ_object(self):
+        # build the GO Organ object from the HW ODF
+        # return None if an issue has occured, else return the created GO Organ dictionary
+
+        # HW objects used : _General, RequiredInstallationPackage
+
+        # get the dictionary of the HW _General object
+        HW_general_dic = self.HW_ODF_get_object_dic('_General')
+        if HW_general_dic == None:
+            self.events_log_add(f'ERROR : missing _General object in the Hauptwerk ODF dictionary')
+            return None
+
+        # check if the folders of the required installation packages are present in the folder OrganInstallationPackages
+        self.available_HW_packages_id_list = []
+        for HW_install_pack_dic in self.HW_ODF_dic['RequiredInstallationPackage'].values():
+            # parse and check the defined HW RequiredInstallationPackage objects
+            HW_package_id = myint(self.HW_ODF_get_attribute_value(HW_install_pack_dic, 'InstallationPackageID', True))
+            if HW_package_id == None:
+                return None
+
+            HW_package_name = self.HW_ODF_get_attribute_value(HW_install_pack_dic, 'Name', True)
+            HW_package_supplier = self.HW_ODF_get_attribute_value(HW_install_pack_dic, 'SupplierName', True)
+            if HW_package_name == None or HW_package_supplier == None:
+                return None
+
+            folder_name = os.path.join(self.HW_sample_set_path_str, 'OrganInstallationPackages', str(HW_package_id).zfill(6))
+            if not os.path.isdir(folder_name):
+                # the folder doesn't exist in the sample set package
+                self.events_log_add(f'WARNING : The package ID {HW_package_id} named "{HW_package_name}" provided by "{HW_package_supplier}"')
+                self.events_log_add(f'WARNING : is not present in the folder {folder_name}')
+                self.events_log_add(f'WARNING : Some graphical or sound elements of this organ may be not rendered in GrandOrgue')
+            else:
+                self.available_HW_packages_id_list.append(HW_package_id)
+
+        # recover the main installation package ID
+        HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_general_dic, 'OrganInfo_InstallationPackageID', True))
+        if HW_install_package_id == None:
+            return None
+
+        # add an entry in the GO ODF dictionary for the Organ object
+        GO_organ_dic = self.GO_ODF_dic['Organ'] = {}
+
+        GO_organ_dic['ChurchName'] = mystr(self.HW_ODF_get_attribute_value(HW_general_dic, 'Identification_Name'))
+        GO_organ_dic['ChurchAddress'] = mystr(self.HW_ODF_get_attribute_value(HW_general_dic, 'OrganInfo_Location'))
+        GO_organ_dic['OrganBuilder'] = mystr(self.HW_ODF_get_attribute_value(HW_general_dic, 'OrganInfo_Builder'))
+        GO_organ_dic['OrganBuildDate'] = mystr(self.HW_ODF_get_attribute_value(HW_general_dic, 'OrganInfo_BuildDate'))
+        #GO_organ_dic['OrganComments'] = mystr(self.HW_ODF_get_attribute_value(HW_general_dic, 'OrganInfo_Comments'))
+        GO_organ_dic['OrganComments'] = 'GrandOrgue definition file automatically generated by the tool OdfEdit for a sample set made for Hauptwerk'
+        GO_organ_dic['RecordingDetails'] = mystr(self.HW_ODF_get_attribute_value(HW_general_dic, 'Control_OrganDefinitionSupplierName', True))
+
+        GO_organ_dic['InfoFilename'] = mystr(self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_general_dic, 'OrganInfo_InfoFilename'), HW_install_package_id))
+
+        GO_organ_dic['HasPedals'] = 'N'
+        GO_organ_dic['NumberOfManuals'] = 0
+        GO_organ_dic['NumberOfPanels'] = 0
+        GO_organ_dic['NumberOfWindchestGroups'] = 0
+        GO_organ_dic['NumberOfRanks'] = 0
+        GO_organ_dic['NumberOfSwitches'] = 0
+        GO_organ_dic['NumberOfEnclosures'] = 0
+        GO_organ_dic['NumberOfTremulants'] = 0
+        GO_organ_dic['NumberOfGenerals'] = 0
+        GO_organ_dic['NumberOfDivisionalCouplers'] = 0
+        GO_organ_dic['NumberOfReversiblePistons'] = 0
+
+        GO_organ_dic['GeneralsStoreDivisionalCouplers'] = 'Y'
+        GO_organ_dic['DivisionalsStoreTremulants'] = 'Y'
+        GO_organ_dic['DivisionalsStoreIntermanualCouplers'] = 'Y'
+        GO_organ_dic['DivisionalsStoreIntramanualCouplers'] = 'Y'
+        GO_organ_dic['CombinationsStoreNonDisplayedDrawstops'] = 'N'
+
+        GO_organ_dic['Gain'] = str(float(self.HW_ODF_get_attribute_value(HW_general_dic, 'AudioOut_AmplitudeLevelAdjustDecibels')))
+
+        # recover the ID of the HW default display page (will be used in other GO_ODF_build_xxx functions)
+        self.HW_default_display_page_id = myint(self.HW_ODF_get_attribute_value(HW_general_dic, 'SpecialObjects_DefaultDisplayPageID', True))
+        if self.HW_default_display_page_id == None:
+            return None
+
+        # add in the HW _General object the ID of the corresponding GO object
+        HW_general_dic['_GO_uid'] = 'Organ'
+
+        return GO_organ_dic
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Panel_object(self, HW_disp_page_dic):
+        # build the GO Panel999 corresponding to the given HW DisplayPage
+        # build also the GO Panel999Image999 and Panel999Element999 Label objects of this panel
+        # return the dictionary of the created GO Panel object, or None if no panel created
+
+        # HW objects used :
+        #   _General
+        #   DisplayPage C> ImageSetInstance
+        #   DisplayPage C> TextInstance
+
+        # get the ID of the HW DisplayPage object
+        HW_page_id = myint(self.HW_ODF_get_attribute_value(HW_disp_page_dic, 'PageID', True))
+
+        if self.HW_ODF_get_linked_objects_dic_by_type(HW_disp_page_dic, 'Keyboard', TO_CHILD, True) != None:
+            # the current HW DisplayPage object contains at least one Keyboard object in his children, so it is the HW console page
+            self.HW_console_display_page_id = HW_page_id
+
+        if HW_page_id == self.HW_default_display_page_id:
+            # this is the HW default display page, so assigned to the GO Panel000
+            GO_panel_uid = 'Panel000'
+        else:
+            self.GO_ODF_dic['Organ']['NumberOfPanels'] += 1  # Panel000 is not counted
+            GO_panel_uid = 'Panel' + str(self.GO_ODF_dic['Organ']['NumberOfPanels']).zfill(3)
+        # add an GO Panel 999 in the GO ODF dictionary
+        GO_panel_dic = self.GO_ODF_dic[GO_panel_uid] = {}
+
+        GO_panel_dic['_GO_uid'] = GO_panel_uid
+        GO_panel_dic['Name'] = self.HW_ODF_get_attribute_value(HW_disp_page_dic, 'Name')
+        GO_panel_dic['HasPedals'] = 'N'
+        GO_panel_dic['NumberOfGUIElements'] = 0
+        GO_panel_dic['NumberOfImages'] = 0
+
+        if HW_page_id == self.HW_console_display_page_id:
+            # the current HW DisplayPage object is the HW console page, get the dimensions of the console page defined in the HW _General object
+            HW_general_dic = self.HW_ODF_get_object_dic('_General')
+            GO_panel_dic['DispScreenSizeHoriz'] = myint(self.HW_ODF_get_attribute_value(HW_general_dic, 'Display_ConsoleScreenWidthPixels'))
+            GO_panel_dic['DispScreenSizeVert'] = myint(self.HW_ODF_get_attribute_value(HW_general_dic, 'Display_ConsoleScreenHeightPixels'))
+            GO_panel_dic['HasPedals'] = self.GO_ODF_dic['Organ']['HasPedals']  # value set before in GO_ODF_build_Manual_objects
+        else:
+            GO_panel_dic['DispScreenSizeHoriz'] = None  # will be set later while creating GO Panel999Image999 objects
+            GO_panel_dic['DispScreenSizeVert'] = None   # will be set later while creating GO Panel999Image999 objects
+            GO_panel_dic['HasPedals'] = 'N'
+
+        # set the other mandatory attributes of a GO panel at a default value, no import from Hauptwerk ODF for the GO built-in console drawing
+        GO_panel_dic['DispDrawstopBackgroundImageNum'] = '1'
+        GO_panel_dic['DispDrawstopInsetBackgroundImageNum'] = '1'
+        GO_panel_dic['DispConsoleBackgroundImageNum'] = '1'
+        GO_panel_dic['DispKeyHorizBackgroundImageNum'] = '1'
+        GO_panel_dic['DispKeyVertBackgroundImageNum'] = '1'
+        GO_panel_dic['DispControlLabelFont'] = 'Arial'
+        GO_panel_dic['DispShortcutKeyLabelFont'] = 'Arial'
+        GO_panel_dic['DispShortcutKeyLabelColour'] = 'Black'
+        GO_panel_dic['DispGroupLabelFont'] = 'Arial'
+        GO_panel_dic['DispDrawstopCols'] = '2'
+        GO_panel_dic['DispDrawstopRows'] = '1'
+        GO_panel_dic['DispDrawstopColsOffset'] = 'N'
+        GO_panel_dic['DispPairDrawstopCols'] = 'N'
+        GO_panel_dic['DispExtraDrawstopRows'] = '0'
+        GO_panel_dic['DispExtraDrawstopCols'] = '0'
+        GO_panel_dic['DispButtonCols'] = '1'
+        GO_panel_dic['DispExtraButtonRows'] = '0'
+        GO_panel_dic['DispExtraPedalButtonRow'] = 'N'
+        GO_panel_dic['DispButtonsAboveManuals'] = 'N'
+        GO_panel_dic['DispExtraDrawstopRowsAboveExtraButtonRows'] = 'N'
+        GO_panel_dic['DispTrimAboveManuals'] = 'N'
+        GO_panel_dic['DispTrimBelowManuals'] = 'N'
+        GO_panel_dic['DispTrimAboveExtraRows'] = 'N'
+
+        # add in the HW DisplayPage object the ID of the corresponding GO object
+        HW_disp_page_dic['_GO_uid'] = GO_panel_uid
+
+        # build the GO static images of the panel by order of layer number
+        HW_images_list_per_layer_dict = {}
+        for HW_img_set_inst_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_disp_page_dic, 'ImageSetInstance', TO_CHILD):
+            # parse the HW ImageSetInstance objects of the given HW DisplayPage
+            # to store in a local dictionary the static images of the given HW DisplayPage grouped by layer number
+            if len(HW_img_set_inst_dic['_parents']) == 1:
+                # the current HW ImageSetInstance object has a single parent (a DisplayPage) : it is a static image
+                HW_layer_nb_int = myint(self.HW_ODF_get_attribute_value(HW_img_set_inst_dic, 'ScreenLayerNumber'))
+                if HW_layer_nb_int == None:
+                    # there is no layer defined, set by default the layer 1
+                    HW_layer_nb_int = 1
+                if HW_layer_nb_int not in HW_images_list_per_layer_dict.keys():
+                    # there is not yet an entry in the dictionary for the layer number of the current HW ImageSetInstance
+                    # add one entry initialized with an empty list
+                    HW_images_list_per_layer_dict[HW_layer_nb_int] = []
+                # add the current HW ImageSetInstance to the list of the layer numbers
+                HW_images_list_per_layer_dict[HW_layer_nb_int].append(HW_img_set_inst_dic)
+        for HW_layer_nb_int in sorted(HW_images_list_per_layer_dict.keys()):
+            # parse the HW display layers by ascending order
+            for HW_img_set_inst_dic in HW_images_list_per_layer_dict[HW_layer_nb_int]:
+                # parse the HW ImageSetInstance objects of the current display layer
+                self.GO_ODF_build_PanelImage_object(HW_img_set_inst_dic, GO_panel_dic)
+
+        # build the GO labels of the panel
+        for HW_text_inst_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_disp_page_dic, 'TextInstance', TO_CHILD):
+            # parse the HW TextInstance objects of the given display page
+            self.GO_ODF_build_PanelElement_Label_object(HW_text_inst_dic, GO_panel_dic)
+
+        return GO_panel_dic
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_PanelImage_object(self, HW_img_set_inst_dic, GO_panel_dic):
+        # build the GO Panel999Image999 object corresponding to the given HW ImageSetInstance and in the given GO Panel
+        # return the dictionary of the created GO PaneL Image object, or None if no panel image created
+        # sub-function of GO_ODF_build_Panel_object
+
+        # HW objects used : ImageSetInstance C> ImageSet C> ImageSetElement
+
+        image_attr_dic = {}
+        if self.HW_ODF_get_image_attributes(HW_img_set_inst_dic, image_attr_dic) and image_attr_dic['BitmapFilename'] != None:
+            # the data about the current HW ImageSetInstance object have been recovered successfully and an image file name is defined
+
+            if image_attr_dic['ImageWidthPixels'] == None or image_attr_dic['ImageHeightPixels'] == None:
+                # if one dimension of the image is not defined, get the dimensions of the image in the bitmap file
+                image_filename = os.path.dirname(self.HW_ODF_file_name_str) + os.sep + image_attr_dic['BitmapFilename'].replace('\\', os.sep)
+                if os.path.isfile(image_filename):
+                    im = Image.open(image_filename)
+                    image_attr_dic['ImageHeightPixels'] = im.size[1]
+                    image_attr_dic['ImageWidthPixels'] = im.size[0]
+                else:
+                    image_attr_dic['ImageHeightPixels'] = None
+                    image_attr_dic['ImageWidthPixels'] = None
+
+            # define an additional GO Panel999Image999 object for the given GO Panel
+            GO_panel_uid = GO_panel_dic['_GO_uid']
+            self.GO_ODF_dic[GO_panel_uid]['NumberOfImages'] += 1
+            GO_panel_image_uid = GO_panel_uid + 'Image' + str(self.GO_ODF_dic[GO_panel_uid]['NumberOfImages']).zfill(3)
+            GO_panel_image_dic = self.GO_ODF_dic[GO_panel_image_uid] = {}
+
+            GO_panel_image_dic['PositionX'] = image_attr_dic['LeftXPosPixels']
+            GO_panel_image_dic['PositionY'] = image_attr_dic['TopYPosPixels']
+            GO_panel_image_dic['Width'] = image_attr_dic['ImageWidthPixels']
+            GO_panel_image_dic['Height'] = image_attr_dic['ImageHeightPixels']
+            GO_panel_image_dic['Image'] = image_attr_dic['BitmapFilename']
+            if image_attr_dic['TransparencyMaskBitmapFilename'] != None:
+                GO_panel_image_dic['Mask'] = image_attr_dic['TransparencyMaskBitmapFilename']
+
+            image_max_x_int = image_attr_dic['LeftXPosPixels'] + image_attr_dic['ImageWidthPixels']
+            image_max_y_int = image_attr_dic['TopYPosPixels'] + image_attr_dic['ImageHeightPixels']
+
+            # increase if necessary the GO panel dimensions to display entirely the added image
+            if GO_panel_dic['DispScreenSizeHoriz'] == None or image_max_x_int > GO_panel_dic['DispScreenSizeHoriz']:
+                GO_panel_dic['DispScreenSizeHoriz'] = image_max_x_int
+            if GO_panel_dic['DispScreenSizeVert'] == None or image_max_y_int > GO_panel_dic['DispScreenSizeVert']:
+                GO_panel_dic['DispScreenSizeVert'] = image_max_y_int
+
+            # add in the HW ImageSetInstance object the ID of the corresponding GO object
+            HW_img_set_inst_dic['_GO_uid'] = GO_panel_image_uid
+
+            return GO_panel_image_dic
+        else:
+            return None
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_PanelElement_Label_object(self, HW_text_inst_dic, GO_panel_dic):
+        # build the GO Panel999Element999 object (type Label) corresponding to the given HW TextInstance and in the given GO Panel
+        # return the dictionary of the created GO Panel Element object, or None if no panel element created
+        # sub-function of GO_ODF_build_Panel_object
+
+        # HW objects used :
+        #    TextInstance C> TextStyle
+        #    TextInstance C> ImageSetInstance C> ImageSet C> ImageSetElement
+
+        text_attr_dic = {}
+        if self.HW_ODF_get_text_attributes(HW_text_inst_dic, text_attr_dic):
+            # the data about the current HW TextInstance object (and his linked HW ImageSetInstance object if any) have been recovered successfully
+
+            # define an additional GO Panel999Element999 object with label type in the given GO panel
+            GO_panel_uid = GO_panel_dic['_GO_uid']
+            self.GO_ODF_dic[GO_panel_uid]['NumberOfGUIElements'] += 1
+            GO_panel_element_uid = GO_panel_uid + 'Element' + str(self.GO_ODF_dic[GO_panel_uid]['NumberOfGUIElements']).zfill(3)
+            GO_panel_element_dic = self.GO_ODF_dic[GO_panel_element_uid] = {}
+
+            GO_panel_element_dic['Type'] = 'Label'
+            GO_panel_element_dic['Name'] = text_attr_dic['Text']
+
+            # recover the display dimensions of the label text according to the font name/size/weight
+            text_font = tkf.Font(family=text_attr_dic['Face_WindowsName'], size=-1 * text_attr_dic['Font_SizePixels'],
+                                 weight='bold' if text_attr_dic['Font_WeightCode'] == 3 else 'normal')
+            text_width = text_font.measure(text_attr_dic['Text'])
+            text_height = text_font.metrics('ascent') + text_font.metrics('descent')
+
+            if text_attr_dic['Font_SizePixels'] != None:
+                GO_panel_element_dic['DispLabelFontSize'] = text_attr_dic['Font_SizePixels']
+            else:
+                GO_panel_element_dic['DispLabelFontSize'] = 10
+
+            if text_attr_dic['Face_WindowsName'] != None:
+                GO_panel_element_dic['DispLabelFontName'] = text_attr_dic['Face_WindowsName']
+
+            if text_attr_dic['Colour_Red'] != None and text_attr_dic['Colour_Green'] != None and text_attr_dic['Colour_Blue'] != None:
+                GO_panel_element_dic['DispLabelColour'] = '#%02x%02x%02x' % (text_attr_dic['Colour_Red'],
+                                                                             text_attr_dic['Colour_Green'],
+                                                                             text_attr_dic['Colour_Blue'])
+
+            if (not 'BitmapFilename' in text_attr_dic.keys()) or text_attr_dic['BitmapFilename'] == None:
+                # text without bitmap or with bitmap undefined, use the default GO label background image (80x25)
+                # the GO X,Y positions are the top left corner of the label background image or the bitmap
+
+                # compute the coordinates of the center of the text according to the alignment of the text
+                if text_attr_dic['HorizontalAlignmentCode'] == 0: # centered
+                    xpos = text_attr_dic['XPosPixels']
+                elif text_attr_dic['HorizontalAlignmentCode'] == 2: # right aligned
+                    xpos = text_attr_dic['XPosPixels'] - int(text_width / 2)
+                else:  # left aligned
+                    xpos = text_attr_dic['XPosPixels'] + int(text_width / 2)
+
+                if text_attr_dic['VerticalAlignmentCode'] == 0: # centered
+                    ypos = text_attr_dic['YPosPixels']
+                elif text_attr_dic['VerticalAlignmentCode'] == 2: # bottom aligned
+                    ypos = text_attr_dic['YPosPixels'] - int(text_height / 2)
+                else:  # top aligned
+                    ypos = text_attr_dic['YPosPixels'] + int(text_height / 2)
+
+                GO_panel_element_dic['DispImageNum'] = 3
+                if xpos >= 40:
+                    GO_panel_element_dic['DispXpos'] = xpos - 40  # 40 is the half width of the label image
+                else:
+                    GO_panel_element_dic['DispXpos'] = 0
+
+                if ypos >= 13:
+                    GO_panel_element_dic['DispYpos'] = ypos - 13      # 13 is the half height of the label image
+                else:
+                    GO_panel_element_dic['DispYpos'] = 0
+
+                if 'LeftXPosPixels' in text_attr_dic.keys():
+                    # label with image position datas but without bitmap
+                    if text_attr_dic['LeftXPosPixels'] != None:
+                        GO_panel_element_dic['PositionX'] = text_attr_dic['LeftXPosPixels']
+                    if text_attr_dic['TopYPosPixels'] != None:
+                        GO_panel_element_dic['PositionY'] = text_attr_dic['TopYPosPixels']
+            else:
+                # the text is not inside an image
+                # compute the coordinates of the text rectangle according to the alignment of the text
+                if text_attr_dic['XPosPixels'] != None:
+                    if text_attr_dic['HorizontalAlignmentCode'] == 0: # centered
+                        xpos = text_attr_dic['XPosPixels'] - int(text_width / 2)
+                    elif text_attr_dic['HorizontalAlignmentCode'] == 2: # right aligned
+                        xpos = text_attr_dic['XPosPixels'] - text_width
+                    else:  # left aligned
+                        xpos = text_attr_dic['XPosPixels']
+                    if xpos < 0: xpos = 0
+                    GO_panel_element_dic['TextRectLeft'] = xpos
+                    GO_panel_element_dic['TextRectWidth'] = text_width
+
+                if text_attr_dic['YPosPixels'] != None:
+                    if text_attr_dic['VerticalAlignmentCode'] == 0: # centered
+                        ypos = myint(text_attr_dic['YPosPixels']) - int(text_height / 2)
+                    elif text_attr_dic['VerticalAlignmentCode'] == 2: # bottom aligned
+                        ypos = myint(text_attr_dic['YPosPixels']) - text_height
+                    else:  # top aligned
+                        ypos = myint(text_attr_dic['YPosPixels'])
+                    if ypos < 0: ypos = 0
+                    GO_panel_element_dic['TextRectTop'] = ypos
+                    GO_panel_element_dic['TextRectHeight'] = text_height
+
+                # manage the image attributes of the current HW TextInstance
+                if text_attr_dic['BitmapFilename'] != None:
+                    GO_panel_element_dic['Image'] = text_attr_dic['BitmapFilename']
+
+                    if text_attr_dic['ImageWidthPixels'] != None:
+                        GO_panel_element_dic['Width'] = text_attr_dic['ImageWidthPixels']
+                    if text_attr_dic['ImageHeightPixels'] != None:
+                        GO_panel_element_dic['Height'] = text_attr_dic['ImageHeightPixels']
+
+                if text_attr_dic['TransparencyMaskBitmapFilename'] != None:
+                    GO_panel_element_dic['Mask'] = text_attr_dic['TransparencyMaskBitmapFilename']
+
+                if text_attr_dic['BoundingBoxWidthPixelsIfWordWrap'] != None:
+                    GO_panel_element_dic['TextRectWidth'] = str(int(text_attr_dic['BoundingBoxWidthPixelsIfWordWrap']) - 1)
+                if text_attr_dic['BoundingBoxHeightPixelsIfWordWrap'] != None:
+                    GO_panel_element_dic['TextRectHeight'] = text_attr_dic['BoundingBoxHeightPixelsIfWordWrap']
+
+                if text_attr_dic['LeftXPosPixels'] != None:
+                    GO_panel_element_dic['PositionX'] = text_attr_dic['LeftXPosPixels']
+                if text_attr_dic['TopYPosPixels'] != None:
+                    GO_panel_element_dic['PositionY'] = text_attr_dic['TopYPosPixels']
+
+            # add in the HW TextInstance and ImageSetInstance objects the ID of the corresponding GO object
+            HW_text_inst_dic['_GO_uid'] = GO_panel_element_uid
+            if text_attr_dic['ImageSetInstanceDic'] != None:
+                text_attr_dic['ImageSetInstanceDic']['_GO_uid'] = GO_panel_element_uid
+
+            return GO_panel_element_dic
+        else:
+            return None
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Manual_object(self, HW_object_dic):
+        # build the GO Manual999 object based on the given HW object : Keyboard or KeyboardKey or Division
+        # keyboard_key  : seen in sample set Graboswki Ermelo, Paradisi Groningen/StMichel
+        # keyboard      : seen in sample set Graboswki Ledziny/Skrzatusz, Augustine Dreischor/Lorris
+
+        # HW objects used :
+        #      1 : Division C> Keyboard C> KeyboardKey P> Switch C> ImageSetInstance C> ImageSet
+        #   or 2 : Division C> Keyboard C> KeyImageSet C> ImageSet
+
+        if HW_object_dic['_HW_uid'][:-6] == 'KeyboardKey':
+            # the given HW object is a KeyboardKey
+            # get the HW Keyboard object to which belongs the given HW KeyboardKey
+            HW_division_dic = None
+            HW_keyboard_dic = self.HW_ODF_get_object_dic_by_ref_id('Keyboard', HW_object_dic, 'KeyboardID')
+        elif HW_object_dic['_HW_uid'][:-6] == 'Keyboard':
+            # the given HW object is a Keyboard
+            HW_division_dic = None
+            HW_keyboard_dic = HW_object_dic
+        elif HW_object_dic['_HW_uid'][:-6] == 'Division':
+            # the given HW object is a Division
+            HW_division_dic = HW_object_dic
+            HW_keyboard_dic = None
+            HW_keyboards_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_division_dic, 'Keyboard', TO_CHILD)
+            for HW_keyb_dic in HW_keyboards_dic_list:
+                # parse the HW Keyboard objects belonging to the given HW Division, to search the first one which has a KeyImageSet or KeyboardKey child
+                if (self.HW_ODF_get_linked_objects_dic_by_type(HW_keyb_dic, 'KeyImageSet', TO_CHILD, True) != None or
+                    self.HW_ODF_get_linked_objects_dic_by_type(HW_keyb_dic, 'KeyboardKey', TO_CHILD, True) != None):
+                    HW_keyboard_dic = HW_keyb_dic
+                    break
+        else:
+            # wrong given HW object type
+            self.events_log_add(f'INTERNAL ERROR : wrong object type {HW_object_dic["_HW_uid"]} provided to GO_ODF_build_Manual_object')
+            return False
+
+        # get the HW Division to which belongs the HW Keyboard if not already known
+        if HW_division_dic == None:
+            HW_division_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_keyboard_dic, 'Division', TO_PARENT, True)
+            if HW_division_dic == None:
+                # cannot continue if the division ID is unknown
+                self.events_log_add(f'INTERNAL ERROR : unable to know to which division belongs the keyboard {HW_keyboard_dic["Name"]}')
+                return False
+        HW_division_id = int(HW_division_dic['_HW_uid'][-6:])
+        HW_division_name = self.HW_ODF_get_attribute_value(HW_division_dic, 'Name')
+
+        if HW_division_dic['_GO_uid'] != '':
+            # a GO manual has been already assigned to the HW division, we can exit
+            return True
+
+        # get how the HW keyboard is graphically defined
+        keyboard_display_mode = 0  # by default the keyboard is not visible
+        if HW_keyboard_dic != None:
+            if self.HW_ODF_get_linked_objects_dic_by_type(HW_keyboard_dic, 'KeyboardKey', TO_CHILD, True) != None:
+                keyboard_display_mode = 1  # the keyboard is graphically defined by KeyboardKey objects (which should be linked to a Switch + ImageSetInstance)
+            elif self.HW_ODF_get_attribute_value(HW_keyboard_dic, 'KeyGen_KeyImageSetID') != None:
+                keyboard_display_mode = 2  # the keyboard is graphically defined by a KeyImageSet object
+
+        # define the GO Manual999 object to associate to this HW Division
+        if HW_division_id == 1:
+            # Pedal division
+            GO_manual_uid = 'Manual000'
+        else:
+            self.GO_ODF_dic['Organ']['NumberOfManuals'] += 1
+            GO_manual_uid = 'Manual' + str(self.GO_ODF_dic['Organ']['NumberOfManuals']).zfill(3)
+        GO_manual_dic = self.GO_ODF_dic[GO_manual_uid] = {}
+        GO_manual_dic['_GO_uid'] = GO_manual_uid
+
+        # add in the HW Division and Keyboard objects the UID of the corresponding GO object
+        HW_division_dic['_GO_uid'] = GO_manual_uid
+        if HW_keyboard_dic != None:
+            HW_keyboard_dic['_GO_uid'] = GO_manual_uid
+
+        # update in the GO Organ object the HasPedal attribute value
+        if GO_manual_uid == 'Manual000':
+            self.GO_ODF_dic['Organ']['HasPedals'] = 'Y'
+
+        # recover the number of keys of the keyboard and its first and last MIDI note numbers
+        if keyboard_display_mode == 1:
+            # recover this from the HW KeyboardKey objects belonging to the HW Keyboard and being linked to an ImageSetInstance
+            first_midi_note_nb_int = 999
+            last_midi_note_nb_int = 0
+            nb_keys_int = 0
+            keys_switch_dic = {}  # dictionnary with as key the MIDI note number and as value the corresponding HW Switch object
+            for HW_keyboard_key_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_keyboard_dic, 'KeyboardKey', TO_CHILD):
+                # parse the HW KeyboardKey objects which are children of the HW Keyboard
+                # recover the HW ImageSetInstance associated to the HW Switch associated to the current HW KeyboardKey
+                HW_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_keyboard_key_dic, 'SwitchID')
+                HW_img_set_instance_id = myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetInstanceID'))
+                if HW_img_set_instance_id != None:
+                    # the current HW KeyboardKey has an associated HW ImageSetInstance (in Grabowski Enerlo the highest keys have no image)
+                    nb_keys_int += 1
+                    # get the MIDI note number of the current HW KeyboardKey object
+                    midi_note_nb_int = myint(self.HW_ODF_get_attribute_value(HW_keyboard_key_dic, 'NormalMIDINoteNumber'))
+                    if midi_note_nb_int == None: midi_note_nb_int = 60 # observed with Sound Paradisi sample sets, the MIDI note 60 is not defined
+                    # update the first and last MIDI note numbers
+                    if midi_note_nb_int < first_midi_note_nb_int: first_midi_note_nb_int = midi_note_nb_int
+                    if midi_note_nb_int > last_midi_note_nb_int:  last_midi_note_nb_int = midi_note_nb_int
+                    # add an entry in the keys switch dictionary with the HW Switch associated to the current HW KeyboardKey
+                    keys_switch_dic[midi_note_nb_int] = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_keyboard_key_dic, 'SwitchID')
+                    # add in the HW KeyboardKey object the UID of the corresponding GO object
+                    HW_keyboard_key_dic['_GO_uid'] = GO_manual_uid
+        elif keyboard_display_mode == 2:
+            # recover this from the KeyGen attributes of the HW Keyboard
+            nb_keys_int = myint(self.HW_ODF_get_attribute_value(HW_keyboard_dic, 'KeyGen_NumberOfKeys'))
+            first_midi_note_nb_int = myint(self.HW_ODF_get_attribute_value(HW_keyboard_dic, 'KeyGen_MIDINoteNumberOfFirstKey'))
+            last_midi_note_nb_int = first_midi_note_nb_int + nb_keys_int - 1
+        else: # keyboard_display_mode == 0 (not visible keyboards)
+            # recover this from the InpGen attributes of the HW Division or the KeyGen attributes of the HW Keyboard
+            nb_keys_int = myint(self.HW_ODF_get_attribute_value(HW_division_dic, 'InpGen_NumberOfInputs'))
+            if nb_keys_int == None:
+                nb_keys_int = myint(self.HW_ODF_get_attribute_value(HW_keyboard_dic, 'KeyGen_NumberOfKeys'))
+
+            first_midi_note_nb_int = myint(self.HW_ODF_get_attribute_value(HW_division_dic, 'InpGen_MIDINoteNumberOfFirstInput'))
+            if first_midi_note_nb_int == None:
+                first_midi_note_nb_int = myint(self.HW_ODF_get_attribute_value(HW_keyboard_dic, 'KeyGen_MIDINoteNumberOfFirstKey'))
+
+            # if still not know, try to recover from the number of HW DivisionInput objects
+            if nb_keys_int == None:
+                HW_div_inputs_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_division_dic, 'DivisionInput', TO_CHILD)
+                if len(HW_div_inputs_list) > 0:
+                    nb_keys_int = len(HW_div_inputs_list)
+                    first_midi_note_nb_int = 999
+                    for HW_div_input_dic in HW_div_inputs_list:
+                        midi_not_nb = myint(self.HW_ODF_get_attribute_value(HW_div_input_dic, 'NormalMIDINoteNumber'))
+                        if midi_not_nb != None and midi_not_nb < first_midi_note_nb_int:
+                            first_midi_note_nb_int = midi_not_nb
+
+            if nb_keys_int != None and first_midi_note_nb_int != None:
+                last_midi_note_nb_int = first_midi_note_nb_int + nb_keys_int - 1
+            else:
+                nb_keys_int = first_midi_note_nb_int = last_midi_note_nb_int = 0
+
+        # get the HW DisplayPage in which is displayed the keyboard
+        if keyboard_display_mode == 1:
+            # recover this from the HW ImageSetInstance of the first key of the keyboard
+            HW_img_set_instance_id = myint(self.HW_ODF_get_attribute_value(keys_switch_dic[first_midi_note_nb_int], 'Disp_ImageSetInstanceID', True))
+            HW_img_set_instance_dic = self.HW_ODF_get_object_dic('ImageSetInstance', HW_img_set_instance_id)
+            keyboard_disp_page_id = myint(self.HW_ODF_get_attribute_value(HW_img_set_instance_dic, 'DisplayPageID'))
+        elif keyboard_display_mode == 2:
+            keyboard_disp_page_id = myint(self.HW_ODF_get_attribute_value(HW_keyboard_dic, 'KeyGen_DisplayPageID'))
+
+        # get the corresponding GO Panel UID in which is displayed the keyboard
+        if keyboard_display_mode != 0:
+            HW_disp_page_dic = self.HW_ODF_get_object_dic('DisplayPage', keyboard_disp_page_id)
+            GO_panel_uid = HW_disp_page_dic['_GO_uid']
+            GO_panel_dic = self.GO_ODF_dic[GO_panel_uid]
+
+        GO_manual_dic['Name'] = HW_division_name
+        GO_manual_dic['Displayed'] = 'Y' if keyboard_display_mode != 0 else 'N'
+        GO_manual_dic['NumberOfLogicalKeys'] = nb_keys_int
+        GO_manual_dic['NumberOfAccessibleKeys'] = nb_keys_int
+        GO_manual_dic['FirstAccessibleKeyLogicalKeyNumber'] = 1
+        GO_manual_dic['FirstAccessibleKeyMIDINoteNumber'] = first_midi_note_nb_int
+        GO_manual_dic['NumberOfStops'] = 0
+        GO_manual_dic['NumberOfSwitches'] = 0
+        GO_manual_dic['NumberOfCouplers'] = 0
+        GO_manual_dic['NumberOfDivisionals'] = 0
+        GO_manual_dic['NumberOfTremulants'] = 0
+
+        if keyboard_display_mode == 0:
+            # the keyboard is not visible, we can stop here the definition of the GO Manual
+            return True
+
+        # by default the manual display attributes are put in the GO Manual999
+        GO_disp_manual_dic = GO_manual_dic
+
+        if keyboard_disp_page_id != self.HW_default_display_page_id:
+            # the keyboard is displayed in another display page than the default one
+            # the GO Manual999 object must have Displayed = N
+            # and its graphical attributes defined in a Panel999Element999 with Type = Manual and Displayed = Y
+            GO_manual_dic['Displayed'] = 'N'
+
+            # create a new GO Panel999Element999 object to display the keyboard
+            self.GO_ODF_dic[GO_panel_uid]['NumberOfGUIElements'] += 1
+            GO_panel_element_uid = GO_panel_uid + 'Element' + str(self.GO_ODF_dic[GO_panel_uid]['NumberOfGUIElements']).zfill(3)
+            GO_panel_element_dic = self.GO_ODF_dic[GO_panel_element_uid] = {}
+
+            GO_panel_element_dic['Type'] = 'Manual'
+            #GO_panel_element_dic['Name'] = HW_division_name  # attribute not used by GrandOrgue, so generating a warning in GO
+            GO_panel_element_dic['Manual'] = int(GO_manual_uid[-3:])
+
+            # the manual display attributes will be put in the GO Panel999Element999
+            GO_disp_manual_dic = GO_panel_element_dic
+
+        # define the graphical properties of the GO Manual
+        if keyboard_display_mode == 1:
+            # keys graphical aspect is defined for each key
+            for midi_note_nb_int in range(first_midi_note_nb_int, last_midi_note_nb_int + 1):
+                # parse the switches of the HW Keyboard by increasing MIDI note number
+                GO_key_nb = midi_note_nb_int - first_midi_note_nb_int + 1
+
+                if midi_note_nb_int < last_midi_note_nb_int:
+                    # it is not the latest key of the keyboard
+                    self.GO_ODF_build_Manual_keyimage_by_switch(keys_switch_dic[midi_note_nb_int], keys_switch_dic[midi_note_nb_int + 1], GO_disp_manual_dic, GO_key_nb)
+                else:
+                    self.GO_ODF_build_Manual_keyimage_by_switch(keys_switch_dic[midi_note_nb_int], None, GO_disp_manual_dic, GO_key_nb)
+
+        else:
+            # keys graphical aspect is defined for one octave + the first and last keys
+
+            # get the HW KeyImageSet associated to the HW Keyboard
+            HW_key_img_set_dic = self.HW_ODF_get_object_dic_by_ref_id('KeyImageSet', HW_keyboard_dic, 'KeyGen_KeyImageSetID')
+
+            # set the GO Manual position
+            GO_disp_manual_dic['PositionX'] = self.HW_ODF_get_attribute_value(HW_keyboard_dic, 'KeyGen_DispKeyboardLeftXPos')
+            GO_disp_manual_dic['PositionY'] = self.HW_ODF_get_attribute_value(HW_keyboard_dic, 'KeyGen_DispKeyboardTopYPos')
+
+            # set the GO Manual keys width
+            GO_disp_manual_dic['Width_A']   = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfDASharpFromLeftOfDA')
+            GO_disp_manual_dic['Width_Ais'] = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfEBFromLeftOfDASharp')
+            GO_disp_manual_dic['Width_B']   = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfNaturalFromLeftOfNatural')
+            GO_disp_manual_dic['Width_C']   = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfCFSharpFromLeftOfCF')
+            GO_disp_manual_dic['Width_Cis'] = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfDGFromLeftOfCFSharp')
+            GO_disp_manual_dic['Width_D']   = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfDASharpFromLeftOfDA')
+            GO_disp_manual_dic['Width_Dis'] = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfEBFromLeftOfDASharp')
+            GO_disp_manual_dic['Width_E']   = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfNaturalFromLeftOfNatural')
+            GO_disp_manual_dic['Width_F']   = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfCFSharpFromLeftOfCF')
+            GO_disp_manual_dic['Width_Fis'] = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfDGFromLeftOfCFSharp')
+            GO_disp_manual_dic['Width_G']   = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfGSharpFromLeftOfG')
+            GO_disp_manual_dic['Width_Gis'] = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfAFromLeftOfGSharp')
+
+            # set the GO Manual keys offset
+            GO_disp_manual_dic['Offset_A']   = '0'
+            GO_disp_manual_dic['Offset_Ais'] = '0'
+            GO_disp_manual_dic['Offset_B']   = '0'
+            GO_disp_manual_dic['Offset_C']   = '0'
+            GO_disp_manual_dic['Offset_Cis'] = '0'
+            GO_disp_manual_dic['Offset_D']   = '0'
+            GO_disp_manual_dic['Offset_Dis'] = '0'
+            GO_disp_manual_dic['Offset_E']   = '0'
+            GO_disp_manual_dic['Offset_F']   = '0'
+            GO_disp_manual_dic['Offset_Fis'] = '0'
+            GO_disp_manual_dic['Offset_G']   = '0'
+            GO_disp_manual_dic['Offset_Gis'] = '0'
+
+            # get the key up (not pressed) and key down (pressed) images index within image set if defined, else set default index
+            key_up_img_index = myint(self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'ImageIndexWithinImageSets_Disengaged'))
+            if key_up_img_index == None: key_up_img_index = 1
+            HW_key_img_set_dic['_key_up_img_index'] = key_up_img_index
+
+            key_down_img_index = myint(self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'ImageIndexWithinImageSets_Engaged'))
+            if key_down_img_index == None: key_down_img_index = 2
+            HW_key_img_set_dic['_key_down_img_index'] = key_down_img_index
+
+            # set the GO Manual keys images
+            self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'CF', GO_disp_manual_dic, 'C')
+            self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'CF', GO_disp_manual_dic, 'F')
+            self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'D', GO_disp_manual_dic, 'D')
+            self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'EB', GO_disp_manual_dic, 'E')
+            self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'EB', GO_disp_manual_dic, 'B')
+            self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'G', GO_disp_manual_dic, 'G')
+            self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'A', GO_disp_manual_dic, 'A')
+            self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'Sharp', GO_disp_manual_dic, 'Ais')
+            self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'Sharp', GO_disp_manual_dic, 'Cis')
+            self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'Sharp', GO_disp_manual_dic, 'Dis')
+            self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'Sharp', GO_disp_manual_dic, 'Fis')
+            self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'Sharp', GO_disp_manual_dic, 'Gis')
+
+            # set the GO Manual first key image and width
+            first_note_name, octave = midi_number_to_note(int(first_midi_note_nb_int))
+            if first_note_name == 'D':
+                self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'FirstKeyDA', GO_disp_manual_dic, 'FirstD')
+                GO_disp_manual_dic['Width_FirstD'] = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfDASharpFromLeftOfDA')
+            elif first_note_name == 'A':
+                self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'FirstKeyDA', GO_disp_manual_dic, 'FirstA')
+                GO_disp_manual_dic['Width_FirstA'] = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfDASharpFromLeftOfDA')
+            elif first_note_name == 'G':
+                self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'FirstKeyG', GO_disp_manual_dic, 'FirstG')
+                GO_disp_manual_dic['Width_FirstG'] = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfGSharpFromLeftOfG')
+            elif first_note_name == 'C':
+                self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'CF', GO_disp_manual_dic, 'FirstC')
+                GO_disp_manual_dic['Width_FirstC'] = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfCFSharpFromLeftOfCF')
+
+            # set the GO Manual last key image and width
+            last_note_name, octave = midi_number_to_note(int(last_midi_note_nb_int))
+            if last_note_name == 'D':
+                self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'LastKeyDG', GO_disp_manual_dic, 'LastD')
+                GO_disp_manual_dic['Width_LastD'] = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfNaturalFromLeftOfNatural')
+            elif last_note_name == 'G':
+                self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'LastKeyDG', GO_disp_manual_dic, 'LastG')
+                GO_disp_manual_dic['Width_LastG'] = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfNaturalFromLeftOfNatural')
+            elif last_note_name == 'A':
+                self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'LastKeyA', GO_disp_manual_dic, 'LastA')
+                GO_disp_manual_dic['Width_LastA'] = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfNaturalFromLeftOfNatural')
+            elif last_note_name == 'C':
+                self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'WholeNatural', GO_disp_manual_dic, 'LastC')
+                GO_disp_manual_dic['Width_LastC'] = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfNaturalFromLeftOfNatural')
+            elif last_note_name == 'F':
+                self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'WholeNatural', GO_disp_manual_dic, 'LastF')
+                GO_disp_manual_dic['Width_LastF'] = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfNaturalFromLeftOfNatural')
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Manual_keyimage_by_keytype(self, HW_key_img_set_dic, HW_key_type, GO_disp_manual_dic, GO_key_type):
+        # add to the given GO manual object ID the key images attributes of the given HW key type
+        # sub-function of GO_ODF_build_Manual_object
+
+        HW_image_set_id = myint(self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'KeyShapeImageSetID_' + HW_key_type))
+        if HW_image_set_id != None:
+            HW_image_set_dic = self.HW_ODF_get_object_dic('ImageSet', HW_image_set_id)
+
+            # image for key up (not pressed)
+            image_attr_dic = {}
+            self.HW_ODF_get_image_attributes(HW_image_set_dic, image_attr_dic, HW_key_img_set_dic['_key_up_img_index'])
+            if image_attr_dic['BitmapFilename'] != None:
+                GO_disp_manual_dic['ImageOff_' + GO_key_type] = image_attr_dic['BitmapFilename']
+            if image_attr_dic['TransparencyMaskBitmapFilename'] != None:
+                GO_disp_manual_dic['MaskOff_' + GO_key_type] = image_attr_dic['TransparencyMaskBitmapFilename']
+
+            # image for key down (pressed)
+            image_attr_dic = {}
+            self.HW_ODF_get_image_attributes(HW_image_set_dic, image_attr_dic, HW_key_img_set_dic['_key_down_img_index'])
+            if image_attr_dic['BitmapFilename'] != None:
+                GO_disp_manual_dic['ImageOn_' + GO_key_type] = image_attr_dic['BitmapFilename']
+            if image_attr_dic['TransparencyMaskBitmapFilename'] != None:
+                GO_disp_manual_dic['MaskOn_' + GO_key_type] = image_attr_dic['TransparencyMaskBitmapFilename']
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Manual_keyimage_by_switch(self, HW_switch_dic, HW_next_switch_dic, GO_disp_manual_dic, GO_key_nb):
+        # add to the given GO manual object the key images attributes of the given HW Switch
+        # sub-function of GO_ODF_build_Manual_object
+
+        if HW_switch_dic == None: return
+
+        HW_img_set_instance_id = myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetInstanceID', True))
+        HW_img_set_instance_dic = self.HW_ODF_get_object_dic('ImageSetInstance', HW_img_set_instance_id)
+
+        # get the key engaged and disengaged images indexes
+        key_up_img_index = myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetIndexDisengaged', True))
+        key_down_img_index = myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetIndexEngaged', True))
+
+        # add in the HW Switch and ImageSetInstance objects the UID of the corresponding GO object
+        HW_switch_dic['_GO_uid'] = GO_disp_manual_dic['_GO_uid']
+        HW_img_set_instance_dic['_GO_uid'] = GO_disp_manual_dic['_GO_uid']
+
+        key_nb_3digit_str = str(GO_key_nb).zfill(3)
+
+        if GO_key_nb == 1:
+            # set the GO keyboard position which is the position of the first key
+            image_attr_dic = {}
+            self.HW_ODF_get_image_attributes(HW_img_set_instance_dic, image_attr_dic, key_up_img_index)
+            GO_disp_manual_dic['PositionX'] = image_attr_dic['LeftXPosPixels']
+            GO_disp_manual_dic['PositionY'] = image_attr_dic['TopYPosPixels']
+
+        # image for key up (not pressed)
+        image_attr_dic = {}
+        self.HW_ODF_get_image_attributes(HW_img_set_instance_dic, image_attr_dic, key_up_img_index)
+        if image_attr_dic['BitmapFilename'] != None:
+            GO_disp_manual_dic['Key' + key_nb_3digit_str + 'ImageOff'] = image_attr_dic['BitmapFilename']
+        if image_attr_dic['TransparencyMaskBitmapFilename'] != None:
+            GO_disp_manual_dic['Key' + key_nb_3digit_str + 'MaskOff'] = image_attr_dic['TransparencyMaskBitmapFilename']
+
+        # image for key down (pressed)
+        image_attr_dic = {}
+        self.HW_ODF_get_image_attributes(HW_img_set_instance_dic, image_attr_dic, key_down_img_index)
+        if image_attr_dic['BitmapFilename'] != None:
+            GO_disp_manual_dic['Key' + key_nb_3digit_str + 'ImageOn'] = image_attr_dic['BitmapFilename']
+        if image_attr_dic['TransparencyMaskBitmapFilename'] != None:
+            GO_disp_manual_dic['Key' + key_nb_3digit_str + 'MaskOn'] = image_attr_dic['TransparencyMaskBitmapFilename']
+
+        # width/offset of the key, width calculated by the diff of XPos of the key and its next one
+        if HW_next_switch_dic != None:
+            HW_next_img_set_instance_id = myint(self.HW_ODF_get_attribute_value(HW_next_switch_dic, 'Disp_ImageSetInstanceID', True))
+            HW_next_img_set_instance_dic = self.HW_ODF_get_object_dic('ImageSetInstance', HW_next_img_set_instance_id)
+
+            next_image_dic = {}
+            self.HW_ODF_get_image_attributes(HW_next_img_set_instance_dic, next_image_dic, key_up_img_index)
+            key_width = int(next_image_dic['LeftXPosPixels']) - int(image_attr_dic['LeftXPosPixels'])
+            GO_disp_manual_dic['Key' + key_nb_3digit_str + 'Width'] = str(key_width)
+            GO_disp_manual_dic['Key' + key_nb_3digit_str + 'Offset'] = '0'
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Stop_object(self, HW_object_dic):
+        # build GO Stop999 objects which can be build from the given HW object (Stop or Switch or Keyboard or KeyAction)
+
+        # if a HW Stop is given, build one or several GO Stop type below linked to a same new GO Switch and GO Manual :
+        #   1 - drawstop for pipes sound : GO Stop linked to Rank(s)
+        #          from HW Stop C> StopRank(s) (ActionTypeCode = 1, ActionEffectCode = 1) C> Rank C> Pipe_SoundEngine01 ...
+        #   2 - drawstop for general noise (blower, ambient, bells, ...) : GO stop with rank data inside
+        #          from HW Stop C> StopRank (ActionTypeCode = 21, ActionEffectCode = 1) C> Rank C> Pipe_SoundEngine01 ...
+        #   3 - drawstop engage action noise : GO Stop with rank data inside
+        #          from HW Stop C> StopRank (ActionTypeCode = 21, ActionEffectCode = 2) C> Rank C> Pipe_SoundEngine01 ...
+        #          or   HW Stop P> Switch C> Pipe_SoundEngine01 C> Pipe_SoundEngine01Layer C> Pipe_SoundEngine01_AttackSample ...
+        #          or   HW Stop P> Switch C> SwitchLinkage (EngageLinkActionCode=4, DisengageLinkActionCode=7) C> Switch C> Pipe_SoundEngine01 ...
+        #   4 - drawstop disengage action noise : GO Stop with rank data inside
+        #          from HW Stop C> StopRank (ActionTypeCode = 21, ActionEffectCode = 3) C> Rank C> Pipe_SoundEngine01 ...
+        #          or   HW Stop P> Switch C> Pipe_SoundEngine01 C> Pipe_SoundEngine01Layer C> Pipe_SoundEngine01_AttackSample + Pipe_SoundEngine01_ReleaseSample ...
+        #          or   HW Stop P> Switch C> SwitchLinkage (EngageLinkActionCode=7, DisengageLinkActionCode=4) C> Switch C> Pipe_SoundEngine01 ...
+        #          or   HW Stop P> Switch C> SwitchLinkage (EngageLinkActionCode=1, DisengageLinkActionCode=2) C> Switch C> Pipe_SoundEngine01 ...
+        #   5 - manual keys press noise : GO Stop linked to a Rank (no link with a Switch)
+        #          from HW Stop C> StopRank(s) (ActionTypeCode = 1, ActionEffectCode = 2) C> Rank C> Pipe_SoundEngine01 ...
+        #   6 - manual keys release noise  : GO Stop linked to a Rank (no link with a Switch)
+        #          from HW Stop C> StopRank(s) (ActionTypeCode = 1, ActionEffectCode = 3) C> Rank C> Pipe_SoundEngine01 ...
+
+        # if a HW Keyboard is given, build one or several new GO Stop type below linked to a GO Manual :
+        #   5 - manual keys press noise  : GO Stop linked to a Rank
+        #          from HW Keyboard C> KeyboardKey P> Switch C> SwitchLinkage (EngageLinkActionCode=4, DisengageLinkActionCode=7) C> Switch C> Pipe_SoundEngine01 ...
+        #          or   HW Keyboard C> KeyboardKey P> Switch C> Pipe_SoundEngine01 C> Pipe_SoundEngine01Layer C> Pipe_SoundEngine01_AttackSample ...
+        #   6 - manual keys release noise : GO Stop linked to a Rank
+        #          from HW Keyboard C> KeyboardKey P> Switch C> SwitchLinkage (EngageLinkActionCode=7, DisengageLinkActionCode=4) C> Switch C> Pipe_SoundEngine01 ...
+        #          or   HW Keyboard C> KeyboardKey P> Switch C> Pipe_SoundEngine01 C> Pipe_SoundEngine01Layer C> Pipe_SoundEngine01_AttackSample + Pipe_SoundEngine01_ReleaseSample ...
+
+        # if a HW Switch is given, build one new GO Stop type below linked to a new GO Switch and GO Manual001 :
+        #   2 - drawstop for general noise (blower, ambient, bells, ...) : GO stop with rank data inside
+        #          from HW Switch C> Pipe_SoundEngine01 ...
+        #          or   HW Switch C> SwitchLinkage C> Switch C> Pipe_SoundEngine01 ...
+
+        # check the type of given HW object
+        # get the GO Manual to which associate the GO Stop(s) to build
+        HW_object_type = HW_object_dic['_HW_uid'][:-6]
+        if HW_object_type == 'Stop':
+            HW_division_dic = self.HW_ODF_get_object_dic_by_ref_id('Division', HW_object_dic, 'DivisionID')
+            GO_manual_dic = self.GO_ODF_dic[HW_division_dic['_GO_uid']]
+        elif HW_object_type == 'Keyboard':
+            HW_division_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'Division', TO_PARENT)
+            GO_manual_dic = self.GO_ODF_dic[HW_division_dic['_GO_uid']]
+        elif HW_object_type == 'KeyAction':
+            HW_source_keyboard_dic = self.HW_ODF_get_object_dic_by_ref_id('Keyboard', HW_object_dic, 'SourceKeyboardID')
+            HW_source_division_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_source_keyboard_dic, 'Division', TO_PARENT, True)
+            GO_manual_dic = self.GO_ODF_dic[HW_source_division_dic['_GO_uid']]
+        elif HW_object_type == 'Switch':
+            # without known division to assign, by default assign to the Manual001
+            GO_manual_dic = self.GO_ODF_dic['Manual001']
+        else:
+            return
+
+        # get the visible HW Switch which are controlling the given HW object
+        HW_switch_data_dic = {}
+        self.HW_ODF_get_controlling_switches(HW_object_dic, HW_switch_data_dic)
+
+        drawstop_noise_allowed = True # flag used to not build stop draw noise if no stop pipes sound has been build (case of demo sample sets)
+
+        for stop_type in range(0, 6):
+            # parse the various possible stop types which can be built
+            # try to build each type of stop from the given HW object
+            GO_stop_data_dic = {}
+            GO_stop_data_dic['NumberOfAccessiblePipes'] = 0
+            if stop_type == 0:    # pipes rank sound
+                self.GO_ODF_build_Stop_pipes_sound(HW_object_dic, GO_stop_data_dic, GO_manual_dic)
+            elif stop_type == 1:  # general noise
+                self.GO_ODF_build_Stop_gen_noise(HW_object_dic, GO_stop_data_dic)
+            elif stop_type == 2 and drawstop_noise_allowed:  # drawstop engage noise
+                self.GO_ODF_build_Stop_draw_noise(HW_object_dic, GO_stop_data_dic, True)
+            elif stop_type == 3 and drawstop_noise_allowed:  # drawstop disengage noise
+                self.GO_ODF_build_Stop_draw_noise(HW_object_dic, GO_stop_data_dic, False)
+            elif stop_type == 4:  # keyboard key press noise
+                self.GO_ODF_build_Stop_keys_noise(HW_object_dic, GO_stop_data_dic, GO_manual_dic, True)
+            elif stop_type == 5:  # keyboard key release noise
+                self.GO_ODF_build_Stop_keys_noise(HW_object_dic, GO_stop_data_dic, GO_manual_dic, False)
+            else:
+                break
+
+            if GO_stop_data_dic['NumberOfAccessiblePipes'] > 0:
+                # data with accessible pipes have been retrieved from the HW object to build a GO Stop of the current type
+
+                # create a new GO Stop999 object
+                self.GO_objects_type_nb_dic['Stop'] += 1
+                GO_stop_uid = 'Stop' + str(self.GO_objects_type_nb_dic['Stop']).zfill(3)
+                GO_stop_dic = self.GO_ODF_dic[GO_stop_uid] = {}
+
+                GO_stop_dic['Name'] = self.HW_ODF_get_attribute_value(HW_object_dic, 'Name', True)
+                if stop_type == 2:
+                    GO_stop_dic['Name'] += ' (engage noise)'
+                elif stop_type == 3:
+                    GO_stop_dic['Name'] += ' (disengage noise)'
+
+                # copy the stop data in the GO Stop
+                for key, value in GO_stop_data_dic.items():
+                    GO_stop_dic[key] = value
+
+                if len(HW_switch_data_dic['controlling_switches'][0]) > 0:
+                    # the given HW object is controlled by direct not conditional visible HW Switch : link the GO Stop to GO Switch objects
+                    GO_stop_dic['Function'] = 'And'
+                    GO_stop_dic['SwitchCount'] = 0
+                    # build the GO Switch objects which are controlling the GO Stop
+                    for ctrl_branch_id in range(0, 1):   #HW_switch_data_dic['switch_branches_nb'] + 1):
+                        GO_switch_uid = '' # unique GO Switch object for all the controlling switches of the same branch
+                        for HW_switch_dic in HW_switch_data_dic['controlling_switches'][ctrl_branch_id]:
+                            # parse the HW Switch objects which are controlling the HW object in the same branch
+                            GO_switch_uid = self.GO_ODF_build_Switch_object(HW_switch_dic, GO_switch_uid)
+
+                            # add in the HW controlling Switch object the ID of the corresponding GO object
+                            HW_switch_dic['_GO_uid'] = GO_switch_uid
+
+                        # link the built GO Switch to the GO object (which has an And fonction)
+                        GO_stop_dic['SwitchCount'] += 1
+                        GO_stop_dic['Switch' + str(GO_stop_dic['SwitchCount']).zfill(3)] = GO_switch_uid[-3:]
+
+                        # define the behavior of the GO Switch on Genaral Cancel button push
+                        if GO_switch_uid != '':
+                            GO_switch_dic = self.GO_ODF_dic[GO_switch_uid]
+                            if stop_type == 0: # stop for pipes sound
+                                GO_switch_dic['GCState'] = 0
+                            elif stop_type == 1: # stop for general noise
+                                GO_switch_dic['GCState'] = -1
+                else:
+                    GO_stop_dic['DefaultToEngaged'] = 'N'
+
+                # add the GO Stop to the GO Manual to which it belongs
+                GO_manual_dic['NumberOfStops'] += 1
+                GO_manual_dic['Stop' + str(GO_manual_dic['NumberOfStops']).zfill(3)] = GO_stop_uid[-3:]
+
+                # add in the HW Stop object the UID of the corresponding GO object
+                HW_object_dic['_GO_uid'] = GO_stop_uid
+            else:
+                # indicate in the controlling visible HW Switch objects that they will not be used, if they are not yet associated to a GO Switch
+                # this permit to ignore them when the HW Switch of the display pages are parsed to manage the one not yet used in GO ODF
+                if len(HW_switch_data_dic['controlling_switches']) > 0:
+                    # the given HW object is controlled by visible HW Switch
+                    for ctrl_branch_id in range(0, 1):   #HW_switch_data_dic['switch_branches_nb'] + 1):
+                        for HW_switch_dic in HW_switch_data_dic['controlling_switches'][ctrl_branch_id]:
+                            # parse the HW Switch objects which are controlling the HW object in the same branch
+                            if HW_switch_dic['_GO_uid'] == '':
+                                HW_switch_dic['_GO_uid'] = 'NONE'
+
+                if stop_type == 0 and HW_object_type == 'Stop' and not('Rank001' in GO_stop_data_dic.keys()):
+                    # a stop for pipes sound have been build but without pipes : block the build of stop action noise
+                    drawstop_noise_allowed = False
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Stop_pipes_sound(self, HW_stop_dic, GO_stop_data_dic, GO_manual_dic):
+        # try to build GO Stop data with link to GO Rank(s) for pipes sound generation from the given HW object (HW Stop only)
+
+        # HW objects used :
+        #   Stop C> StopRank(s) (ActionTypeCode = 1, ActionEffectCode = 1) C> Rank C> Pipe_SoundEngine01 ...
+
+        if HW_stop_dic['_HW_uid'][:-6] != 'Stop':
+            return
+
+        # codes permitting to identify HW StopRank objects dedicated to pipes sound samples
+        HW_action_type_code = 1
+        HW_action_effect_code = 1
+
+        # get some data about the GO manual to which is attached the GO Stop
+        manual_first_midi_note = GO_manual_dic['FirstAccessibleKeyMIDINoteNumber']
+        manual_nb_keys = GO_manual_dic['NumberOfLogicalKeys']
+
+        GO_stop_nb_ranks = 0
+
+        # add ranks data to the GO Stop object
+        for HW_stop_rank_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_stop_dic, 'StopRank', TO_CHILD):
+            # parse the HW StopRank objects which are children of the given HW Stop object
+
+            # get the HW Rank associated to the current HW StopRank
+            HW_rank_dic = self.HW_ODF_get_object_dic_by_ref_id('Rank', HW_stop_rank_dic, 'RankID')
+            HW_rank_nb_pipes = len(self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD))
+
+            if (HW_rank_nb_pipes > 0 and
+                HW_action_type_code == myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'ActionTypeCode')) and
+                HW_action_effect_code == myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'ActionEffectCode'))):
+                # StopRank with at least one linked pipe to add to the GO Stop (some demo sample sets can have linked rank without pipe inside)
+
+                GO_stop_data_dic['FirstAccessiblePipeLogicalKeyNumber'] = 0
+                GO_stop_data_dic['NumberOfRanks'] = 0
+
+                # get the GO Rank associated to the HW Rank
+                GO_rank_uid = HW_rank_dic['_GO_uid']
+                if GO_rank_uid == '':
+                    # there is not yet a GO Rank built for the current HW Rank
+                    GO_rank_dic = self.GO_ODF_build_Rank_object(HW_rank_dic)
+                    GO_rank_uid = HW_rank_dic['_GO_uid']
+                else:
+                    # the HW Rank is already associated to a GO Rank
+                    GO_rank_dic = self.GO_ODF_dic[GO_rank_uid]
+
+                HW_div_nb_mapped_inputs = myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'NumberOfMappedDivisionInputNodes'))
+                if HW_div_nb_mapped_inputs == None: HW_div_nb_mapped_inputs = 61  # observed with HW Augustine Lorris sample set, this data is not defined for the Larigot stop
+
+                HW_div_midi_note_first_mapped_input = myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'MIDINoteNumOfFirstMappedDivisionInputNode'))
+                HW_div_midi_note_increment_to_rank = myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'MIDINoteNumIncrementFromDivisionToRank'))
+
+                # add the GO Rank to the GO Stop
+                GO_stop_nb_ranks += 1
+                GO_stop_data_dic['Rank' + str(GO_stop_nb_ranks).zfill(3)] = GO_rank_uid[-3:]
+
+                # convert the current HW StopRank data into GO Stop data
+                if HW_div_midi_note_increment_to_rank != None:
+                    # there is a note increment between the manual key number and the rank pipe number
+                    if HW_div_midi_note_first_mapped_input != None:
+                        GO_rank_first_access_key_nb = HW_div_midi_note_first_mapped_input - manual_first_midi_note + 1
+                        GO_stop_rank_first_pipe_nb = HW_div_midi_note_first_mapped_input + HW_div_midi_note_increment_to_rank - GO_rank_dic['FirstMidiNoteNumber'] + 1
+                    else:
+                        if HW_div_midi_note_increment_to_rank < 0:
+                            GO_rank_first_access_key_nb = 1 - HW_div_midi_note_increment_to_rank
+                        else:
+                            GO_rank_first_access_key_nb = 1
+                        GO_stop_rank_first_pipe_nb = GO_rank_first_access_key_nb + HW_div_midi_note_increment_to_rank
+                elif HW_div_midi_note_first_mapped_input != None:
+                    # there is no note increment defined but there is a mapping defined for the first input of the division which can act on the rank
+                    GO_rank_first_access_key_nb = HW_div_midi_note_first_mapped_input - manual_first_midi_note + 1
+                    GO_stop_rank_first_pipe_nb = HW_div_midi_note_first_mapped_input - GO_rank_dic['FirstMidiNoteNumber'] + 1
+                else:
+                    # no increment and no mapping defined, by default the first key of the keyboard acts on the first pipe of the rank for this stop
+                    GO_rank_first_access_key_nb = 1
+                    GO_stop_rank_first_pipe_nb = 1
+
+                GO_stop_rank_pipe_count = HW_div_nb_mapped_inputs
+                if GO_stop_rank_pipe_count > GO_rank_dic['NumberOfLogicalPipes']:
+                    # the stop is using more pipes than what is defined in the rank
+                    GO_stop_rank_pipe_count = GO_rank_dic['NumberOfLogicalPipes']
+                if GO_rank_first_access_key_nb + GO_stop_rank_pipe_count - 1 > manual_nb_keys:
+                    # the rank range is going beyond the highest key of the manual (observed with a sample set) : reduce its number of accessible pipes
+                    GO_stop_rank_pipe_count = manual_nb_keys - GO_rank_first_access_key_nb + 1
+
+                GO_stop_data_dic[f'Rank{str(GO_stop_nb_ranks).zfill(3)}PipeCount'] = GO_stop_rank_pipe_count
+                GO_stop_data_dic[f'Rank{str(GO_stop_nb_ranks).zfill(3)}FirstAccessibleKeyNumber'] = GO_rank_first_access_key_nb
+                GO_stop_data_dic[f'Rank{str(GO_stop_nb_ranks).zfill(3)}FirstPipeNumber'] = GO_stop_rank_first_pipe_nb
+
+                # add in the HW StopRank object the UID of the corresponding GO object
+                HW_stop_rank_dic['_GO_uid'] = GO_rank_uid
+
+
+        if GO_stop_nb_ranks > 0:
+            # based on the Rank999xxx attributes created just before in the GO Stop for each HW StopRank, compute remaining attributes of the GO Stop
+            # identify the first and last keys of the manual which can access to the ranks associated to the stop
+            GO_stop_first_access_key_nb = 999
+            GO_stop_last_access_key_nb = 0
+            for r in range(1, GO_stop_nb_ranks + 1):
+                rank_first_key = GO_stop_data_dic[f'Rank{str(r).zfill(3)}FirstAccessibleKeyNumber']
+                rank_last_key = rank_first_key + GO_stop_data_dic[f'Rank{str(r).zfill(3)}PipeCount'] - 1
+                if GO_stop_first_access_key_nb > rank_first_key:
+                    GO_stop_first_access_key_nb = rank_first_key
+                if GO_stop_last_access_key_nb < rank_last_key:
+                    GO_stop_last_access_key_nb = rank_last_key
+
+            GO_stop_data_dic['FirstAccessiblePipeLogicalKeyNumber'] = GO_stop_first_access_key_nb
+            GO_stop_data_dic['NumberOfAccessiblePipes'] = GO_stop_last_access_key_nb - GO_stop_first_access_key_nb + 1
+            GO_stop_data_dic['NumberOfRanks'] = GO_stop_nb_ranks
+
+            # adjust the Rank999FirstAccessibleKeyNumber attributes so that it is an offset value compated to FirstAccessiblePipeLogicalKeyNumber and no more an absolute value
+            for r in range(1, GO_stop_nb_ranks + 1):
+                GO_stop_data_dic[f'Rank{str(r).zfill(3)}FirstAccessibleKeyNumber'] -= (GO_stop_data_dic['FirstAccessiblePipeLogicalKeyNumber'] - 1)
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Stop_gen_noise(self, HW_object_dic, GO_stop_data_dic):
+        # try to build GO Stop data with rank data inside for general noise rendering from the given HW object (Stop or Switch)
+
+        # HW objects used :
+        #      HW Stop C> StopRank (ActionTypeCode = 21, ActionEffectCode = 1) C> Rank C> Pipe_SoundEngine01 ...
+        #   or HW Switch C> Pipe_SoundEngine01 ...
+        #   or HW Switch C> SwitchLinkage C> Switch C> Pipe_SoundEngine01 ...
+        # GO Stop with link to GO Rank(s)
+
+        HW_object_type = HW_object_dic['_HW_uid'][:-6]
+        if not HW_object_type in ('Stop', 'Switch'):
+            return
+
+        # look for the HW Pipe_SoundEngine01 object which contains the general noise sample
+        HW_pipe_dic = None
+
+        if HW_object_type == 'Stop':
+            # codes permitting to identify HW StopRank object dedicated to general noise sample
+            HW_action_type_code = 21
+            HW_action_effect_code = 1
+            for HW_stop_rank_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'StopRank', TO_CHILD):
+                # parse the HW StopRank objects which are children of the given HW Stop object
+                # get the HW Rank associated to the current HW StopRank
+                HW_rank_dic = self.HW_ODF_get_object_dic_by_ref_id('Rank', HW_stop_rank_dic, 'RankID')
+                HW_rank_nb_pipes = len(self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD))
+                if (HW_action_type_code == myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'ActionTypeCode')) and
+                    HW_action_effect_code == myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'ActionEffectCode')) and
+                    HW_rank_nb_pipes > 0):
+                    # StopRank with at least one linked pipe to add to the GO Stop (some demo sample sets can have linked rank without pipe inside)
+                    HW_pipe_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD, True)
+                    break
+
+        elif HW_object_type == 'Switch':
+            HW_pipe_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'Pipe_SoundEngine01', TO_CHILD, True)
+            if HW_pipe_dic == None:
+                # the HW Switch has no child Pipe_SoundEngine01 object, look if it controls an other HW Switch which has a child Pipe_SoundEngine01
+                HW_switch_linkage_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'SwitchLinkage', TO_CHILD, True)
+                if HW_switch_linkage_dic != None:
+                    # the HW Switch is controlling a HW SwitchLinkage
+                    HW_dest_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_switch_linkage_dic, 'DestSwitchID')
+                    HW_pipe_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_dest_switch_dic, 'Pipe_SoundEngine01', TO_CHILD, True)
+
+        if HW_pipe_dic != None:
+            GO_stop_data_dic['NumberOfAccessiblePipes'] = 1
+            GO_stop_data_dic['FirstAccessiblePipeLogicalKeyNumber'] = 1
+            GO_stop_data_dic['FirstAccessiblePipeLogicalPipeNumber'] = 1
+            # fill the GO stop data dictionary with the pipe data of the found HW Pipe_SoundEngine01 object
+            self.GO_ODF_build_Rank_data_in_stop(HW_pipe_dic, GO_stop_data_dic)
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Stop_draw_noise(self, HW_object_dic, GO_stop_data_dic, engage_bool):
+        # try to build GO Stop data with rank data inside for drawstop action noise rendering from the given HW object (Stop or Switch)
+
+        # HW objects used :
+        # drawstop engage action noise :
+        #      Stop C> StopRank (ActionTypeCode = 21, ActionEffectCode = 2) C> Rank C> Pipe_SoundEngine01 ...
+        #   or Stop P> Switch C> Pipe_SoundEngine01 ...
+        #   or Stop P> Switch C> Pipe_SoundEngine01 ... Pipe_SoundEngine01_AttackSample (LoadSampleRange_EndPositionTypeCode=2)  A IMPLEMENTER Ernelo
+        #   or Stop P> Switch C> SwitchLinkage (EngageLinkActionCode=4, DisengageLinkActionCode=7) C> Switch C> Pipe_SoundEngine01 ...
+        #   or Stop P> Switch P> SwitchLinkage P> Switch C> SwitchLinkage (EngageLinkActionCode=4, DisengageLinkActionCode=7) C> Switch C> Pipe_SoundEngine01 ...
+        #   or KeyAction P> Switch C> Pipe_SoundEngine01 ...
+        #
+        # drawstop disengage action noise :
+        #      Stop C> StopRank (ActionTypeCode = 21, ActionEffectCode = 3) C> Rank C> Pipe_SoundEngine01 ...
+        #   or Stop P> Switch C> Pipe_SoundEngine01 ... Pipe_SoundEngine01_AttackSample (LoadSampleRange_EndPositionTypeCode=7)  A IMPLEMENTER Ernelo
+        #   or Stop P> Switch C> SwitchLinkage (EngageLinkActionCode=1, DisengageLinkActionCode=2) C> Switch C> Pipe_SoundEngine01 ...
+        #   or Stop P> Switch C> SwitchLinkage (EngageLinkActionCode=7, DisengageLinkActionCode=4) C> Switch C> Pipe_SoundEngine01 ...
+        #   or Stop P> Switch P> SwitchLinkage P> Switch C> SwitchLinkage (EngageLinkActionCode=7, DisengageLinkActionCode=4) C> Switch C> Pipe_SoundEngine01 ...
+        #   or KeyAction P> Switch C> SwitchLinkage (EngageLinkActionCode=1, DisengageLinkActionCode=2) C> Switch C> Pipe_SoundEngine01 ...
+
+        HW_object_type = HW_object_dic['_HW_uid'][:-6]
+        if not HW_object_type in ('Stop', 'KeyAction'):
+            return
+
+        # look for the HW Pipe_SoundEngine01 object which contains the drawstop action noise sample
+        HW_pipe_dic = None
+
+        if engage_bool:
+            # codes permitting to identify HW StopRank object dedicated to drawstop engage action noise sample
+            HW_action_type_code = 21
+            HW_action_effect_code = 2
+        else:
+            # codes permitting to identify HW StopRank object dedicated to drawstop engage action noise sample
+            HW_action_type_code = 21
+            HW_action_effect_code = 3
+
+        for HW_stop_rank_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'StopRank', TO_CHILD):
+            # parse the HW StopRank objects which are children of the given HW Stop object
+            # get the HW Rank associated to the current HW StopRank
+            HW_rank_dic = self.HW_ODF_get_object_dic_by_ref_id('Rank', HW_stop_rank_dic, 'RankID')
+            HW_rank_nb_pipes = len(self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD))
+            if (HW_action_type_code == myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'ActionTypeCode')) and
+                HW_action_effect_code == myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'ActionEffectCode')) and
+                HW_rank_nb_pipes > 0):
+                # StopRank with at least one linked Pipe_SoundEngine01 object to add to the GO Stop
+                HW_div_midi_note_increment_to_rank = myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'MIDINoteNumIncrementFromDivisionToRank'))
+                if HW_div_midi_note_increment_to_rank != None and HW_div_midi_note_increment_to_rank != 0:
+                    # search for the Pipe_SoundEngine01 object having the given MIDI note number
+                    for HW_pipe_check_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD):
+                        midi_note_nb = myint(self.HW_ODF_get_attribute_value(HW_pipe_check_dic, 'NormalMIDINoteNumber'))
+                        if midi_note_nb == None: midi_note_nb = 60
+                        if midi_note_nb == HW_div_midi_note_increment_to_rank:
+                            HW_pipe_dic = HW_pipe_check_dic
+                            break
+
+                if HW_pipe_dic == None:
+                    # Pipe_SoundEngine01 object not yet found, take the first child of the Rank
+                    HW_pipe_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD, True)
+                break
+
+        if HW_pipe_dic == None:
+            # no Pipe_SoundEngine01 found in the previous type of search : look for a HW Switch object parent of the HW Stop
+            HW_switch_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'Switch', TO_PARENT, True)
+            if HW_switch_dic != None:
+                for i in range(0,2):
+                    HW_pipe_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_switch_dic, 'Pipe_SoundEngine01', TO_CHILD, True)
+                    if HW_pipe_dic != None and engage_bool:
+                        # Pipe_SoundEngine01 for engage noise
+                        pass
+                    else:
+                        # search for a SwitchLinkage with specific EngageLinkActionCode and DisengageLinkActionCode values
+                        for HW_switch_linkage_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_switch_dic, 'SwitchLinkage', TO_CHILD):
+                            # the HW Switch is controlling a HW SwitchLinkage
+                            EngageLinkActionCode = myint(self.HW_ODF_get_attribute_value(HW_switch_linkage_dic, 'EngageLinkActionCode'))
+                            DisengageLinkActionCode = myint(self.HW_ODF_get_attribute_value(HW_switch_linkage_dic, 'DisengageLinkActionCode'))
+                            HW_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_switch_linkage_dic, 'DestSwitchID')
+                            if (HW_switch_dic != None and
+                                ((engage_bool and EngageLinkActionCode == 4 and DisengageLinkActionCode == 7) or
+                                 (not engage_bool and
+                                  ((EngageLinkActionCode == 1 and DisengageLinkActionCode == 2) or
+                                   (EngageLinkActionCode == 7 and DisengageLinkActionCode == 4))))):
+                                HW_pipe_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_switch_dic, 'Pipe_SoundEngine01', TO_CHILD, True)
+                                break
+                    # no linked Pipe_SoundEngine01 object found, search in the controlling switch
+                    HW_switch_linkage_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_switch_dic, 'SwitchLinkage', TO_PARENT, True)
+                    if HW_switch_linkage_dic != None:
+                        HW_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_switch_linkage_dic, 'SourceSwitchID')
+                        if HW_switch_dic == None:
+                            break
+
+        if HW_pipe_dic != None:
+            GO_stop_data_dic['NumberOfAccessiblePipes'] = 1
+            GO_stop_data_dic['FirstAccessiblePipeLogicalKeyNumber'] = 1
+            GO_stop_data_dic['FirstAccessiblePipeLogicalPipeNumber'] = 1
+            # fill the GO stop data dictionary with the pipe data of the found HW Pipe_SoundEngine01 object
+            self.GO_ODF_build_Rank_data_in_stop(HW_pipe_dic, GO_stop_data_dic, not engage_bool)
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Stop_keys_noise(self, HW_object_dic, GO_stop_data_dic, GO_manual_dic, press_bool):
+        # try to build GO Stop data with rank data inside for keyboard keys action noise rendering from the given HW object (Stop or Switch)
+
+        # HW objects used :
+        # key press :
+        #      Stop C> StopRank(s) (ActionTypeCode = 1, ActionEffectCode = 2) C> Rank C> Pipe_SoundEngine01 ...
+        #   or Keyboard C> KeyboardKey P> Switch C> SwitchLinkage (EngageLinkActionCode=4, DisengageLinkActionCode=7) C> Switch C> Pipe_SoundEngine01 ...
+        #   or Keyboard C> KeyboardKey P> Switch C> Pipe_SoundEngine01 C> Pipe_SoundEngine01Layer C> Pipe_SoundEngine01_AttackSample ...
+        # key release :
+        #      Stop C> StopRank(s) (ActionTypeCode = 1, ActionEffectCode = 3) C> Rank C> Pipe_SoundEngine01 ...
+        #   or Keyboard C> KeyboardKey P> Switch C> SwitchLinkage (EngageLinkActionCode=7, DisengageLinkActionCode=4) C> Switch C> Pipe_SoundEngine01 ...
+        #   or Keyboard C> KeyboardKey P> Switch C> Pipe_SoundEngine01 C> Pipe_SoundEngine01Layer C> Pipe_SoundEngine01_AttackSample + Pipe_SoundEngine01_ReleaseSample ...
+        pass
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Coupler_object(self, HW_key_action_dic):
+        # build the GO Coupler999 object corresponding to the given HW KeyAction object
+
+        # get the visible HW Switch which are controlling the given HW KeyAction
+        HW_switch_data_dic = {}
+        self.HW_ODF_get_controlling_switches(HW_key_action_dic, HW_switch_data_dic)
+        if len(HW_switch_data_dic['controlling_switches']) == 0:
+            # the given HW KeyAction is controlled by none visible HW Switch (this should not happen)
+            return
+
+        # get the source division of the HW KeyAction
+        HW_source_keyboard_dic = self.HW_ODF_get_object_dic_by_ref_id('Keyboard', HW_key_action_dic, 'SourceKeyboardID')
+        HW_source_division_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_source_keyboard_dic, 'Division', TO_PARENT, True)
+        if HW_source_division_dic == None:
+            self.events_log_add(f'INTERNAL ERROR : unable to find the HW source division/keyboard of the KeyAction {self.HW_ODF_get_attribute_value(HW_key_action_dic, "Name")}')
+            return
+
+        # get the destination division of the HW KeyAction
+        HW_dest_division_dic = self.HW_ODF_get_object_dic_by_ref_id('Division', HW_key_action_dic, 'DestDivisionID')
+        if HW_dest_division_dic == None:
+            HW_dest_keyboard_dic = self.HW_ODF_get_object_dic_by_ref_id('Keyboard', HW_key_action_dic, 'DestKeyboardID')
+            if HW_dest_keyboard_dic != None:
+                HW_dest_division_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_dest_keyboard_dic, 'Division', TO_PARENT, True)
+        if HW_dest_division_dic == None:
+            self.events_log_add(f'INTERNAL ERROR : unable to find the HW destination division/keyboard of the KeyAction {self.HW_ODF_get_attribute_value(HW_key_action_dic, "Name")}')
+            return
+
+        # get the corresponding GO source and destination Manual UID
+        GO_source_manual_uid = HW_source_division_dic['_GO_uid']
+        if GO_source_manual_uid == '':
+            self.events_log_add(f'INTERNAL ERROR : unable to find the GO source manual for the KeyAction {self.HW_ODF_get_attribute_value(HW_key_action_dic, "Name")}')
+            return
+        GO_source_manual_dic = self.GO_ODF_dic[GO_source_manual_uid]
+
+        GO_dest_manual_uid = HW_dest_division_dic['_GO_uid']
+        if GO_dest_manual_uid == '':
+            self.events_log_add(f'INTERNAL ERROR : unable to find the GO destination manual for the KeyAction {self.HW_ODF_get_attribute_value(HW_key_action_dic, "Name")}')
+            return
+
+        # create a GO Coupler999 object
+        self.GO_objects_type_nb_dic['Coupler'] += 1
+        GO_coupler_uid = 'Coupler' + str(self.GO_objects_type_nb_dic['Coupler']).zfill(3)
+        GO_coupler_dic = self.GO_ODF_dic[GO_coupler_uid] = {}
+
+        GO_coupler_dic['Name'] = self.HW_ODF_get_attribute_value(HW_key_action_dic, 'Name')
+        GO_coupler_dic['Displayed'] = 'N'
+        GO_coupler_dic['UnisonOff'] = 'N'
+        GO_coupler_dic['DestinationManual'] = GO_dest_manual_uid[-3:]
+
+        first_key = myint(self.HW_ODF_get_attribute_value(HW_key_action_dic, 'MIDINoteNumOfFirstSourceKey'))
+        if first_key != None:
+            GO_coupler_dic['FirstMIDINoteNumber'] = first_key
+
+        shift = myint(self.HW_ODF_get_attribute_value(HW_key_action_dic, 'MIDINoteNumberIncrement'))
+        if shift != None:
+            GO_coupler_dic['DestinationKeyshift'] = shift
+        else:
+            GO_coupler_dic['DestinationKeyshift'] = 0
+
+        GO_coupler_dic['NumberOfKeys'] = myint(self.HW_ODF_get_attribute_value(HW_key_action_dic, 'NumberOfKeys'))
+        GO_coupler_dic['CoupleToSubsequentUnisonIntermanualCouplers'] = 'N'
+        GO_coupler_dic['CoupleToSubsequentUpwardIntermanualCouplers'] = 'N'
+        GO_coupler_dic['CoupleToSubsequentDownwardIntermanualCouplers'] = 'N'
+        GO_coupler_dic['CoupleToSubsequentUpwardIntramanualCouplers'] = 'N'
+        GO_coupler_dic['CoupleToSubsequentDownwardIntramanualCouplers'] = 'N'
+
+        # add the coupler in the GO source manual
+        GO_source_manual_dic['NumberOfCouplers'] += 1
+        GO_source_manual_dic['Coupler' + str(GO_source_manual_dic['NumberOfCouplers']).zfill(3)] = GO_coupler_uid[-3:]
+
+        if len(HW_switch_data_dic['controlling_switches'][0]) > 0:
+            # the given HW KeyAction is controlled by direct not conditional visible HW Switch : link the GO Coupler to GO Switch objects
+            GO_coupler_dic['Function'] = 'And'
+            GO_coupler_dic['SwitchCount'] = 0
+            # build the GO Switch objects which are controlling the GO Coupler
+            for ctrl_branch_id in range(0, 1):  #HW_switch_data_dic['switch_branches_nb'] + 1):
+                GO_switch_uid = '' # unique GO Switch object for all the controlling switches of the same branch
+                for HW_switch_dic in HW_switch_data_dic['controlling_switches'][ctrl_branch_id]:
+                    # parse the HW Switch objects which are controlling the HW KeyAction in the same branch
+                    GO_switch_uid = self.GO_ODF_build_Switch_object(HW_switch_dic, GO_switch_uid)
+
+                    # add in the HW controlling Switch object the ID of the corresponding GO object
+                    HW_switch_dic['_GO_uid'] = GO_switch_uid
+
+                # link the built GO Switch to the GO Coupler (which has an And fonction)
+                GO_coupler_dic['SwitchCount'] += 1
+                GO_coupler_dic['Switch' + str(GO_coupler_dic['SwitchCount']).zfill(3)] = GO_switch_uid[-3:]
+
+                # define the behavior of the GO Switch on Genaral Cancel button push
+                if GO_switch_uid != '':
+                    GO_switch_dic = self.GO_ODF_dic[GO_switch_uid]
+                    GO_switch_dic['GCState'] = 0
+        else:
+            # the given HW KeyAction is not controlled by not conditional visible HW Switch : enable it by default
+            GO_coupler_dic['DefaultToEngaged'] = 'Y'
+
+        # write in the HW KeyAction object the UID of the corresponding GO object
+        HW_key_action_dic['_GO_uid'] = GO_coupler_uid
+
+        # build GO stops for coupler drawstop noises if any
+        self.GO_ODF_build_Stop_object(HW_key_action_dic)
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Switch_object(self, HW_switch_dic, linked_GO_switch_uid = ''):
+        # add a GO Switch with the properties of the given HW Switch object, only if it is has graphical properties and is not a key switch
+        # link it to the given existing GO Switch if provided
+        # return the UID of the added GO Switch or of the linked GO Switch if provided
+
+        # get the HW ImageSetInstance object associated to the given HW Switch object if any
+        HW_img_set_inst_dic = self.HW_ODF_get_object_dic_by_ref_id('ImageSetInstance', HW_switch_dic, 'Disp_ImageSetInstanceID')
+        # get the ID of the HW display page in which the switch is displayed if any
+        HW_switch_disp_page_id = myint(self.HW_ODF_get_attribute_value(HW_img_set_inst_dic, 'DisplayPageID', True))
+        # get the HW KeyboardKey children object of the given HW Switch object if any
+        HW_keyboard_key_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_switch_dic, 'KeyboardKey', TO_CHILD, True)
+
+        if HW_switch_disp_page_id == None or HW_img_set_inst_dic == None or HW_keyboard_key_dic != None:
+            # this HW Switch object has no display page ID or is not referencing a HW ImageSetInstance object or is controlling a HW KeyboardKey object
+            # it is ignored
+            GO_switch_uid = linked_GO_switch_uid
+            return GO_switch_uid
+
+        # if the given HW Switch is already associated to a GO Switch, consider this GO Switch as a linked switch
+        if HW_switch_dic['_GO_uid'] != "" and HW_switch_dic['_GO_uid'] != "NONE":
+            linked_GO_switch_uid = HW_switch_dic['_GO_uid']
+
+        # determine which switch configuration to manage
+        switch_config = 0
+        if HW_switch_disp_page_id == self.HW_default_display_page_id:
+            # the switch is located in the default display page / panel
+            if linked_GO_switch_uid == '':
+                switch_config = 1 # new Switch999 to display in the default panel
+            else:
+                switch_config = 2 # existing Switch999 to reuse in the default panel
+        else:
+            if linked_GO_switch_uid == '':
+                switch_config = 3 # new Panel999Element999 switch to display in another panel, linked to a new Switch999
+            else:
+                switch_config = 4 # new Panel999Element999 switch to display in another panel, linked to the given Switch999
+
+        switch_name = self.HW_ODF_get_attribute_value(HW_switch_dic, 'Name')
+
+        if switch_config in (1, 3):
+            # new GO Switch999 to create
+            self.GO_ODF_dic['Organ']['NumberOfSwitches'] += 1
+            GO_switch_uid = 'Switch' + str(self.GO_ODF_dic['Organ']['NumberOfSwitches']).zfill(3)
+            GO_switch_dic = self.GO_ODF_dic[GO_switch_uid] = {}
+
+            GO_switch_dic['Name'] = switch_name
+
+            GO_switch_dic['Displayed'] = 'N'
+
+            if self.HW_ODF_get_attribute_value(HW_switch_dic, 'DefaultToEngaged') != None:
+                GO_switch_dic['DefaultToEngaged'] = self.HW_ODF_get_attribute_value(HW_switch_dic, 'DefaultToEngaged')
+            else:
+                GO_switch_dic['DefaultToEngaged'] = 'N'
+
+        else:  # switch config 2 or 4
+            # no new GO Switch999 to create, we use the UID of the given linked switch
+            GO_switch_uid = linked_GO_switch_uid
+            GO_switch_dic = self.GO_ODF_dic[GO_switch_uid]
+
+        if switch_config in (3, 4):
+            # new GO Panel999Element999 switch object to create
+            # recover the GO panel UID corresponding to the HW display page ID of the switch
+            HW_disp_page_dic = self.HW_ODF_get_object_dic('DisplayPage', HW_switch_disp_page_id)
+            GO_panel_uid = HW_disp_page_dic['_GO_uid']
+            # create a new GO Panel999Element999 switch object to display the switch in it
+            self.GO_ODF_dic[GO_panel_uid]['NumberOfGUIElements'] += 1
+            GO_panel_element_uid = GO_panel_uid + 'Element' + str(self.GO_ODF_dic[GO_panel_uid]['NumberOfGUIElements']).zfill(3)
+            GO_panel_element_dic = self.GO_ODF_dic[GO_panel_element_uid] = {}
+
+            GO_panel_element_dic['Type'] = 'Switch'
+            #GO_panel_element_dic['Name'] = switch_name   # attribute not used by GrandOrgue, so generating a warning in GO
+            GO_panel_element_dic['Switch'] = int(GO_switch_uid[-3:])
+
+            # the graphical attributes will be writen in the panel element object
+            GO_disp_switch_dic = GO_panel_element_dic
+        else:
+            # the graphical attributes will be writen in the switch object
+            GO_disp_switch_dic = GO_switch_dic
+            GO_disp_switch_dic['Displayed'] = 'Y'
+
+        # define the graphical attributes of the GO switch (which is a Switch999 or Panel999Element999 switch object)
+        GO_disp_switch_dic['DispLabelText'] = ''
+
+        # get the index of the switch image for OFF and ON positions
+        switch_off_img_index = myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetIndexDisengaged'))
+        switch_on_img_index = myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetIndexEngaged'))
+        if switch_off_img_index == None: switch_off_img_index = '1'
+        if switch_on_img_index == None: switch_on_img_index = '1'
+
+        # set the attributes of the switch OFF image
+        image_attr_dic = {}
+        self.HW_ODF_get_image_attributes(HW_img_set_inst_dic, image_attr_dic, switch_off_img_index)
+        GO_disp_switch_dic['PositionX'] = image_attr_dic['LeftXPosPixels']
+        GO_disp_switch_dic['PositionY'] = image_attr_dic['TopYPosPixels']
+        if image_attr_dic['ImageWidthPixels'] != None:
+            GO_disp_switch_dic['Width'] = image_attr_dic['ImageWidthPixels']
+        if image_attr_dic['ImageHeightPixels'] != None:
+            GO_disp_switch_dic['Height'] = image_attr_dic['ImageHeightPixels']
+
+        # set the mouse clickable area
+        if image_attr_dic['ClickableAreaLeftRelativeXPosPixels'] != None:
+            GO_disp_switch_dic['MouseRectLeft'] = image_attr_dic['ClickableAreaLeftRelativeXPosPixels']
+        if image_attr_dic['ClickableAreaTopRelativeYPosPixels'] != None:
+            GO_disp_switch_dic['MouseRectTop'] = image_attr_dic['ClickableAreaTopRelativeYPosPixels']
+        if image_attr_dic['ClickableAreaRightRelativeXPosPixels'] != None:
+            GO_disp_switch_dic['MouseRectWidth'] = image_attr_dic['ClickableAreaRightRelativeXPosPixels']
+        if image_attr_dic['ClickableAreaBottomRelativeYPosPixels'] != None:
+            GO_disp_switch_dic['MouseRectHeight'] = image_attr_dic['ClickableAreaBottomRelativeYPosPixels']
+        GO_disp_switch_dic['MouseRadius'] = 0
+
+        if image_attr_dic['BitmapFilename'] != None:
+            GO_disp_switch_dic['ImageOff'] = image_attr_dic['BitmapFilename']
+        if image_attr_dic['TransparencyMaskBitmapFilename'] != None:
+            GO_disp_switch_dic['MaskOff'] = image_attr_dic['TransparencyMaskBitmapFilename']
+
+        # set the attributes of the switch ON image
+        image_attr_dic = {}
+        self.HW_ODF_get_image_attributes(HW_img_set_inst_dic, image_attr_dic, switch_on_img_index)
+        if image_attr_dic['BitmapFilename'] != None:
+            GO_disp_switch_dic['ImageOn'] = image_attr_dic['BitmapFilename']
+        if image_attr_dic['TransparencyMaskBitmapFilename'] != None:
+            GO_disp_switch_dic['MaskOn'] = image_attr_dic['TransparencyMaskBitmapFilename']
+
+        # add in the HW Switch object the ID of the corresponding GO object
+        if switch_config in (3, 4):
+            HW_img_set_inst_dic['_GO_uid'] = GO_panel_element_uid
+        else:
+            HW_img_set_inst_dic['_GO_uid'] = GO_switch_uid
+
+        # add in the HW Switch object the ID of the corresponding GO object
+        HW_switch_dic['_GO_uid'] = GO_switch_uid
+
+        return GO_switch_uid
+
+##    #-------------------------------------------------------------------------------------------------
+##    def GO_ODF_build_Rank_objects(self):
+##        # build the Rank999 objects of the GrandOrgue ODF dictionary from the Hauptwerk ODF dictionary
+##        # build as many GO Rank999 objects as HW Rank objects which have pipes defined inside
+##        # return the number of created GO Rank objects
+##
+##        # HW source objects used :
+##        #   WindCompartment C> Pipe_SoundEngine01
+##        #   Rank C> Pipe_SoundEngine01 C> Pipe_SoundEngine01_Layer C> Pipe_SoundEngine01_AttackSample C> Sample
+##        #   Rank C> Pipe_SoundEngine01 C> Pipe_SoundEngine01_Layer C> Pipe_SoundEngine01_ReleaseSample C> Sample
+##
+##
+####        HW_ranks_names_dic = {}
+####        for HW_rank_dic in self.HW_ODF_dic['Rank'].values():
+####            HW_ranks_names_dic[self.HW_ODF_get_attribute_value(HW_rank_dic, 'Name')] = HW_rank_dic
+####        for HW_rank_name in sorted(HW_ranks_names_dic.keys()):
+####            # parse the defined HW Rank objects by increasing rank name
+####            HW_rank_dic = HW_ranks_names_dic[HW_rank_name]
+##
+##        for HW_rank_id in sorted(self.HW_ODF_dic['Rank'].keys()):
+##            # parse the defined HW Rank objects by increasing ID order
+##            HW_rank_dic = self.HW_ODF_dic['Rank'][HW_rank_id]
+##
+##            self.progress_status_show_function(f'Building the GrandOrgue Rank objects... {HW_rank_dic["Name"]}')
+##
+##            # get the list of the HW Pipe_SoundEngine01 objects which are children of the current HW Rank object
+##            HW_pipes_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD)
+##            if len(HW_pipes_dic_list) > 0:
+##                # the current HW rank has pipes defined inside
+##
+##                # create a GO Rank999 object
+##                self.GO_ODF_dic['Organ']['NumberOfRanks'] += 1
+##                GO_rank_uid = 'Rank' + str(self.GO_ODF_dic['Organ']['NumberOfRanks']).zfill(3)
+##                GO_rank_dic = self.GO_ODF_dic[GO_rank_uid] = {}
+##
+##                GO_rank_dic['Name'] = self.HW_ODF_get_attribute_value(HW_rank_dic, 'Name', True)
+##
+##                first_midi_note_nb = 999
+##                last_midi_note_nb = 0
+##                pipes_dic = {}  # dictionnary with as key the MIDI note number and as value the dictionary of the associated Pipe_SoundEngine01 object
+##
+##                for HW_pipe_dic in HW_pipes_dic_list:
+##                    # parse the Pipe_SoundEngine01 objects to get their MIDI note number and update the min / max note number
+##                    # and associate the MIDI note numbers to Pipe_SoundEngine01 objects
+##
+##                    # get the MIDI note number of the current HW Pipe_SoundEngine01 object
+##                    midi_note_nb = myint(self.HW_ODF_get_attribute_value(HW_pipe_dic, 'NormalMIDINoteNumber'))
+##                    if midi_note_nb == None: midi_note_nb = 60 # observed with Sound Paradisi sample sets, the MIDI note 60 is not defined
+##                    if midi_note_nb < first_midi_note_nb:
+##                        first_midi_note_nb = midi_note_nb
+##                    if midi_note_nb > last_midi_note_nb:
+##                        last_midi_note_nb = midi_note_nb
+##
+##                    # store the dictionary of the pipe associated with the MIDI note number
+##                    pipes_dic[midi_note_nb] = HW_pipe_dic
+##
+##                GO_rank_dic['NumberOfLogicalPipes'] = len(pipes_dic)
+##                GO_rank_dic['FirstMidiNoteNumber'] = first_midi_note_nb
+##                GO_rank_dic['Percussive'] = 'N'
+##                GO_rank_dic['AcceptsRetuning'] = 'N'
+##
+##                # use the HW source WindCompartment object of the first pipe as GO WindchestGroup of the whole GO Rank
+##                HW_wind_comp_dic = self.HW_ODF_get_object_dic_by_ref_id('WindCompartment', HW_pipes_dic_list[0], 'WindSupply_SourceWindCompartmentID')
+##                GO_windchest_uid = HW_wind_comp_dic['_GO_uid']
+##                GO_rank_dic['WindchestGroup'] = GO_windchest_uid[-3:]
+##
+##                nb_pipes = 0
+##                for midi_note_nb in range(first_midi_note_nb, last_midi_note_nb + 1):
+##                    # parse the HW Pipe_SoundEngine01_Layer objects by increasing MIDI note number
+##
+##                    if midi_note_nb in pipes_dic.keys():
+##                        HW_pipe_dic = pipes_dic[midi_note_nb]
+##
+##                        # get the dictionary of the first Pipe_SoundEngine01_Layer child object of the current Pipe_SoundEngine01_Layer object
+##                        # the other Pipe_SoundEngine01_Layer objects if any exist are ignored because no possibility to manage them in GO ODF
+##                        HW_pipe_layer_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_dic, 'Pipe_SoundEngine01_Layer', TO_CHILD)
+##                        HW_pipe_layer_dic = HW_pipe_layer_dic_list[0]
+##
+##                        # set the GO pipe ID
+##                        nb_pipes += 1
+##                        GO_pipe_uid = 'Pipe' + str(nb_pipes).zfill(3)
+##
+##                        # get the pipe gain if any
+##                        pipe_gain = myfloat(self.HW_ODF_get_attribute_value(HW_pipe_layer_dic, 'AmpLvl_LevelAdjustDecibels'))
+##                        if pipe_gain != None and pipe_gain != 0:
+##                            GO_rank_dic[GO_pipe_uid + 'Gain'] = pipe_gain
+##
+##                        # get the pipe harmonic number if any
+##                        pipe_harmonic_nb = myint(self.HW_ODF_get_attribute_value(HW_pipe_dic, 'Pitch_Tempered_RankBasePitch64ftHarmonicNum'))
+##                        if pipe_harmonic_nb != None and pipe_harmonic_nb != 0:
+##                            GO_rank_dic[GO_pipe_uid + 'HarmonicNumber'] = pipe_harmonic_nb
+##
+##                        GO_rank_dic[GO_pipe_uid + 'LoadRelease'] = 'N'
+##
+##                        # manage the attack sample
+##                        # get the dictionary of the first Pipe_SoundEngine01_AttackSample child object of the current Pipe_SoundEngine01_Layer object (the other are ignored)
+##                        HW_pipe_attack_sample_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_layer_dic, 'Pipe_SoundEngine01_AttackSample', TO_CHILD)
+##                        HW_pipe_attack_sample_dic = HW_pipe_attack_sample_dic_list[0]
+##                        # get the dictionary of the Sample child object of the current Pipe_SoundEngine01_AttackSample object
+##                        HW_sample_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_attack_sample_dic, 'Sample', TO_CHILD)
+##                        HW_sample_dic = HW_sample_dic_list[0]
+##
+##                        HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', True))
+##                        GO_rank_dic[GO_pipe_uid] = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', True), HW_install_package_id)
+##
+##                        # manage the release samples
+##                        # get the dictionaries list of the Pipe_SoundEngine01_ReleaseSample child objects of the current Pipe_SoundEngine01_Layer object
+##                        HW_pipe_release_sample_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_layer_dic, 'Pipe_SoundEngine01_ReleaseSample', TO_CHILD)
+##                        if len(HW_pipe_release_sample_dic_list) > 0:
+##                            # there are release samples
+##                            GO_rank_dic[GO_pipe_uid + 'ReleaseCount'] = len(HW_pipe_release_sample_dic_list)
+##                            release_count = 0
+##                            for HW_pipe_release_sample_dic in HW_pipe_release_sample_dic_list:
+##
+##                                # get the max key release time for the current release sample
+##                                HW_max_key_release_time_int = myint(self.HW_ODF_get_attribute_value(HW_pipe_release_sample_dic, 'ReleaseSelCriteria_LatestKeyReleaseTimeMs'))
+##
+##                                # get the dictionary of the Sample child object of the current Pipe_SoundEngine01_ReleaseSample object
+##                                HW_sample_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_release_sample_dic, 'Sample', TO_CHILD)
+##                                HW_sample_dic = HW_sample_dic_list[0]
+##                                release_count += 1
+##
+##                                HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', True))
+##                                GO_rank_dic[GO_pipe_uid + 'Release' + str(release_count).zfill(3)] = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', True), HW_install_package_id)
+##
+##                                if HW_max_key_release_time_int == None or HW_max_key_release_time_int == 99999 or HW_max_key_release_time_int == -1:
+##                                    GO_rank_dic[GO_pipe_uid + 'Release' + str(release_count).zfill(3) + 'MaxKeyPressTime'] = '-1'
+##                                else:
+##                                    GO_rank_dic[GO_pipe_uid + 'Release' + str(release_count).zfill(3) + 'MaxKeyPressTime'] = HW_max_key_release_time_int
+##
+##                # add in the HW Rank object the ID of the corresponding GO object
+##                HW_rank_dic['_GO_uid'] = GO_rank_uid
+##
+##        return self.GO_ODF_dic['Organ']['NumberOfRanks']
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Rank_object(self, HW_rank_dic):
+        # build the GO Rank object from the given HW Rank object
+        # return the dictionary of the build GO Rank or None if not created
+
+        # HW source objects used :
+        #   WindCompartment C> Pipe_SoundEngine01
+        #   Rank C> Pipe_SoundEngine01 C> Pipe_SoundEngine01_Layer C> Pipe_SoundEngine01_AttackSample C> Sample
+        #   Rank C> Pipe_SoundEngine01 C> Pipe_SoundEngine01_Layer C> Pipe_SoundEngine01_ReleaseSample C> Sample
+
+        GO_rank_dic = None
+
+        # get the list of the HW Pipe_SoundEngine01 objects which are children of the current HW Rank object
+        HW_pipes_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD)
+        if len(HW_pipes_dic_list) > 0:
+            # the current HW rank has pipes defined inside
+
+            # create a GO Rank999 object
+            self.GO_ODF_dic['Organ']['NumberOfRanks'] += 1
+            GO_rank_uid = 'Rank' + str(self.GO_ODF_dic['Organ']['NumberOfRanks']).zfill(3)
+            GO_rank_dic = self.GO_ODF_dic[GO_rank_uid] = {}
+
+            GO_rank_dic['Name'] = self.HW_ODF_get_attribute_value(HW_rank_dic, 'Name', True)
+
+            first_midi_note_nb = 999
+            last_midi_note_nb = 0
+            pipes_dic = {}  # dictionnary with as key the MIDI note number and as value the dictionary of the associated Pipe_SoundEngine01 object
+
+            for HW_pipe_dic in HW_pipes_dic_list:
+                # parse the Pipe_SoundEngine01 objects to get their MIDI note number and update the min / max note number
+                # and associate the MIDI note numbers to Pipe_SoundEngine01 objects
+
+                # get the MIDI note number of the current HW Pipe_SoundEngine01 object
+                midi_note_nb = myint(self.HW_ODF_get_attribute_value(HW_pipe_dic, 'NormalMIDINoteNumber'))
+                if midi_note_nb == None: midi_note_nb = 60 # observed with Sound Paradisi sample sets, the MIDI note 60 is not defined
+                if midi_note_nb < first_midi_note_nb:
+                    first_midi_note_nb = midi_note_nb
+                if midi_note_nb > last_midi_note_nb:
+                    last_midi_note_nb = midi_note_nb
+
+                # store the dictionary of the pipe associated with the MIDI note number
+                pipes_dic[midi_note_nb] = HW_pipe_dic
+
+            GO_rank_dic['NumberOfLogicalPipes'] = len(pipes_dic)
+            GO_rank_dic['FirstMidiNoteNumber'] = first_midi_note_nb
+            GO_rank_dic['Percussive'] = 'N'
+            GO_rank_dic['AcceptsRetuning'] = 'N'
+
+            # use the HW source WindCompartment object of the first pipe as GO WindchestGroup of the whole GO Rank
+            HW_wind_comp_dic = self.HW_ODF_get_object_dic_by_ref_id('WindCompartment', HW_pipes_dic_list[0], 'WindSupply_SourceWindCompartmentID')
+            GO_windchest_uid = HW_wind_comp_dic['_GO_uid']
+            if GO_windchest_uid == '':
+                # the GO WindchestGroup object doesn't exist yet for the HW WindCompartment
+                self.GO_ODF_build_WindchestGroup_object(HW_wind_comp_dic)
+                GO_windchest_uid = HW_wind_comp_dic['_GO_uid']
+
+            GO_rank_dic['WindchestGroup'] = int(GO_windchest_uid[-3:])
+
+            nb_pipes = 0
+            for midi_note_nb in range(first_midi_note_nb, last_midi_note_nb + 1):
+                # parse the HW Pipe_SoundEngine01_Layer objects by increasing MIDI note number
+
+                if midi_note_nb in pipes_dic.keys():
+                    HW_pipe_dic = pipes_dic[midi_note_nb]
+
+                    # get the dictionary of the first Pipe_SoundEngine01_Layer child object of the current Pipe_SoundEngine01_Layer object
+                    # the other Pipe_SoundEngine01_Layer objects if any exist are ignored because no possibility to manage them in GO ODF
+                    HW_pipe_layer_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_dic, 'Pipe_SoundEngine01_Layer', TO_CHILD, True)
+
+                    # set the GO pipe ID
+                    nb_pipes += 1
+                    GO_pipe_uid = 'Pipe' + str(nb_pipes).zfill(3)
+
+                    # get the pipe gain if any
+                    pipe_gain = myfloat(self.HW_ODF_get_attribute_value(HW_pipe_layer_dic, 'AmpLvl_LevelAdjustDecibels'))
+                    if pipe_gain != None and pipe_gain != 0:
+                        GO_rank_dic[GO_pipe_uid + 'Gain'] = pipe_gain
+
+                    # get the pipe harmonic number if any
+                    pipe_harmonic_nb = myint(self.HW_ODF_get_attribute_value(HW_pipe_dic, 'Pitch_Tempered_RankBasePitch64ftHarmonicNum'))
+                    if pipe_harmonic_nb != None and pipe_harmonic_nb != 0:
+                        GO_rank_dic[GO_pipe_uid + 'HarmonicNumber'] = pipe_harmonic_nb
+
+                    GO_rank_dic[GO_pipe_uid + 'LoadRelease'] = 'N'
+
+                    # manage the attack sample
+                    # get the dictionary of the first Pipe_SoundEngine01_AttackSample child object of the current Pipe_SoundEngine01_Layer object (the other are ignored)
+                    HW_pipe_attack_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_layer_dic, 'Pipe_SoundEngine01_AttackSample', TO_CHILD, True)
+                    # get the dictionary of the first Sample child object of the current Pipe_SoundEngine01_AttackSample object
+                    HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_attack_sample_dic, 'Sample', TO_CHILD, True)
+
+                    HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', True))
+                    GO_rank_dic[GO_pipe_uid] = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', True), HW_install_package_id)
+
+                    # manage the release samples
+                    # get the dictionaries list of the Pipe_SoundEngine01_ReleaseSample child objects of the current Pipe_SoundEngine01_Layer object
+                    HW_pipe_release_sample_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_layer_dic, 'Pipe_SoundEngine01_ReleaseSample', TO_CHILD)
+                    if len(HW_pipe_release_sample_dic_list) > 0:
+                        # there are release samples
+                        GO_rank_dic[GO_pipe_uid + 'ReleaseCount'] = len(HW_pipe_release_sample_dic_list)
+                        release_count = 0
+                        for HW_pipe_release_sample_dic in HW_pipe_release_sample_dic_list:
+
+                            # get the max key release time for the current release sample
+                            HW_max_key_release_time_int = myint(self.HW_ODF_get_attribute_value(HW_pipe_release_sample_dic, 'ReleaseSelCriteria_LatestKeyReleaseTimeMs'))
+
+                            # get the dictionary of the first Sample child object of the current Pipe_SoundEngine01_ReleaseSample object
+                            HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_release_sample_dic, 'Sample', TO_CHILD, True)
+                            release_count += 1
+
+                            HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', True))
+                            GO_rank_dic[GO_pipe_uid + 'Release' + str(release_count).zfill(3)] = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', True), HW_install_package_id)
+
+                            if HW_max_key_release_time_int == None or HW_max_key_release_time_int == 99999 or HW_max_key_release_time_int == -1:
+                                GO_rank_dic[GO_pipe_uid + 'Release' + str(release_count).zfill(3) + 'MaxKeyPressTime'] = '-1'
+                            else:
+                                GO_rank_dic[GO_pipe_uid + 'Release' + str(release_count).zfill(3) + 'MaxKeyPressTime'] = HW_max_key_release_time_int
+
+            # add in the HW Rank object the ID of the corresponding GO object
+            HW_rank_dic['_GO_uid'] = GO_rank_uid
+
+        return GO_rank_dic
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Rank_data_in_stop(self, HW_pipe_dic, GO_stop_data_dic, is_release_action = False):
+        # build one pipe data (for noise effect) in the given GO Stop from the given HW Pipe_SoundEngine01
+
+        # HW source objects used :
+        #   Pipe_SoundEngine01 C> Pipe_SoundEngine01_Layer C> Pipe_SoundEngine01_AttackSample C> Sample
+        #   Pipe_SoundEngine01 C> Pipe_SoundEngine01_Layer C> Pipe_SoundEngine01_ReleaseSample C> Sample
+
+        GO_rank_dic = None
+
+        # get the source HW WindCompartment object of the given HW Pipe
+        HW_wind_comp_dic = self.HW_ODF_get_object_dic_by_ref_id('WindCompartment', HW_pipe_dic, 'WindSupply_SourceWindCompartmentID')
+        GO_windchest_uid = HW_wind_comp_dic['_GO_uid']
+        if GO_windchest_uid == '':
+            # the GO WindchestGroup object doesn't exist yet for the HW WindCompartment
+            self.GO_ODF_build_WindchestGroup_object(HW_wind_comp_dic)
+            GO_windchest_uid = HW_wind_comp_dic['_GO_uid']
+        GO_stop_data_dic['WindchestGroup'] = int(GO_windchest_uid[-3:])
+
+        GO_stop_data_dic['NumberOfLogicalPipes'] = 1
+        GO_stop_data_dic['Percussive'] = 'N'
+        GO_stop_data_dic['AcceptsRetuning'] = 'N'
+
+        # get the first HW Pipe_SoundEngine01_Layer linked to the given HW Pipe_SoundEngine01
+        HW_pipe_layer_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_dic, 'Pipe_SoundEngine01_Layer', TO_CHILD, True)
+
+        # get the pipe gain if any
+        pipe_gain = myfloat(self.HW_ODF_get_attribute_value(HW_pipe_layer_dic, 'AmpLvl_LevelAdjustDecibels'))
+        if pipe_gain != None and pipe_gain != 0:
+            GO_stop_data_dic['Pipe001Gain'] = pipe_gain
+
+        # get the pipe harmonic number if any
+        pipe_harmonic_nb = myint(self.HW_ODF_get_attribute_value(HW_pipe_dic, 'Pitch_Tempered_RankBasePitch64ftHarmonicNum'))
+        if pipe_harmonic_nb != None and pipe_harmonic_nb != 0:
+            GO_stop_data_dic['Pipe001HarmonicNumber'] = pipe_harmonic_nb
+
+        GO_stop_data_dic['Pipe001LoadRelease'] = 'Y'
+
+        # manage the release sample
+        HW_sample_dic = None
+        if is_release_action:
+            # get the the first Pipe_SoundEngine01_ReleaseSample child object of the Pipe_SoundEngine01_Layer object
+            HW_pipe_release_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_layer_dic, 'Pipe_SoundEngine01_ReleaseSample', TO_CHILD, True)
+            if HW_pipe_release_sample_dic != None:
+                # there is a release sample
+                # get the first Sample child object of the current Pipe_SoundEngine01_ReleaseSample object
+                HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_release_sample_dic, 'Sample', TO_CHILD, True)
+            else:
+                # get the first Pipe_SoundEngine01_AttackSample child object of the current Pipe_SoundEngine01_Layer object
+                HW_pipe_attack_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_layer_dic, 'Pipe_SoundEngine01_AttackSample', TO_CHILD, True)
+                if HW_pipe_attack_sample_dic != None:
+                    # there is a release sample
+                    # get the first Sample child object of the current Pipe_SoundEngine01_ReleaseSample object
+                    HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_attack_sample_dic, 'Sample', TO_CHILD, True)
+
+            if HW_sample_dic != None:
+                GO_stop_data_dic['Pipe001'] = '..' + os.sep + 'SilentLoop.wav'
+                GO_stop_data_dic['Pipe001Gain'] = 0
+                GO_stop_data_dic['Pipe001LoadRelease'] = 'N'
+                GO_stop_data_dic['Pipe001ReleaseCount'] = 1
+                self.silent_loop_file_used = True
+
+                HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', True))
+                GO_stop_data_dic['Pipe001Release001'] = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', True), HW_install_package_id)
+        else:
+            # get the first Pipe_SoundEngine01_AttackSample child object of the current Pipe_SoundEngine01_Layer object
+            attacks_number = 0
+            for HW_pipe_attack_sample_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_layer_dic, 'Pipe_SoundEngine01_AttackSample', TO_CHILD):
+                # parse the HW Pipe_SoundEngine01_AttackSample child objects of the Pipe_SoundEngine01_Layer object
+                attacks_number += 1
+                HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_attack_sample_dic, 'Sample', TO_CHILD, True)
+                if HW_sample_dic != None:
+                    HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', True))
+                    if attacks_number == 1:
+                        GO_stop_data_dic['Pipe001'] = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', True), HW_install_package_id)
+                    else:
+                        GO_stop_data_dic['Pipe001AttackCount'] = attacks_number - 1
+                        GO_stop_data_dic['Pipe001Attack' + str(attacks_number - 1).zfill(3)] = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', True), HW_install_package_id)
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_WindchestGroup_objects(self):
+        # build the WindchestGroups999 objects of the GrandOrgue ODF dictionary from the Hauptwerk ODF dictionary
+        # return the number of created GO WindchestGroup object
+
+        # HW source objects used : WindCompartment C> Pipe_SoundEngine01
+
+        for HW_wind_comp_id in sorted(self.HW_ODF_dic['WindCompartment'].keys()):
+            # parse the defined HW WindCompartment objects by increasing ID order
+            HW_wind_comp_dic = self.HW_ODF_dic['WindCompartment'][HW_wind_comp_id]
+            if self.HW_ODF_get_linked_objects_dic_by_type(HW_wind_comp_dic, 'Pipe_SoundEngine01', TO_CHILD, True) != None:
+                # the current HW WindCompartment has at least one Pipe_SoundEngine01 child object, a corresponding GO WindchestGroup can be created
+                self.GO_ODF_dic['Organ']['NumberOfWindchestGroups'] += 1
+                GO_windchest_uid = 'WindchestGroup' + str(self.GO_ODF_dic['Organ']['NumberOfWindchestGroups']).zfill(3)
+                GO_windchest_dic = self.GO_ODF_dic[GO_windchest_uid] = {}
+
+                GO_windchest_dic['Name'] = self.HW_ODF_get_attribute_value(HW_wind_comp_dic, 'Name', True)
+                GO_windchest_dic['NumberOfEnclosures'] = 0
+                GO_windchest_dic['NumberOfTremulants'] = 0
+
+                # add in the HW WindCompartment object the ID of the corresponding GO object
+                HW_wind_comp_dic['_GO_uid'] = GO_windchest_uid
+
+        return self.GO_ODF_dic['Organ']['NumberOfWindchestGroups']
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_WindchestGroup_object(self, HW_wind_comp_dic):
+        # build the GO WindchestGroup999 object corresponding to the given HW WindCompartment object
+
+        # HW source objects used : WindCompartment
+
+        self.GO_ODF_dic['Organ']['NumberOfWindchestGroups'] += 1
+        GO_windchest_uid = 'WindchestGroup' + str(self.GO_ODF_dic['Organ']['NumberOfWindchestGroups']).zfill(3)
+        GO_windchest_dic = self.GO_ODF_dic[GO_windchest_uid] = {}
+
+        GO_windchest_dic['Name'] = self.HW_ODF_get_attribute_value(HW_wind_comp_dic, 'Name', True)
+        GO_windchest_dic['NumberOfEnclosures'] = 0
+        GO_windchest_dic['NumberOfTremulants'] = 0
+
+        # add in the HW WindCompartment object the ID of the corresponding GO object
+        HW_wind_comp_dic['_GO_uid'] = GO_windchest_uid
+
+        return GO_windchest_dic
+
+    #-------------------------------------------------------------------------------------------------
+    def convert_HW2GO_file_name(self, HW_file_name_str, HW_install_package_id_int):
+        # return the given file path/name (for images or sounds or info files) converted from HW to GO format
+        # in HW format the files path starts from the root package folder (named with 6 digits) and the folders separator is either / or \
+        # in GO format the files path starts from the ODF location (in the HW folder OrganDefinitions) and the folders separator is \
+        # return None if the given package ID is not present in the sample set of the loaded HW ODF or if the given file name is not found
+
+        if HW_install_package_id_int in self.available_HW_packages_id_list:
+            # the given installation package ID is present in the sample set files
+            if os.sep == '/':
+                os_file_name_str = HW_file_name_str.replace('\\', os.sep)
+            else:
+                os_file_name_str = HW_file_name_str.replace('/', os.sep)
+            if os_file_name_str[0] == os.sep:
+                # the HW file name must not start by a path separator (seen on some sample sets)
+                os_file_name_str = os_file_name_str[1:]
+
+            os_file_name_str = os.path.join(self.HW_sample_set_path_str, 'OrganInstallationPackages', str(HW_install_package_id_int).zfill(6), os_file_name_str)
+            actual_file_name_str = get_actual_file_name(os_file_name_str)
+
+            # return the GO file path/name (relative to the folder where is located the ODF and with the \ folders separator
+            if actual_file_name_str != None:
+                return '..' + actual_file_name_str[len(self.HW_sample_set_path_str):].replace(os.sep,'\\')
+            else:
+                # file not found in the sample set files, by default return the given file name (which comes from the HW ODF)
+                return '..' + os_file_name_str[len(self.HW_sample_set_path_str):].replace(os.sep,'\\')
+        else:
+            # unavailable package
+            return None
+
+    #-------------------------------------------------------------------------------------------------
+    def events_log_add(self, log_string):
+        #--- add the given string to the events log list
+
+        self.events_log_list.append(log_string)
+
+    #-------------------------------------------------------------------------------------------------
+    def events_log_clear(self):
+        #--- clear the events log list
+
+        self.events_log_list.clear()
 
 #-------------------------------------------------------------------------------------------------
 class C_GUI():
     #--- class to manage the graphical user interface of the application
 
     odf_data = None             # one instance of the C_ODF class
-    selected_object_ID = ''     # ID of the object currently selected in the objects list or tree widgets
+    odf_conv = None             # one instance of the C_HW2GO class
+    selected_object_UID = ''     # ID of the object currently selected in the objects list or tree widgets
+    selected_object_type = ''   # type of the object currently selected : 'GO' or 'HW'
     data_changed = False        # flag indicating that data have been changed in the odf_data and not saved in an ODF
     object_edited = False       # flag indicating that the data of an object have been edited (and not yet applied in odf_data)s
     gui_events_blocked = False  # flag indicating that the GUI events are currently blocked
@@ -2165,7 +5148,7 @@ class C_GUI():
 
     tag_field = "tag_field"     # tag to identify the syntax color for the fields
     tag_comment = "tag_comment" # tag to identify the syntax color for the comments
-    tag_obj_ID = "tag_obj_ID"   # tag to identify the syntax color for the object IDs
+    tag_obj_UID = "tag_obj_UID"   # tag to identify the syntax color for the object IDs
     tag_title = "tag_title"     # tag to identify the syntax color for the titles in the help
     tag_found = "tag_found"     # tag to identify the syntax color for the string found by the search in the help
 
@@ -2176,6 +5159,9 @@ class C_GUI():
         #--- create an instance of the C_ODF class
         self.odf_data = C_ODF()
 
+        #--- create an instance of the C_HW2GO class
+        self.odf_conv = C_HW2GO()
+
         #--- create the main window
         self.wnd_main = Tk(className='OdfEdit')
         self.wnd_main.title(MAIN_WINDOW_TITLE)
@@ -2183,7 +5169,7 @@ class C_GUI():
         self.wnd_main.bind('<Configure>', self.wnd_main_configure) # to adjust the widgets size on main windows resizing
         self.wnd_main.protocol("WM_DELETE_WINDOW", self.wnd_main_quit) # to ask the user to save his changed before to close the main window
         # assign an image to the main window icon
-        icon = PhotoImage(file = os.path.dirname(__file__) + '/OdfEdit_res/OdfEdit.png')
+        icon = PhotoImage(file = os.path.dirname(__file__) + os.sep + 'OdfEdit.png')
         self.wnd_main.iconphoto(False, icon)
 
         #--- define the styles of some widgets
@@ -2202,6 +5188,7 @@ class C_GUI():
         # button "Open"
         self.btn_odf_file_open = Button(self.wnd_main, text="Open", fg="black", command=self.file_open)
         self.btn_odf_file_open.place(x=90, y=10, width=70, height=20)
+        CreateToolTip(self.btn_odf_file_open, "To open a GrandOrgue ODF (extension .organ) or a Hauptwerk ODF (extension .Organ_Hauptwerk_xml).")
 
         # button "Save"
         self.btn_odf_file_save = Button(self.wnd_main, text="Save", fg="black", state=DISABLED, command=self.file_save)
@@ -2244,7 +5231,7 @@ class C_GUI():
         self.btn_expand_all.place(x=400, y=45, width=80, height=20)
 
         # label with loaded ODF file name
-        self.lab_odf_file_name = Label(self.wnd_main, text="", fg="black", borderwidth=1, relief="solid", anchor=W)
+        self.lab_odf_file_name = Label(self.wnd_main, text="", fg="black", borderwidth=1, relief="solid", anchor=E)
         self.lab_odf_file_name.place(x=350, y=10, width=600, height=20)
 
         # label with the number of objects in the objects list
@@ -2310,7 +5297,7 @@ class C_GUI():
         # define the tags for the syntax highlighting
         self.txt_object_text.tag_config(self.tag_field, foreground='red3')
         self.txt_object_text.tag_config(self.tag_comment, foreground='chartreuse4')
-        self.txt_object_text.tag_config(self.tag_obj_ID, foreground='blue2', font='Calibri 11 bold')
+        self.txt_object_text.tag_config(self.tag_obj_UID, foreground='blue2', font='Calibri 11 bold')
 
         # notebook to display the events logs or the help
         self.notebook = ttk.Notebook(self.wnd_main)
@@ -2367,11 +5354,11 @@ class C_GUI():
         # define the tags for the syntax highlighting
         self.txt_help.tag_config(self.tag_field, foreground='red3')
         self.txt_help.tag_config(self.tag_comment, foreground='chartreuse4')
-        self.txt_help.tag_config(self.tag_obj_ID, foreground='blue2', font='Calibri 11 bold')
+        self.txt_help.tag_config(self.tag_obj_UID, foreground='blue2', font='Calibri 11 bold')
         self.txt_help.tag_config(self.tag_title, foreground='red3', font='Calibri 11 bold')
 
-        # list to search in the ODF and display the search results
-        # a main frame is used to encapsulate two other frames, one for the search widgets, one for the list box and his scroll bar
+        # list to search in the GrandOrgue ODF and display the search results, with vertical scroll bar
+        # a main frame is used to encapsulate two other frames, one for the search widgets, one for the list box and his vertical scroll bar
         self.frm_search = Frame(self.notebook)
         self.frm_search.pack(fill=BOTH, expand=True)
         # widgets to search a text
@@ -2379,7 +5366,7 @@ class C_GUI():
         self.frm_odf_search.place(x=0, y=0, height=30, relwidth=1.0)
         self.ent_odf_search_text = Entry(self.frm_odf_search)
         self.ent_odf_search_text.place(x=20, y=5, width=170, height=20)
-        self.btn_odf_search = Button(self.frm_odf_search, text="Search", fg="black", state=NORMAL, command=self.odf_sresults_search)
+        self.btn_odf_search = Button(self.frm_odf_search, text="Search", fg="black", state=NORMAL, command=self.odf_do_search)
         self.btn_odf_search.place(x=200, y=5, width=80, height=20)
         # search results list box
         self.frm_odf_sresults = Frame(self.frm_search)
@@ -2388,16 +5375,41 @@ class C_GUI():
         scrollbarv.pack(side=RIGHT, fill=Y)
         self.lst_odf_sresults = Listbox(self.frm_odf_sresults, bg='light yellow', font='Calibri 11', fg="black", exportselection=0, selectmode='single', activestyle='none')
         self.lst_odf_sresults.pack(side=LEFT, fill=BOTH, expand=True)
-        self.lst_odf_sresults.bind('<Double-1>', self.odf_sresults_list_selected)
+        self.lst_odf_sresults.bind('<Double-1>', self.odf_search_results_list_selected)
         self.lst_odf_sresults.config(yscrollcommand=scrollbarv.set)
         scrollbarv.config(command=self.lst_odf_sresults.yview)
+
+        # list to navigate inside the Hauptwerk objects in the ODF, with vertical scroll bar
+        # a main frame is used to encapsulate two other frames, one for the search widgets, one for the list box and his vertical scroll bar
+        self.frm_hw_browser = Frame(self.notebook)
+        self.frm_hw_browser.pack(fill=BOTH, expand=True)
+        # widgets to search an object UID
+        self.frm_hw_uid_search = Frame(self.frm_hw_browser)
+        self.frm_hw_uid_search.place(x=0, y=0, height=30, relwidth=1.0)
+        self.ent_hw_uid_search_text = Entry(self.frm_hw_uid_search, text='HW UID to search')
+        self.ent_hw_uid_search_text.place(x=20, y=5, width=170, height=20)
+        self.btn_hw_uid_search = Button(self.frm_hw_uid_search, text="Search", fg="black", state=NORMAL, command=self.odf_do_search_hw)
+        self.btn_hw_uid_search.place(x=200, y=5, width=80, height=20)
+        # browser list box
+        self.frm_hw_browser_list = Frame(self.frm_hw_browser)
+        self.frm_hw_browser_list.place(x=0, y=30, height=300, relwidth=1.0)
+        scrollbarv = ttk.Scrollbar(self.frm_hw_browser_list, orient='vertical')
+        scrollbarv.pack(side=RIGHT, fill=Y)
+        self.lst_hw_browser = Listbox(self.frm_hw_browser_list, bg='alice blue', font='Calibri 11', fg="black", exportselection=0, selectmode='single', activestyle='none')
+        self.lst_hw_browser.pack(side=LEFT, fill=BOTH, expand=True)
+        self.lst_hw_browser.bind('<<ListboxSelect>>', self.objects_list_selected_hw)
+        self.lst_hw_browser.bind('<Double-1>', self.objects_list_do_update_hw)
+        self.lst_hw_browser.config(yscrollcommand=scrollbarv.set)
+        scrollbarv.config(command=self.lst_hw_browser.yview)
 
         # create the notebook tabs, and attach the frames to them
         self.notebook.add(self.frm_logs, text="    Logs    ")
         self.notebook.add(self.frm_help, text="    Help    ")
         self.notebook.add(self.frm_search, text="    Search in ODF    ")
+        self.notebook.add(self.frm_hw_browser, text="    Hauptwerk objects    ")
+        self.notebook.hide(self.frm_hw_browser)  # will be visible only if a Hauptwerk ODF is opened
 
-        self.wnd_main.geometry('1600x800') # to trigger the call to wnd_main_configure to resize the widgets
+        self.wnd_main.geometry('1600x800+50+50') # to trigger the call to wnd_main_configure to resize the widgets
         self.gui_status_do_update()
 
         # launch a timer to execute 200ms after the application init some time consuming activities
@@ -2418,6 +5430,7 @@ class C_GUI():
             self.notebook.place(width=int(event.width) - self.notebook.winfo_x() - 10, height=int(event.height) - self.notebook.winfo_y() - 10)
             self.frm_help_text.place(height=int(event.height) - self.frm_help_text.winfo_y() - 50)
             self.frm_odf_sresults.place(height=int(event.height) - self.frm_odf_sresults.winfo_y() - 50)
+            self.frm_hw_browser_list.place(height=int(event.height) - self.frm_hw_browser_list.winfo_y() - 50)
 
     #-------------------------------------------------------------------------------------------------
     def wnd_main_quit(self):
@@ -2433,19 +5446,25 @@ class C_GUI():
         #--- in order to not slowdown the application GUI appearance time
 
         # load an ODF (for debug only)
-##        file_name = "D:/fichiers/Python/OdfEdit/ODF_examples/demo.organ"
-##        file_name = "D:\\fichiers\\Python\\OdfEdit\\ODF_examples\\Giubiasco.organ"
-##        file_name = "D:/GrandOrgue/SampleSet Demo/demo.organ"
-##        if self.odf_data.odf_lines_load(file_name):
+##        file_name_str = "D:/fichiers/Python/OdfEdit/ODF_examples/demo.organ"
+##        file_name_str = "D:\\fichiers\\Python\\OdfEdit\\ODF_examples\\Giubiasco.organ"
+##        file_name_str = "D:/GrandOrgue/SampleSet Demo/demo.organ"
+##        if self.odf_data.odf_lines_load(file_name_str):
 ##            # the file has been loaded properly
 ##            # update the objects list and tree
-##            self.selected_object_ID = ''
+##            self.selected_object_UID = ''
+##            self.selected_object_type = ''
 ##            self.objects_list_tree_do_update()
 ##            self.gui_status_do_update()
 ##        self.events_log_text_display()
 
         # load the help text
         self.help_text_load()
+
+        # load the Hauptwerk attributes dictionary
+        self.odf_conv.HW_ODF_attr_dic_file_load()
+
+        self.events_log_text_display()
 
     #-------------------------------------------------------------------------------------------------
     def file_new(self):
@@ -2455,11 +5474,13 @@ class C_GUI():
         if self.save_modif_before_change(file_change=True):
             # the user has saved his modifications if he wanted and has not canceled the operation
 
-            self.selected_object_ID = ''
+            self.selected_object_UID = ''
+            self.selected_object_type = ''
             # clear the object text box
             self.object_text_do_update()
             # clear the objects list
             self.lst_objects_list.delete(0, END)
+            self.lst_hw_browser.delete(0, END)
             # clear the objects tree
             for item in self.trv_objects_tree.get_children():
                 self.trv_objects_tree.delete(item)
@@ -2478,27 +5499,58 @@ class C_GUI():
             # the user has saved his modifications if he wanted and has not canceled the operation
 
             # let the user select the ODF file to open
-            file_name = fd.askopenfilename(title='Open ODF', filetypes=[('ODF', '*.organ')])
-            if file_name != '':
+            file_name_str = fd.askopenfilename(title='Open an Organ Definition File (ODF)', filetypes=[('All supported ODF', '*.organ *.Organ_Hauptwerk_xml'), ('GrandOrgue ODF', '*.organ'), ('Hauptwerk ODF', '*.Organ_Hauptwerk_xml')])
+            if file_name_str != '':
                 # a file has been selected by the user
-                if self.odf_data.odf_lines_load(file_name):
-                    # the file has been loaded properly
-                    # update the objects list / tree / text
-                    self.initial_dir = file_name
-                    self.selected_object_ID = ''
-                    self.objects_list_tree_do_update()
-                    self.object_text_do_update()
-
-                    self.data_changed = False
-                else:
-                    # error in loading the file, reset all
-                    self.file_new()
-
-                self.gui_status_do_update()
-                self.events_log_text_display()
+                filename_str, file_extension_str = os.path.splitext(file_name_str)
 
                 # select the logs tab of the notebook to show the opening logs
                 self.notebook.select(self.frm_logs)
+
+                # reset the data and HMI
+                self.file_new()
+                self.notebook.hide(self.frm_hw_browser)
+
+                if file_extension_str == '.Organ_Hauptwerk_xml':
+                    # Hauptwerk ODF selected : build a GrandOrgue ODF which uses the Hauptwerk sample set
+
+                    HW_ODF_file_name_str = file_name_str
+                    file_name_str = ''
+                    # define the name of the built GO ODF according to the name of the HW ODF : same path and file name, only the extension is changed
+                    GO_ODF_file_name = HW_ODF_file_name_str.replace('.Organ_Hauptwerk_xml', '.organ')
+
+                    # legal message displayed to the user before to start the ODF building
+##                    confirm = messagebox.askokcancel(title="Hauptwerk ODF conversion to GrandOrgue format", message=HW_CONV_MSG)
+                    confirm = True
+                    if confirm:  # answer is yes
+                        if self.odf_conv.GO_ODF_build_from_HW_ODF(HW_ODF_file_name_str, GO_ODF_file_name, self.progress_status_update):
+                            # the GO ODF building has succeeded
+                            if DISP_HW_OBJECTS_TREE:
+                                # display the HW objects notebook tab and list inside this tab
+                                self.notebook.add(self.frm_hw_browser)
+                                self.objects_list_do_update_hw()
+                            # the built GO ODF will be then loaded
+                            file_name_str = GO_ODF_file_name
+                        else:
+                            self.odf_conv.events_log_add('ERROR : something went wrong while converting the Hauptwerk ODF in a GrandOrgue ODF')
+                        self.events_log_text_display()
+
+                if file_name_str != '':
+                    # GrandOrgue ODF selected or built from a Hauptwerk ODF
+                    if self.odf_data.odf_lines_load(file_name_str):
+                        # the file has been loaded properly
+                        # update the objects list / tree / text
+                        self.initial_dir = file_name_str
+                        self.selected_object_UID = ''
+                        self.selected_object_type = ''
+                        self.objects_list_do_update()
+                        self.objects_tree_do_update()
+                        self.object_text_do_update()
+
+                        self.data_changed = False
+
+                self.gui_status_do_update()
+                self.events_log_text_display()
 
     #-------------------------------------------------------------------------------------------------
     def file_save(self):
@@ -2518,11 +5570,11 @@ class C_GUI():
         #---  (GUI event callback) the user has clicked on the button "Save as"
 
         # let the user select the ODF file to which make the save
-        file_name = fd.asksaveasfilename(title='Save in ODF...', filetypes=[('ODF', '*.organ')])
+        file_name_str = fd.asksaveasfilename(title='Save in ODF...', filetypes=[('ODF', '*.organ')])
 
-        if file_name != '':
+        if file_name_str != '':
             # a file has been selected by the user
-            if self.odf_data.odf_lines_save(file_name):
+            if self.odf_data.odf_lines_save(file_name_str):
                 # the ODF data have been correctly saved
                 self.data_changed = False
                 self.gui_status_do_update()
@@ -2587,13 +5639,13 @@ class C_GUI():
     def gui_status_do_update(self):
         #--- update the status of some GUI widgets in a single time, according to some status of the application
 
-##        print('\ngui_status_do_update, selected object is ' + self.selected_object_ID)
+##        print('\ngui_status_do_update, selected object is ' + self.selected_object_UID)
 ##        print('   call stack : ' + inspect.stack()[1].function + ' / ' + inspect.stack()[2].function + ' / ' + inspect.stack()[3].function)
 
         # to block temporarily the GUI events caused by the operations done in this function
         self.gui_events_block()
 
-        objects_nb = len(self.odf_data.odf_objects_dict)
+        objects_nb = len(self.odf_data.odf_objects_dic)
 
         # button "Save"
         self.btn_odf_file_save['state'] = NORMAL if (self.odf_data.odf_file_name != '' and self.data_changed) else DISABLED
@@ -2603,17 +5655,17 @@ class C_GUI():
         self.btn_odf_file_saveas['state'] = NORMAL if objects_nb > 0 else DISABLED
 
         # button "Apply changes"
-        self.btn_object_apply_chg['state'] = NORMAL if self.object_edited else DISABLED
-        self.btn_object_apply_chg['foreground'] = 'red' if self.object_edited else 'grey'
+        self.btn_object_apply_chg['state'] = NORMAL if self.object_edited and self.selected_object_type == 'GO' else DISABLED
+        self.btn_object_apply_chg['foreground'] = 'red' if self.object_edited and self.selected_object_type == 'GO' else 'grey'
 
         # button "Delete"
-        self.btn_object_delete['state'] = NORMAL if (self.selected_object_ID != '' and self.selected_object_ID != 'Header') else DISABLED
+        self.btn_object_delete['state'] = NORMAL if (self.selected_object_UID != '' and self.selected_object_UID != 'Header' and self.selected_object_type == 'GO') else DISABLED
 
         # button "Do check"
         self.btn_data_check['state'] = NORMAL if objects_nb > 0 else DISABLED
 
         # button "Show help"
-        self.btn_show_help['state'] = NORMAL if self.selected_object_ID != '' else DISABLED
+        self.btn_show_help['state'] = NORMAL if self.selected_object_UID != '' else DISABLED
 
         # buttons "Collapse all" and "Expand all"
         self.btn_collapse_all['state'] = NORMAL if objects_nb > 0 else DISABLED
@@ -2628,7 +5680,7 @@ class C_GUI():
         # label with the loaded ODF name
         if self.odf_data.odf_file_name == '':
             if objects_nb == 0:
-                self.lab_odf_file_name.config(text='Click on the button "Open" to load an ODF')
+                self.lab_odf_file_name.config(text='Click on the button "Open" to load a GrandOrgue or Hauptwerk ODF')
             else:
                 self.lab_odf_file_name.config(text='Click on the button "Save as" to define a file name')
         else:
@@ -2646,7 +5698,7 @@ class C_GUI():
             # objects list : select the item corresponding to the selected object ID
             self.lst_objects_list.selection_clear(0, 'end')
             for i in range(0, self.lst_objects_list.size()):
-                if self.lst_objects_list.get(i).split(' ')[0] == self.selected_object_ID:
+                if self.lst_objects_list.get(i).split(' ')[0] == self.selected_object_UID:
                     self.lst_objects_list.selection_set(i)
                     self.lst_objects_list.see(i)
                     break;
@@ -2655,7 +5707,15 @@ class C_GUI():
             # unselect the root of the objects tree if it was selected
             self.trv_objects_tree.selection_remove('0')
             for iid in self.trv_objects_tree.get_children('0'):
-                self.__objects_tree_select_nodes(iid, self.selected_object_ID)
+                self.__objects_tree_select_nodes(iid, self.selected_object_UID)
+
+            # HW objects list : select the item corresponding to the selected object ID
+            self.lst_hw_browser.selection_clear(0, 'end')
+            for i in range(0, self.lst_hw_browser.size()):
+                if self.lst_hw_browser.get(i).split(' (')[0].strip() == self.selected_object_UID:
+                    self.lst_hw_browser.selection_set(i)
+                    self.lst_hw_browser.see(i)
+                    break;
 
     #-------------------------------------------------------------------------------------------------
     def objects_list_selected(self, event):
@@ -2674,46 +5734,147 @@ class C_GUI():
             if selected_indice != ():
                 # an item of the objects list widget is selected
                 # recover in the objects list widget the object ID of the selected item (before the opening parenthesis)
-                self.selected_object_ID = self.lst_objects_list.get(selected_indice[0]).split(' (')[0]
+                self.selected_object_UID = self.lst_objects_list.get(selected_indice[0]).split(' (')[0]
+                self.selected_object_type = 'GO'
 
                 # update the object text box
                 self.object_text_do_update()
                 # update the status of GUI widgets
                 self.gui_status_do_update()
 
-##                print(f'\n{self.selected_object_ID} selected')
-##                print(f'parents : {self.odf_data.odf_objects_dict[self.selected_object_ID][IDX_OBJ_PAR]}')
-##                print(f'children : {self.odf_data.odf_objects_dict[self.selected_object_ID][IDX_OBJ_CHI]}')
-##                print(f'parent panel : {self.odf_data.object_get_parent_panel_ID(self.selected_object_ID)}')
+    #-------------------------------------------------------------------------------------------------
+    def objects_list_selected_hw(self, event):
+        #--- (GUI event callback) the user has selected an item in the Hauptwerk objects list widget
+
+        # exit this function if the GUI events have to be ignored
+        if self.gui_events_block(): return
+
+        # get the selected indice in the list
+        selected_indice = self.lst_hw_browser.curselection()
+
+        if selected_indice != ():
+            # recover the corresponding object ID
+            self.selected_object_UID = self.lst_hw_browser.get(selected_indice[0]).split(' (')[0].strip()
+            if self.selected_object_UID[0] == '*':
+                self.selected_object_UID = ''
+            self.selected_object_type = 'HW'
+
+            # update the object text box
+            self.object_text_do_update()
+            # update the status of GUI widgets
+            self.gui_status_do_update()
+
+
+            # DEBUG display
+##            HW_object_dic = self.odf_conv.HW_ODF_get_object_dic(self.selected_object_UID)
+##            HW_switch_data_dic = {}
+##            self.odf_conv.HW_ODF_get_controlling_switches(HW_object_dic, HW_switch_data_dic)
+##            if len(HW_switch_data_dic['controlling_switches']) > 0:
+##                obj_uid_str = f'Switches controlling the {self.selected_object_UID} :\n'
+##                for branch_nb in HW_switch_data_dic['controlling_switches'].keys():
+##                    for HW_object_dic in HW_switch_data_dic['controlling_switches'][branch_nb]:
+##                        obj_uid_str += f"branch:{branch_nb} {HW_object_dic['_HW_uid']} ({HW_object_dic['Name']})\n"
+##
+##                obj_uid_str += f"Switch assignment code {HW_switch_data_dic['switch_asgn_code']}\n"
+##                print(obj_uid_str)
 
     #-------------------------------------------------------------------------------------------------
-    def objects_list_tree_do_update(self):
-        #--- do an update the objects list and objects tree widgets
+    def objects_list_do_update(self):
+        #--- do an update the objects list widget
 
         # to block temporarily the GUI events caused by the operations done in this function
         self.gui_events_block()
 
         # update the objects list widgets
         self.lst_objects_list.delete(0, END)
-        for dict_key, dict_value in self.odf_data.odf_objects_dict.items():
+        for dict_key, dict_value in self.odf_data.odf_objects_dic.items():
             self.lst_objects_list.insert(END, dict_key + " (" + dict_value[IDX_OBJ_NAME] + ")")
 
-        # update the objects tree widget
-        # delete all the nodes of the tree
-        for item in self.trv_objects_tree.get_children():
-            self.trv_objects_tree.delete(item)
-        if len(self.odf_data.odf_objects_dict):
-            # add the root node
-            self.node_id = 0
-            root_object_ID = "Header"
-            parent_node_id = str(self.node_id)
-            self.trv_objects_tree.insert('', 0, str(self.node_id), text=root_object_ID, open=True)
-            # add in the tree the children of the objects which have no parent (i.e. which the parent is the Root)
-            # inside the called function all the children will be added recursively
-            for dict_key, dict_value in self.odf_data.odf_objects_dict.items():
-                if len(dict_value[IDX_OBJ_PAR]) == 0:
-                    # the object has no parents
-                    self.__objects_tree_add_child(parent_node_id, dict_key)
+    #-------------------------------------------------------------------------------------------------
+    def objects_list_do_update_hw(self, event=0):
+        #--- (GUI event callback and normal function) do an update the Hauptwerk objects list widget
+
+        # to block temporarily the GUI events caused by the operations done in this function
+        self.gui_events_block()
+
+        # update the HW objects list widgets
+        if len(self.odf_conv.HW_ODF_dic):
+            # there are HW ODF data in the dictionary
+            if self.selected_object_UID != '' and self.selected_object_UID[0] == '*': return
+
+            root_object_id = "_General"
+
+            if self.selected_object_UID == '' or self.selected_object_type != 'HW':
+                center_object_UID = root_object_id
+            else:
+                center_object_UID = self.selected_object_UID
+
+            selected_object_dic = self.odf_conv.HW_ODF_get_object_dic(center_object_UID)
+            if selected_object_dic != None:
+                # delete all the elements of the list
+                self.lst_hw_browser.delete(0, END)
+                self.lst_hw_browser.insert(END, '*** OBJECTS RELATIONSHIP (parents/current in red/children) ***')
+
+                # display the parents of the selected object
+                objects_uid_list = []
+                for object_dic in selected_object_dic['_parents']:
+                    objects_uid_list.append(object_dic['_HW_uid'])
+                for object_uid_str in sorted(objects_uid_list):
+                    object_dic = self.odf_conv.HW_ODF_get_object_dic(object_uid_str)
+                    obj_name = self.odf_conv.HW_ODF_get_attribute_value(object_dic, 'Text')
+                    if obj_name == None: obj_name = self.odf_conv.HW_ODF_get_attribute_value(object_dic, 'Name')
+                    if obj_name == None: obj_name = ''
+                    obj_name = object_uid_str + ' (' + obj_name + ')'
+                    self.lst_hw_browser.insert(END, ' ' + obj_name)
+
+                # display the selected object
+                obj_name = self.odf_conv.HW_ODF_get_attribute_value(selected_object_dic, 'Text')
+                if obj_name == None: obj_name = self.odf_conv.HW_ODF_get_attribute_value(selected_object_dic, 'Name')
+                if obj_name == None: obj_name = ''
+                obj_name = center_object_UID + ' (' + obj_name + ')'
+                self.lst_hw_browser.insert(END, '       ' + obj_name)
+                self.lst_hw_browser.itemconfig(END, foreground='red')
+
+                # display the children of the selected object
+                objects_uid_list = []
+                for object_dic in selected_object_dic['_children']:
+                    objects_uid_list.append(object_dic['_HW_uid'])
+                for object_uid_str in sorted(objects_uid_list):
+                    object_dic = self.odf_conv.HW_ODF_get_object_dic(object_uid_str)
+                    obj_name = self.odf_conv.HW_ODF_get_attribute_value(object_dic, 'Text')
+                    if obj_name == None: obj_name = self.odf_conv.HW_ODF_get_attribute_value(object_dic, 'Name')
+                    if obj_name == None: obj_name = ''
+                    obj_name = object_uid_str + ' (' + obj_name + ')'
+                    if len(self.odf_conv.HW_ODF_get_attribute_value(object_dic, '_children')) > 0:
+                        obj_name += '  >>>'
+                    self.lst_hw_browser.insert(END, '               ' + obj_name)
+
+            self.lst_hw_browser.insert(END, '*** OBJECTS WITH NO PARENT (>>> means has children) ***')
+            self.lst_hw_browser.insert(END, ' _General () >>>')
+
+            # add at the end all the objects which have no parent except some types
+            objects_uid_list = []
+            for HW_object_type_str, HW_object_type_dic in self.odf_conv.HW_ODF_dic.items():
+                # parse the HW object types
+                if not HW_object_type_str.startswith(('Pi', 'Sa', 'TremulantWaveformP', 'SwitchL', '_General')):
+                    # excluded objects types are : Pipe_xxx, Sample, TremulantWaveformPipe, SwitchLinkage, _General
+                    # the current HW object type can be added in the list
+                    for object_dic in HW_object_type_dic.values():
+                        # parse the HW objects of the current HW objects type
+                        if len(object_dic['_parents']) == 0:
+                            # the current object has no parent
+                            objects_uid_list.append(object_dic['_HW_uid'])
+
+            for object_uid_str in sorted(objects_uid_list):
+                object_dic = self.odf_conv.HW_ODF_get_object_dic(object_uid_str)
+                obj_name = self.odf_conv.HW_ODF_get_attribute_value(object_dic, 'Name')
+                if obj_name == None: obj_name = ''
+                obj_name = object_dic['_HW_uid'] + ' (' + obj_name + ')'
+                if len(self.odf_conv.HW_ODF_get_attribute_value(object_dic, '_children')) > 0:
+                    obj_name = obj_name + ' >>>'
+                self.lst_hw_browser.insert(END, ' ' + obj_name)
+
+        self.gui_status_do_update()
 
     #-------------------------------------------------------------------------------------------------
     def objects_tree_selected(self, event):
@@ -2730,7 +5891,8 @@ class C_GUI():
             # the user has saved his modifications if he wanted and has not canceled the operation
 
             # recover the object ID
-            self.selected_object_ID = self.trv_objects_tree.item(selected_indice, option='text').split(' (')[0]
+            self.selected_object_UID = self.trv_objects_tree.item(selected_indice, option='text').split(' (')[0]
+            self.selected_object_type = 'GO'
 
             # update the object text box
             self.object_text_do_update()
@@ -2740,6 +5902,30 @@ class C_GUI():
             # make the selected item visibile if it is no more visible after the execution of gui_status_do_update due to some upper nodes opening
             if self.trv_objects_tree.bbox(selected_indice) == '':
                 self.trv_objects_tree.see(selected_indice)
+
+    #-------------------------------------------------------------------------------------------------
+    def objects_tree_do_update(self):
+        #--- do an update of the objects tree widgets
+
+        # to block temporarily the GUI events caused by the operations done in this function
+        self.gui_events_block()
+
+        # update the objects tree widget
+        # delete all the nodes of the tree
+        for item in self.trv_objects_tree.get_children():
+            self.trv_objects_tree.delete(item)
+        if len(self.odf_data.odf_objects_dic):
+            # add the root node
+            self.node_id = 0
+            root_object_id = "Header"
+            parent_node_id = str(self.node_id)
+            self.trv_objects_tree.insert('', 0, str(self.node_id), text=root_object_id, open=True)
+            # add in the tree the children of the objects which have no parent (i.e. which the parent is the Root)
+            # inside the called function all the children will be added recursively
+            for dict_key, dict_value in self.odf_data.odf_objects_dic.items():
+                if len(dict_value[IDX_OBJ_PAR]) == 0:
+                    # the object has no parents
+                    self.__objects_tree_add_child(parent_node_id, dict_key)
 
     #-------------------------------------------------------------------------------------------------
     def objects_tree_expand_all(self):
@@ -2784,10 +5970,10 @@ class C_GUI():
             self.__objects_tree_open_node_and_parents(self.trv_objects_tree.parent(node_iid))
 
     #-------------------------------------------------------------------------------------------------
-    def __objects_tree_select_nodes(self, node_iid, object_ID):
+    def __objects_tree_select_nodes(self, node_iid, object_UID):
         #--- recursive function to select the nodes of the objects tree which contain the given object ID
 
-        if self.trv_objects_tree.item(node_iid)['text'].split(' (')[0] == object_ID:
+        if self.trv_objects_tree.item(node_iid)['text'].split(' (')[0] == object_UID:
             # the node node_iid corresponds to the object ID : select it
             self.trv_objects_tree.selection_add(node_iid)
             # open the parents of the node
@@ -2797,37 +5983,37 @@ class C_GUI():
 
         # do the operation for the children of node_iid
         for iid in self.trv_objects_tree.get_children(node_iid):
-            self.__objects_tree_select_nodes(iid, object_ID)
+            self.__objects_tree_select_nodes(iid, object_UID)
 
     #-------------------------------------------------------------------------------------------------
-    def __objects_tree_add_child(self, parent_node_id, child_object_ID):
+    def __objects_tree_add_child(self, parent_node_id, child_object_UID):
         #--- recursive function to add in the objects tree widget the given child linked to the given parent
 
         # add in the tree a node for the given child under the given parent
         self.node_id += 1
         # recover the name of the object ID in the dictionnary
-        obj_name = self.odf_data.odf_objects_dict.get(child_object_ID)[IDX_OBJ_NAME]
-        if child_object_ID == "Organ":
+        obj_name = self.odf_data.odf_objects_dic.get(child_object_UID)[IDX_OBJ_NAME]
+        if child_object_UID == "Organ":
             # for the Organ object, open the tree node in addition to add the child
-            self.trv_objects_tree.insert(parent_node_id, 'end', str(self.node_id), text=child_object_ID, open=True)
+            self.trv_objects_tree.insert(parent_node_id, 'end', str(self.node_id), text=child_object_UID, open=True)
         else:
-            self.trv_objects_tree.insert(parent_node_id, 'end', str(self.node_id), text=child_object_ID + ' (' + obj_name + ')')
-        if child_object_ID == self.selected_object_ID:
+            self.trv_objects_tree.insert(parent_node_id, 'end', str(self.node_id), text=child_object_UID + ' (' + obj_name + ')')
+        if child_object_UID == self.selected_object_UID:
             # the added object ID corresponds to the selected object ID, then select it and show it
             self.trv_objects_tree.selection_add(str(self.node_id))
             self.trv_objects_tree.see(str(self.node_id))
 
         # the child becomes the parent for the next recursive call
         new_parent_node_id = str(self.node_id)
-        new_parent_ID = child_object_ID
+        new_parent_UID = child_object_UID
 
         # parse the children of new parent to add the corresponding children nodes
-        if new_parent_ID in self.odf_data.odf_objects_dict:
+        if new_parent_UID in self.odf_data.odf_objects_dic:
             # the new parent object ID is actually present in the dictionnary
-            children_list = self.odf_data.odf_objects_dict[new_parent_ID][IDX_OBJ_CHI]
+            children_list = self.odf_data.odf_objects_dic[new_parent_UID][IDX_OBJ_CHI]
             if len(children_list) > 0:
-                for child_ID in children_list:
-                    self.__objects_tree_add_child(new_parent_node_id, child_ID)
+                for child_UID in children_list:
+                    self.__objects_tree_add_child(new_parent_node_id, child_UID)
         else:
             pass  # do nothing if the object ID is not found in the dictionnary
 
@@ -2835,12 +6021,18 @@ class C_GUI():
     def object_text_do_update(self):
         # -- update the content of the object text box widget
 
-        # get the list of the selected object ID data
-        object_list = self.odf_data.object_get_data_list(self.selected_object_ID)
+        object_data_list = []
+        if self.selected_object_UID != '':
+            if self.selected_object_type == 'GO':
+                # get the list of the selected GrandOrgue object ID data
+                object_data_list = self.odf_data.object_get_data_list(self.selected_object_UID)
+            elif self.selected_object_type == 'HW':
+                # get the list of the selected GrandOrgue object ID data
+                object_data_list = self.odf_conv.HW_ODF_get_object_data_list(self.selected_object_UID)
 
         # write the object data in the object text box
         self.txt_object_text.delete(1.0, "end")
-        self.txt_object_text.insert(1.0, '\n'.join(object_list))
+        self.txt_object_text.insert(1.0, '\n'.join(object_data_list))
 
         # update object the parents list label
         self.object_text_do_parents_update()
@@ -2856,13 +6048,14 @@ class C_GUI():
     def object_text_do_parents_update(self):
         #--- update the parents list label
 
-        if self.selected_object_ID in ('', 'Header'):
+        self.lab_parents_list['foreground'] = 'black'
+        if self.selected_object_UID in ('', 'Header') or self.selected_object_type == 'HW':
             # no object ID selected or header selected : none parent to display
             self.lab_parents_list.config(text='')
         else:
             try:
                 # recover the number of parents for the selected object ID
-                nb_parents = len(self.odf_data.odf_objects_dict[self.selected_object_ID][IDX_OBJ_PAR])
+                nb_parents = len(self.odf_data.odf_objects_dic[self.selected_object_UID][IDX_OBJ_PAR])
             except:
                 # object not found in the dictionnary
                 self.lab_parents_list.config(text="Undefined object")
@@ -2870,9 +6063,9 @@ class C_GUI():
                 if nb_parents == 0:
                     self.lab_parents_list.config(text="")
                 elif nb_parents == 1:
-                    self.lab_parents_list.config(text=f"{self.selected_object_ID} linked with {' '.join(self.odf_data.odf_objects_dict[self.selected_object_ID][IDX_OBJ_PAR])}")
+                    self.lab_parents_list.config(text=f"{self.selected_object_UID} has 1 parent object : {' '.join(self.odf_data.odf_objects_dic[self.selected_object_UID][IDX_OBJ_PAR])}")
                 elif nb_parents >= 1:
-                    self.lab_parents_list.config(text=f"{self.selected_object_ID} linked with {nb_parents} objects : {' '.join(self.odf_data.odf_objects_dict[self.selected_object_ID][IDX_OBJ_PAR])}")
+                    self.lab_parents_list.config(text=f"{self.selected_object_UID} has {nb_parents} parent objects : {' '.join(self.odf_data.odf_objects_dic[self.selected_object_UID][IDX_OBJ_PAR])}")
 
     #-------------------------------------------------------------------------------------------------
     def object_text_changed(self, event):
@@ -2895,14 +6088,16 @@ class C_GUI():
         object_list = self.txt_object_text.get(1.0, "end").splitlines()
 
         # apply the object data in the ODF data
-        ret = self.odf_data.object_set_data_list(self.selected_object_ID, object_list)
+        ret = self.odf_data.object_set_data_list(self.selected_object_UID, object_list)
         if ret != '':
             # the modification has been applied
             self.data_changed = True
             # recover the object ID of the applied text
-            self.selected_object_ID = ret
+            self.selected_object_UID = ret
+            self.selected_object_type = 'GO'
             # update the objects list and tree
-            self.objects_list_tree_do_update()
+            self.objects_list_do_update()
+            self.objects_tree_do_update()
             # update object the parents list label
             self.object_text_do_parents_update()
 
@@ -2924,12 +6119,14 @@ class C_GUI():
         self.gui_events_block()
 
         # remove the object in the ODF data
-        if self.odf_data.object_remove(self.selected_object_ID):
+        if self.odf_data.object_remove(self.selected_object_UID):
             # the object has been removed
             # clear the current object ID
-            self.selected_object_ID = ''
+            self.selected_object_UID = ''
+            self.selected_object_type = ''
             # update the objects list and tree
-            self.objects_list_tree_do_update()
+            self.objects_list_do_update()
+            self.objects_tree_do_update()
             # update the object text
             self.object_text_do_update()
 
@@ -2957,7 +6154,8 @@ class C_GUI():
         self.gui_events_block()
 
         # clear the current object ID
-        self.selected_object_ID = ''
+        self.selected_object_UID = ''
+        self.selected_object_type = ''
 
         # update the object text
         self.object_text_do_update()
@@ -2975,22 +6173,22 @@ class C_GUI():
         self.odf_syntax_highlight(self.txt_object_text)
 
     #-------------------------------------------------------------------------------------------------
-    def odf_sresults_search(self):
+    def odf_do_search(self):
         #--- (GUI event callback) the user has clicked on the button search of the ODF search results tab
 
         # recover the text to search
         search_text = self.ent_odf_search_text.get()
 
         if search_text != '':
-            object_ID = 'Header'
+            object_UID = 'Header'
             results_list = []
             for line in self.odf_data.odf_lines_list:
 
-                if self.odf_data.is_line_with_object_ID(line): # line with an object ID
-                    object_ID = line[1:-1] # remove the brackets in first and last characters to get the object ID
+                if self.odf_data.is_line_with_object_UID(line): # line with an object ID
+                    object_UID = line[1:-1] # remove the brackets in first and last characters to get the object ID
 
                 if search_text in line:
-                    results_list.append(f'{object_ID} : {line}')
+                    results_list.append(f'{object_UID} : {line}')
 
             results_list.sort()
 
@@ -2998,7 +6196,29 @@ class C_GUI():
             self.lst_odf_sresults.insert(END, *results_list)
 
     #-------------------------------------------------------------------------------------------------
-    def odf_sresults_list_selected(self, event):
+    def odf_do_search_hw(self):
+        #--- (GUI event callback) the user has clicked on the button search of the HW ODF browser
+
+        # recover the text to search (must be a HW object UID only)
+        search_text = self.ent_hw_uid_search_text.get()
+
+        if search_text != '':
+            object_dic = self.odf_conv.HW_ODF_get_object_dic(search_text)
+            if object_dic != None:
+                self.selected_object_UID = search_text
+                self.selected_object_type = 'HW'
+
+                # update the HW objects list
+                self.objects_list_do_update_hw()
+                # update the object text box
+                self.object_text_do_update()
+                # update the status of GUI widgets
+                self.gui_status_do_update()
+            else:
+                messagebox.showerror(title="Error", message=f'"{search_text}" is not a known HW UID')
+
+    #-------------------------------------------------------------------------------------------------
+    def odf_search_results_list_selected(self, event):
         #--- (GUI event callback) the user has clicked on an item of the ODF search results list
 
         # get the selected indice
@@ -3007,7 +6227,8 @@ class C_GUI():
         if self.save_modif_before_change(object_change=True):
             # the user has saved his modifications if he wanted and has not canceled the operation
 
-            self.selected_object_ID = self.lst_odf_sresults.get(selected_indice[0]).split(' :')[0]
+            self.selected_object_UID = self.lst_odf_sresults.get(selected_indice[0]).split(' :')[0]
+            self.selected_object_type = 'GO'
 
             # update the object text box
             self.object_text_do_update()
@@ -3027,12 +6248,16 @@ class C_GUI():
     def events_log_text_display(self):
         #--- add in the events log text box widget the content of the events log buffer then clear it
 
-        self.txt_events_log.insert('end', '\n' + '\n'.join(self.odf_data.events_log_list) + '\n')
+        if len(self.odf_data.events_log_list) > 0:
+            self.txt_events_log.insert('end', '\n' + '\n'.join(self.odf_data.events_log_list) + '\n')
+        if len(self.odf_conv.events_log_list) > 0:
+            self.txt_events_log.insert('end', '\n' + '\n'.join(self.odf_conv.events_log_list) + '\n')
         self.txt_events_log.see('end-1c linestart')  # to see the start of the last line of the text
         self.txt_events_log.update_idletasks() # to force a refresh of the text box
 
         # reset the events log buffer
         self.odf_data.events_log_clear()
+        self.odf_conv.events_log_clear()
 
     #-------------------------------------------------------------------------------------------------
     def events_log_text_clear(self):
@@ -3043,18 +6268,39 @@ class C_GUI():
 
         # reset the events log buffer
         self.odf_data.events_log_clear()
+        self.odf_conv.events_log_clear()
 
     #-------------------------------------------------------------------------------------------------
     def help_text_load(self):
         #--- load in the help text box widget the help for the user
         #--- done one time at the application start
 
-        # copy in the widget the help text
-        self.txt_help.insert(1.0, HELP_TEXT)
-        # apply the ODF syntax highlighting
-        self.odf_syntax_highlight(self.txt_help)
-        # disable the text box to not permit its editing
-        self.txt_help.configure(state='disabled')
+        file_name_str = os.path.dirname(__file__) + os.sep + 'Help.txt'
+
+        try:
+            with open(file_name_str, 'r') as f:
+                # copy in the widget the help text
+                self.txt_help.insert(1.0, f.read())
+                # apply the ODF syntax highlighting
+                self.odf_syntax_highlight(self.txt_help)
+                # disable the text box to not permit its editing
+                self.txt_help.configure(state='disabled')
+                return True
+        except OSError as err:
+            # it has not be possible to open the file
+            messagebox.showinfo(title="ERROR", message=f'Cannot open the file "{file_name_str}"\n{err}')
+        except:
+            # other error
+            messagebox.showinfo(title="ERROR", message=f'Error while opening the file "{file_name_str}"\n{err}')
+
+        return False
+
+##        # copy in the widget the help text
+##        self.txt_help.insert(1.0, HELP_TEXT)
+##        # apply the ODF syntax highlighting
+##        self.odf_syntax_highlight(self.txt_help)
+##        # disable the text box to not permit its editing
+##        self.txt_help.configure(state='disabled')
 
     #-------------------------------------------------------------------------------------------------
     def help_selected_object(self):
@@ -3064,15 +6310,15 @@ class C_GUI():
         # to block temporarily the GUI events caused by the operations done in this function
         self.gui_events_block()
 
-        if self.selected_object_ID not in ["", "Header"]:
+        if self.selected_object_UID not in ["", "Header"]:
             #substitute the digits by the char 9 in the object ID to create a generic object ID
-            gen_object_ID = '['
-            for c in self.selected_object_ID: gen_object_ID += '9' if c.isdigit() else c
-            gen_object_ID += ']'
+            gen_object_UID = '['
+            for c in self.selected_object_UID: gen_object_UID += '9' if c.isdigit() else c
+            gen_object_UID += ']'
 
             # put the generic object ID in the search text widget
             self.cmb_search_text.delete(0, END)
-            self.cmb_search_text.insert(0, gen_object_ID)
+            self.cmb_search_text.insert(0, gen_object_UID)
 
             # update the status of some GUI widgets
             self.gui_status_do_update()
@@ -3191,7 +6437,7 @@ class C_GUI():
         # remove the tags previously set in the text box
         txt_widget.tag_remove(self.tag_field, '1.0', END)
         txt_widget.tag_remove(self.tag_comment, '1.0', END)
-        txt_widget.tag_remove(self.tag_obj_ID, '1.0', END)
+        txt_widget.tag_remove(self.tag_obj_UID, '1.0', END)
         txt_widget.tag_remove(self.tag_title, '1.0', END)
 
         # put in a list the lines of the text box
@@ -3204,26 +6450,26 @@ class C_GUI():
                     txt_widget.tag_add(self.tag_comment, f'{l+1}.0', f'{l+1}.0 lineend')
                     break
                 elif lines[l][0] == '[' and lines[l][c] == ']':  # object ID
-                    txt_widget.tag_add(self.tag_obj_ID, f'{l+1}.0', f'{l+1}.{c+1}')
+                    txt_widget.tag_add(self.tag_obj_UID, f'{l+1}.0', f'{l+1}.{c+1}')
                     break
                 elif txt_widget.get(f'{l + 1}.{c}') == '=':  # equal char in a attribute=value line
                     txt_widget.tag_add(self.tag_field, f'{l+1}.0', f'{l + 1}.{c}')
                     break
                 elif lines[l][:2] == '§§' :  # image file name to insert (in the help)
                     # recover the file name after the '§§' tag
-                    file_name = lines[l][2:]
+                    file_name_str = lines[l][2:]
                     # remove the file name in the widget
                     txt_widget.delete(f'{l+1}.0', f'{l+1}.0 lineend')
                     try:
                         # open the image file
-                        photo = PhotoImage(file = os.path.dirname(__file__) + '/' + file_name)
+                        photo = PhotoImage(file = os.path.dirname(__file__) + os.sep + file_name_str)
                         # add the reference of the image in the list to store these references
                         self.images_ref.append(photo)
                         # insert the image in the text box
                         txt_widget.image_create(f'{l+1}.0', image=photo, padx=10, pady=10)
                     except:
                         # insert a message indicating that the image has not been opened
-                        txt_widget.insert(f'{l+1}.0', f'!!! cannot open the image {file_name}')
+                        txt_widget.insert(f'{l+1}.0', f'!!! cannot open the image {file_name_str}')
                     break
                 elif lines[l][:2] == '>>' :  # title line (in the help)
                     txt_widget.delete(f'{l+1}.0', f'{l+1}.3')
@@ -3238,11 +6484,8 @@ class C_GUI():
         if self.save_modif_before_change(object_change=True):
             # the user has not cancelled the operation
 
-            self.odf_data.events_log_add("Checking the data...")
-            self.events_log_text_display()
-
             # do the check
-            self.odf_data.check_odf_lines(self.check_odf_lines_status_update)
+            self.odf_data.check_odf_lines(self.progress_status_update)
 
             # update the events log text
             self.events_log_text_display()
@@ -3254,11 +6497,14 @@ class C_GUI():
             self.object_text_do_parents_update()
 
     #-------------------------------------------------------------------------------------------------
-    def check_odf_lines_status_update(self, object_ID):
-        #--- callback function called by the C_ODF.check_odf_lines function to display in the parents label widget the object ID currently checked
+    def progress_status_update(self, message):
+        #--- callback function called by the C_ODF.check_odf_lines or C_HW2GO.GO_ODF_build_from_HW_ODF function
+        #--- to display in the parents label widget a progress status message
 
-        self.lab_parents_list.config(text=f"Checking {object_ID}...")
-        self.lab_parents_list.update_idletasks()
+        self.lab_parents_list.config(text=message)
+        self.lab_parents_list['foreground'] = 'red3'
+        self.lab_parents_list.update()
+##        self.lab_parents_list.update_idletasks()
 
 #-------------------------------------------------------------------------------------------------
 class CreateToolTip(object):
@@ -3312,6 +6558,109 @@ class CreateToolTip(object):
 
 
 #-------------------------------------------------------------------------------------------------
+NOTES = ['C', 'Cis', 'D', 'Dis', 'E', 'F', 'Fis', 'G', 'Gis', 'A', 'Ais', 'B']
+OCTAVES = list(range(11))
+NOTES_IN_OCTAVE = len(NOTES)
+
+def midi_number_to_note(number: int) -> tuple:
+    octave = number // NOTES_IN_OCTAVE
+    assert octave in OCTAVES, f'Wrong octave {octave} number in midi_number_to_note function'
+    assert 0 <= number <= 127, f'Wrong MIDI note number {number} in midi_number_to_note function'
+    note = NOTES[number % NOTES_IN_OCTAVE]
+    return note, octave
+
+def midi_note_to_number(note: str, octave: int) -> int:
+    assert note in NOTES, f'Wrong note name {note} in midi_note_to_number function input'
+    assert octave in OCTAVES, f'Wrong octave number {octave} in midi_note_to_number function input'
+    note = NOTES.index(note)
+    note += (NOTES_IN_OCTAVE * octave)
+    assert 0 <= note <= 127, f'Wrong note number {note} in midi_note_to_number function'
+    return note
+
+#-------------------------------------------------------------------------------------------------
+def myint(data):
+    # return the given data in integer format, or None if it cannot be converted to integer or is not defined
+
+    if data == None:
+        return None
+
+    try:
+        return int(data)
+    except:
+        return None
+
+#-------------------------------------------------------------------------------------------------
+def myfloat(data):
+    # return the given data in float format, or None if it cannot be converted to float or is not defined
+
+    if data == None:
+        return None
+
+    try:
+        return float(data)
+    except:
+        return None
+
+#-------------------------------------------------------------------------------------------------
+def mystr(data):
+    # return the given data in string format, or None if the given data cannot be converted to string or '' if it is not defined
+
+    if data == None:
+        return ''
+
+    try:
+        return str(data)
+    except:
+        return None
+
+#-------------------------------------------------------------------------------------------------
+prev_actual_file_name = ''  # variable to keep in memory the previous found actual file name, to speed up the processing of the next one if there are common parts
+def get_actual_file_name(file_name):
+    # return the given file path/name with the actual characters case as they are defined on the storage
+    # return None if the given file name doesn't exist
+    # the given file path/name must have the path separator of the OS on which is running the script
+
+    global prev_actual_file_name
+
+    # split the given file name by elements separated by the OS path separator
+    file_name_split = file_name.split(os.sep)
+    file_name_split_len = len(file_name_split)
+
+    i = 0
+    if prev_actual_file_name != '':
+        # recover from the previous actual file name the path elements which are equal to the one of the given file name (to spend less time in the next while loop)
+        # split the previous actual file name by elements separated by the OS path separator
+        prev_actual_file_name_split = prev_actual_file_name.split(os.sep)
+        actual_file_name = ''
+        while i < file_name_split_len and file_name_split[i].lower() == prev_actual_file_name_split[i].lower():
+            actual_file_name += prev_actual_file_name_split[i] + os.sep
+            i += 1
+        if i == file_name_split_len:
+            # the entire previous actual file name has been recovered, remove the last separator
+            actual_file_name = actual_file_name[:-1]
+
+    if i == 0:
+        # nothing to recover from the previous actual file name or it is empty
+        # we consider that the root folder of the given file name has the actual case
+        actual_file_name = file_name_split[0] + os.sep
+        i = 1
+
+    # recover from the storage the actual name of the remaining elements of the given file path/name
+    while i < file_name_split_len:
+        found = False
+        for actual_element in os.listdir(actual_file_name):
+            if actual_element.lower() == file_name_split[i].lower():
+                found = True
+                break
+        if not found:
+            return None
+        actual_file_name = os.path.join(actual_file_name, actual_element)
+        i += 1
+
+    prev_actual_file_name = actual_file_name
+    return actual_file_name
+
+#-------------------------------------------------------------------------------------------------
 def main():
     #--- main function of the application
 
@@ -3319,928 +6668,6 @@ def main():
     C_GUI().wnd_main_build().mainloop()
 
 #-------------------------------------------------------------------------------------------------
-# help displayed in the tab "Help" of the application
-
-HELP_TEXT = """
->> General information
-This tool is intended to help in editing and checking an organ definition file (ODF, extension .organ) in plain text mode.
-To completely check the goodness of an ODF, load it in GrandOrgue who will detect deeply all the remaining errors if any.
-Right-click on the object edition or logs text areas to open a contextual menu permitting to clear all the text in the area.
-The help below is largely inspired and copy/pasted from the GrandOrgue help.
-
-An ODF is a text file in ISO-8859-1 encoding. The standard extension is .organ. As an alternative, the file might be encoded in UTF-8 if it starts with the appropriate byte order marker.
-It is composed of several object sections, each one being organized like this :
-[Object ID]
-; comment line anywhere
-attribute1=value1
-attribute2=value2
-
-Comment lines are started with ; in the first column.
-Empty lines are ignored.
-The text is case sensitive for object ID and attributes.
-Each object ID (also called section name) must occur once in the ODF.
-Each attribute (also called setting) must occur once in his object section.
-
-
->> Objects ID summary
-
-Available objects IDs (999 stands for a 3-digits placeholder, it must be higher than 0, it can be equal to 0 for Manual and Panel only) :
-[Organ] the general description of the instrument (and the main panel for old panel format)
-[Coupler999] the means to apply key press of a manual to key of another manual
-[Divisional999] a combinaisons memory applied at manual level
-[DivisionalCoupler999] the means to apply divisional selection of a manual to divisional of another manual
-[Enclosure999] a swell pedal which has effect on a wind-chest
-[General999] a combinaisons memory applied at organ level
-[Manual999] a manual or a pedal
-[Panel999] a window containing graphical user interface (GUI) elements
-[Panel999Image999] an image to display in a panel (additional panel if old panel format)
-[Rank999] a group of pipes with similar sonic properties
-[Stop999] the means to activate a selection of ranks
-[Switch999] the means to toggle the state of couplers / stops / tremulants
-[Tremulant999] the means to apply a tremulant effect to a wind-chest
-[WindchestGroup999] a wind-chest on which ranks of pipes are placed
-
-GUI objects ID used with the NEW panel format only :
-[Panel999Element999] an element (switch, stop, manual, label, general, setter, ...)
-
-GUI objects ID used with the OLD panel format only :
-in the main panel :
-[Image999] an image
-[Label999] a label
-[ReversiblePiston999] a piston which toggles between on and off at each push
-[SetterElement999] an element to show/change a setting
-in additional panels :
-[Panel999Coupler999] a coupler
-[Panel999Divisional999] a divisional
-[Panel999DivisionalCoupler999] a divisional coupler
-[Panel999Enclosure999] an enclosure
-[Panel999General999] a general
-[Panel999Label999] a label
-[Panel999ReversiblePiston999] a reversible piston
-[Panel999SetterElement999] a setter element
-[Panel999Stop999] a stop
-[Panel999Switch999] a switch
-[Panel999Tremulant999] a tremulant
-
-The NEW panel format is characterized by the presence of a Panel000 object (the main panel) which contains the attribute NumberOfGUIElements.
-With the OLD panel format, the main panel is defined inside the Organ object (no Panel000 object to define).
-
-Each object can consist of a backend part representing the object, and its configuration (eg. list of sample file names) and multiple GUI representations.
-Objects like stops only displayed on a non-main panel need an invisible definition for the backend part on the main panel too.
-
-Objects which define the number of other objects are :
-[Organ]
-NumberOfDivisionalCouplers -> [DivisionalCoupler999]
-NumberOfEnclosures -> [Enclosure999]
-NumberOfGenerals -> [General999]
-NumberOfManuals -> [Manual999]
-NumberOfPanels -> [Panel999]
-NumberOfRanks -> [Rank999]
-NumberOfSwitches ->	[Switch999]
-NumberOfTremulants -> [Tremulant999]
-NumberOfWindchestGroups -> [WindchestGroup999]
-Old panel format (for the main panel) :
-    NumberOfImages -> [Image999]
-    NumberOfLabels -> [Label999]
-    NumberOfReversiblePistons -> [ReversiblePiston999]
-    NumberOfSetterElements -> [SetterElement999]
-
-[Manual999]
-NumberOfCouplers -> [Coupler999]
-NumberOfDivisionals -> [Divisional999]
-NumberOfStops -> [Stop999]
-
-[Panel999]
-New panel format :
-    NumberOfGUIElements -> [Panel999Element999]
-New and old panel formats :
-    NumberOfImages -> [Panel999Image999]
-Old panel format :
-    NumberOfCouplers ->	[Panel999Coupler999]
-    NumberOfDivisionals -> [Panel999Divisional999]
-    NumberOfDivisionalCouplers -> [Panel999DivisionalCoupler999]
-    NumberOfEnclosures -> [Panel999Enclosure999]
-    NumberOfGenerals -> [Panel999General999]
-    NumberOfLabels -> [Panel999Label999]
-    NumberOfReversiblePistons -> [Panel999ReversiblePiston999]
-    NumberOfSetterElements -> [Panel999SetterElement999]
-    NumberOfStops -> [Panel999Stop999]
-    NumberOfSwitches -> [Panel999Switch999]
-    NumberOfTremulants -> [Panel999Tremulant999]
-
-The structure of ODF objects hierarchy is (new panel format) :
-    Organ
-            General...
-            Manual...
-                    Coupler...
-                            Switch...
-                    Divisional...
-                    DivisionalCoupler...
-                    Stop...
-                            Rank...
-                            Switch...
-                    Switch...
-                    Tremulant...
-                            Switch...
-            Panel...
-                    Panel...Element...
-                            Switch...
-                    Panel...Image...
-            WindchestGroup...
-                    Enclosure...
-                    Rank...
-                    Stop...
-                            Switch...
-                    Tremulant...
-                            Switch...
-
-Minimum mandatory objects to define in an ODF are :
-    Organ
-            Manual001
-                    Stop001
-            Panel000 (new panel format)
-            WindchestGroup001
-                    Stop001
-
-
->> Attributes value types
-
-Boolean : Y for "true", N for "false"
-
-Color : BLACK, BLUE, DARK BLUE, GREEN, DARK GREEN, CYAN, DARK CYAN, RED, DARK RED, MAGENTA, DARK MAGENTA, YELLOW, DARK YELLOW, LIGHT GREY, DARK GREY, WHITE, BROWN. Or HTML syntax #RRGGBB
-
-Font size : SMALL, NORMAL, LARGE or an integer number between 1 and 50
-
-Panel size : SMALL, MEDIUM, MEDIUM LARGE, LARGE or an integer number between 100 and 4000
-
-Image format : bmp, gif, jpg, ico, png
-
-Floating point numbers : -?[0-9]+(.[0-9]*)? means optional minus sign, followed by at least one digit. The decimal separator is a point.
-
-"samples" counts : number of samples from the start of the WAV ﬁle. One sample includes the values of all channels, eg: for a stereo WAV ﬁle at 44.1 kHz, 1 second is equivalent to 44100 samples.
-
-File paths are relative to the location of the ODF. The directory separator must be \ and not contain /. The paths should be considered case sensitive.
-
-
->> Objects sections and their attributes
-
-[Organ]
-This object describes the whole organ.
-For the old panel format, it includes the main panel, therefore the section includes all display metrics attributes.
-The new panel format separates the display metrics of the main panel into an object named Panel000.
-
-REQUIRED ATTRIBUTES :
-ChurchName=(string, required) Name of the organ/church. This string should be unique, as setting ﬁles for organs with the same ChurchName are considered compatible. GrandOrgue will not load a settings ﬁle if the ChurchName does not match.
-ChurchAddress=(string, required) informational text displayed in the property dialog.
-HasPedals=(boolean, required) Determines if the pedal, which is deﬁned as section Manual000, is present.
-
-NumberOfDivisionalCouplers=(integer 0-8, required) number of divisional couplers. The details are in a section called DivisionalCoupler999.
-NumberOfEnclosures=(integer 0-50, required) number of enclosures. The details of each enclosure are contained in a section called Enclosure999.
-NumberOfGenerals=(integer 0-99, required) number of generals. The details are in a section called General999.
-NumberOfManuals=(integer 1-16, required) number of manuals. It does not include the pedal keyboard. The manual information for each manual is available in sections called Manual999. 999 is a number deﬁning each manual, starting with 001.
-NumberOfPanels=(integer 0-100, required) number of panels in addition to the  main panel. The details are in a section called Panel999.
-NumberOfReversiblePistons=(integer 0-32, required) number of reversible pistons. The details of each reversible piston are in a section called ReversiblePiston999.
-NumberOfTremulants=(integer 0-10, required) number of tremulants. The details of each tremulant are contained in a section called Tremulant999.
-NumberOfWindchestGroups=(integer 1-50, required) number of windchests. The details of each windchest are in a section called WindchestGroup999.
-
-DivisionalsStoreIntermanualCouplers=(boolean, required) determines if divisionals store/change the state of associated intermanual couplers.
-DivisionalsStoreIntramanualCouplers=(boolean, required) determines if divisionals store/change the state of associated intramanual couplers.
-DivisionalsStoreTremulants=(boolean, required) determines if divisionals store/change the state of associated tremulants.
-GeneralsStoreDivisionalCouplers=(boolean, required) determines if divisionals store/change the state of divisional couplers.
-
-OPTIONAL ATTRIBUTES :
-OrganBuilder=(string, not required) informational text displayed in the property dialog.
-OrganBuildDate=(string, not required) informational text displayed in the property dialog.
-OrganComments=(string, not required) informational text displayed in the property dialog.
-RecordingDetails=(string, not required) informational text displayed in the property dialog.
-InfoFilename=(string, not required) relative path to an html ﬁle with more information about the organ. This setting is currently NOT supported for organ packages.
-
-NumberOfImages=(integer 0-999, default: 0) Number of images on the panel. The section of the label GUI deﬁnitions are called Image999. This setting is NOT supported for the new panel format.
-NumberOfLabels=(integer 0-999, default: 0) Number of labels on the panel. The section for each label GUI deﬁnition is called Label999. This setting is NOT supported for the new panel format.
-NumberOfRanks=(integer 0-999, default: 0) number of ranks. The details are in a section called Rank999.
-NumberOfSetterElements=(integer 0-999, default: 0) Number of setter elements on the panel. The section of the GUI deﬁnitions are called SetterElement999. This setting is NOT supported for the new panel format.
-NumberOfSwitches=(integer 0-999, default: 0) number of switches. The details are in a section called Switch999.
-
-CombinationsStoreNonDisplayedDrawstops=(boolean, default: true) determines, if the state of invisible objects (on the main panel) is stored in divisionals, generals and the setter.
-AmplitudeLevel=(ﬂoat 0-1000, default: 100) Linear amplitude scale factor applied to the whole organ. 100 means no change.
-Gain=(ﬂoat -120 - 40, default: 0) Amplitude scale factor in dB applied to the whole organ. 0 means no change.
-PitchTuning=(ﬂoat -1200-1200, default: 0) Retune the whole organ the speciﬁed number of cents.
-TrackerDelay=(integer 0 - 10000, default: 0) Delay introduced by the tracker applied to the whole organ.
-
-+ display metrics attributes of a panel if old panel format, see [Panel999]
-
-
-[Button]
-Button object is included inside a drawstop, setter element or push button object. These objects share the following common attributes.
-
-REQUIRED ATTRIBUTES :
-None
-
-OPTIONAL ATTRIBUTES :
-Name=(string, required) Name of the object. The name may be presented to the user in lists too, therefore it should be descriptive. If a GUI representation requires a shorter name, please override this value locally.
-ShortcutKey=(integer 0-255, default: 0) 0 means no shortcut, else it speciﬁes the key code of the shortcut key (see the shortcuts list in the GrandOrgue help).
-StopControlMIDIKeyNumber=(integer 0-127, default: no MIDI event speciﬁed) Only used for building the initial conﬁguration during the ﬁrst load - provided just for HW1 compatibility. DEPRECATED.
-MIDIProgramChangeNumber=(integer 1-128, default: no MIDI event speciﬁed) Only used for building the initial conﬁguration during the ﬁrst load - provided just for HW1 compatibility. DEPRECATED.
-
-Displayed=(boolean, default: false) If true, the section also includes the GUI attributes for the main panel. Otherwise it is not displayed on the main panel.
-DisplayInInvertedState=(boolean, default: false) If true, off is displayed as on and on as off.
-DisplayAsPiston=(boolean, default: true for divisionals, generals and pistons, else false) True means to display as piston, false as drawstop
-DispLabelColour=(color, default: Dark Red) Color for the label text.
-DispLabelFontSize=(font size, default: normal) Size of the label font.
-DispLabelFontName=(string, default: empty) Font for the text. Empty means use the control label font of the panel.
-DispLabelText=(string, default: Name of the button) Content of the text label. You should edit it, if you need to display a shorter string on the label.
-DispKeyLabelOnLeft=(boolean, default: true) If displayed as a piston and this attribute is false, move it a little bit left. Otherwise ignored.
-DispImageNum=(integer, type dependent, default: see after) Builtin bitmap set to use. GrandOrgue has 6 for drawstops and 5 for pistons (see image below). The default is 3 (piston) or 4 (drawstops) for read-only buttons, otherwise the default is 1.
-§§OdfEdit_res/ImageNumButton.png
-DispButtonRow=(button row starting from 0, default: 1) If displayed as piston, it contains the button row according to the layout model. Otherwise ignored.
-DispButtonCol=(button column starting from 1, default: 1) If displayed as piston, it contains the button column according to the layout model. Otherwise ignored.
-DispDrawstopRow=(drawstop row, default: 1) If displayed as drawstop, it contains the drawstop row according to the layout model. Otherwise ignored.
-DispDrawstopCol=(drawstop column, default: 1) If displayed as drawstop, it contains the drawstop column according to the layout model. Otherwise ignored.
-
-ImageOn=(string, default: use internal bitmap according to DispImageNum) Specify the ﬁle name of an image to use as on bitmap. If the bitmap contains a mask for transparency, it will be used.
-ImageOff=(string, default: use internal bitmap according to DispImageNum) Specify the ﬁle name of an image to use as off bitmap. If the bitmap contains a mask for transparency, it will be used. The size must match the on bitmap.
-MaskOn=(string, default: empty) File name for a external mask for the on bitmap. If empty, no mask is added.
-MaskOff=(string, default: value of MaskOn) File name for a external mask for the off bitmap. If empty, no mask is added.
-
-PositionX=(integer 0 - panel width, default: according to layout model) Allow to override X position for button.
-PositionY=(integer 0 - panel height, default: according to layout model) Allow to override Y position for button.
-Width=(integer 0 - panel width, default: bitmap width) Width of the button. If larger than the bitmap, the bitmap is tiled.
-Height=(integer 0 - panel height, default: bitmap height) Height of the button. If larger than the bitmap, the bitmap is tiled.
-TileOffsetX=(integer 0 - bitmap width, default: 0) X position on the bitmap of the left pixel of the button.
-TileOffsetY=(integer 0 - bitmap height, default: 0) Y position on the bitmap of the top pixel of the button.
-
-MouseRectLeft=(integer 0 - Width, default: 0) relative X of left border of the mouse rectangle.
-MouseRectTop=(integer 0 - Height, default: 0) relative Y of top border of the mouse rectangle.
-MouseRectWidth=(integer 0 - Width, default: Width) width of the mouse rectangle.
-MouseRectHeight=(integer 0 - Height, default: Width) height of the mouse rectangle.
-MouseRadius=(integer 0 - max(MouseRectHeight, MouseRectWidth), default: max(MouseRectHeight, MouseRectWidth) / 2). If 0, the mouse events are captured inside the mouse rectangle. Otherwise they must be inside a circle of the speciﬁed size too.
-
-TextRectLeft=(integer 0 - Width, default: 0) relative X of left border of the text rectangle.
-TextRectTop=(integer 0 - Height, default: 0) relative Y of top border of the text rectangle.
-TextRectWidth=(integer 0 - Width, default: bitmap width) width of the text rectangle.
-TextRectHeight=(integer 0 - Height, default: Height) height of the text rectangle.
-TextBreakWidth=(integer 0 - TextRectWidth, default: slightly smaller than TextRectWidth) If 0, no text is displayed. Otherwise the value speciﬁes the maximum line length used for text breaking.
-
-Inside the button, the on/off bitmap (depending on the button state) is tiled. If a text width is set, a text label is displayed on it. Mouse events are only captured inside the mouse rectangle.
-
-
-[Coupler999]
-Coupler is a drawstop object with the following additional attributes. It forwards key presses from one manual to other manuals/keys.
-
-REQUIRED ATTRIBUTES :
-UnisonOff=(boolean, required) If true, this coupler decouples the manual from the stops (turn it into a ﬂoating manual).
-DestinationManual=(integer manual number, required if not a unison off coupler) manual to forward key presses to.
-DestinationKeyshift=(integer -24 - 24, required if not a unison off coupler) speciﬁes the keyboard shift between source and destination manual in terms of absolute MIDI note numbers
-
-CoupleToSubsequentUnisonIntermanualCouplers=(boolean, required if not a unison off/melody/bass coupler) Triggers further inter-manual coupler with a destination key shift of zero.
-CoupleToSubsequentUpwardIntermanualCouplers=(boolean, required if not a unison off/melody/bass coupler) Triggers further inter-manual coupler with a destination key shift greater than zero.
-CoupleToSubsequentDownwardIntermanualCouplers=(boolean, required if not a unison off/melody/bass coupler) Trigger further inter-manual coupler with a destination key shift less than zero.
-CoupleToSubsequentUpwardIntramanualCouplers=(boolean, required if not a unison off/melody/bass coupler) Triggers further intra-manual coupler with a destination key shift greater than zero.
-CoupleToSubsequentDownwardIntramanualCouplers=(boolean, required if not a unison off/melody/bass coupler) Triggers further intra-manual coupler with a destination key shift less than zero.
-
-OPTIONAL ATTRIBUTES :
-CouplerType=(enumeration, default: Normal) Type of the coupler: Normal, Bass or Melody.
-FirstMIDINoteNumber=(integer 0-127, default: 0) ﬁrst MIDI note number to forward.
-NumberOfKeys=(integer 0-127, default: 0) number of keys to forward starting with FirstMIDINoteNumber.
-
-+ attributes of a drawstop, see [DrawStop]
-
-
-[Divisional999]
-Divisional is a push button object with the following additional attributes.
-
-REQUIRED ATTRIBUTES :
-NumberOfCouplers=(integer 0 - coupler count of the manual, required) Number of coupler states stored in this combination. The entries are called Coupler999.
-NumberOfStops=(integer 0 - stop count of the manual, required) Number of stop states stored in this combination. The entries are called Stop999.
-NumberOfTremulants=(integer 0 - tremulant count of the manual, required) Number of tremulant states stored in this combination. The entries are called Tremulant999.
-
-Coupler999=(integer -999 - 999, required) Number of the coupler. If the value is negative, it is turned off, else turned on.
-Stop999=(integer -manual stop count - manual stop count, required) Number of the stop. If the value is negative, it is turned off, else turned on.
-Switch999=(integer -manual switch count - manual switch count, required) Number of the switch. If the value is negative, it is turned off, else it is turned on.
-Tremulant999=(integer -manual tremulant count - manual tremulant count, required) Number of the tremulant. If the value is negative, it is turned off, else it is turned on.
-
-OPTIONAL ATTRIBUTES :
-Protected=(boolean, default: false) If true, the stored combination cannot be changed.
-NumberOfSwitches=(integer 0 - switch count of the manual, default) Number of switch states stored in this combination. The entries are called Switch999.
-
-+ attributes of a push button, see [PushButton]
-
-
-[DivisionalCoupler999]
-Divisional coupler is a drawstop object with the following additional attributes. If enabled, activating a divisional on one controlled manual will activate the corresponding divisional on all other manuals.
-
-REQUIRED ATTRIBUTES :
-BiDirectionalCoupling=(boolean, required) If false, the coupler only couples upward in the manual list of the coupler, else upward and downward.
-
-NumberOfManuals=(integer 1 - manual count, required) Number of manuals affected by this coupler. The list entries are stored in Manual999 setting.
-Manual999=(integer manual number, required) Manual affected by the coupler
-
-+ attributes of a drawstop, see [DrawStop]
-
-
-[DrawStop]
-Drawstop is a button with toogle functions used for coupler, divisional coupler, stop, switch or tremulant, with the following additional non-GUI attributes.
-
-REQUIRED ATTRIBUTES :
-Switch999=(integer 1 - switch count, required) Lists the input switches of the logical function of the drawstop. If the drawstop is a switch, it can only reference switches with a lower number. The number of this settings depends on the function.
-
-OPTIONAL ATTRIBUTES :
-Function=(enumeration, default: Input) Logical function of the drawstop. If the value is Input, it is a normal user controllable drawstop and has no input switches. Not has one only input and negates the state of the input switch. And, Xor, Nand, Nor as well as Or has a variable number of inputs.
-SwitchCount=(integer 1 - switch count, default: 0) Contains the number of input ports, if the logical function allows a variable number number of input. Switch999 contains the referenced switches.
-DefaultToEngaged=(boolean, default: False) State of the button after loading.
-GCState=(integer -1 - 1, default: implementation deﬁned) State of the button after pressing GC. -1 means no change, 0 off and 1 on.
-StoreInDivisional=(boolean, default: dependent on various settings) Determines, if the button should be stored in divisionals without FULL.
-StoreInGeneral=(boolean, default: dependent on various settings) Determines, if the button should be stored in generals without FULL.
-
-+ attributes of a button, see [Button]
-
-
-[Enclosure999]
-Enclosure is a swell pedal. It consists of non-gui attributes describing its function. If it is displayed, it contains additional GUI attributes. Best practise is to specify enclosures in natural layout order (leftmost ﬁrst) and give them incremental values of MIDIInputNumber to make initial conﬁgurations easy for the user.
-
-OPTIONAL ATTRIBUTES :
-Name=(string) Name of the control
-AmpMinimumLevel=(integer 0-100, required) Minimum volume, if the enclosure is closed.
-MIDIInputNumber=(integer 0 - 200, default: 0) This number is used while building the initial MIDI conﬁguration to map the enclosure object to one MIDI device the user can specify for the respective enclosure. A value of 0 means no association, 1 means enclosure 1, 2 is enclosure 2 etc. Please note, that the GUI only allows the association of the ﬁrst few enclosures.
-Displayed=(boolean, default: false for the new panel format, otherwise true) If true, the enclosure is visible on the main panel.
-
-GUI attributes (are all OPTIONAL) :
-DispLabelColour=(color, default: Dark Red) Color for the label text.
-DispLabelFontSize=(font size, default: 7) Size of the label font.
-DispLabelFontName=(string, default: empty) Font for the text. Empty means use the default font.
-DispLabelText=(string, default: Name of the button) Content of the text label. You should edit it if you need to display a shorter string.
-
-EnclosureStyle=(integer 1 - 4, default: implementation dependent) Select a built-in enclosure style (see image below).
-§§OdfEdit_res/EnclosureStyle.png
-
-BitmapCount=(integer 1 - 127, default: implementation dependent) Number of bitmaps/steps.
-Bitmap999=(string, default: use internal bitmap) Specify the ﬁle name of an image to use as on bitmap for position 999. If the bitmap contains a mask for transparency, it will be used. All bitmaps must have the same size.
-Mask999=(string, default: empty) File name for a external mask for bitmap 999. If empty, no mask is added.
-
-PositionX=(integer 0 - panel width, default: according to layout model) Allow to override X position for enclosure.
-PositionY=(integer 0 - panel height, default: according to layout model) Allow to override Y position for enclosure.
-Width=(integer 0 - panel width, default: bitmap width) Width of the enclosure. If larger than the bitmap, the bitmap is tiled.
-Height=(integer 0 - panel height, default: bitmap height) Height of the enclosure. If larger than the bitmap, the bitmap is tiled.
-TileOffsetX=(integer 0 - bitmap width, default: 0) X position on the bitmap of the left pixel of the enclosure.
-TileOffsetY=(integer 0 - bitmap height, default: 0) Y position on the bitmap of the top pixel of the enclosure.
-
-MouseRectLeft=(integer 0 - Width, default: 0) relative X of left border of the mouse rectangle.
-MouseRectTop=(integer 0 - Height, default: implementation dependent) relative Y of top border of the mouse rectangle.
-MouseRectWidth=(integer 0 - Width, default: Width) width of the mouse rectangle.
-MouseRectHeight=(integer 0 - Height, default: implementation dependent) height of the mouse rectangle.
-MouseAxisStart=(integer 0 - MouseRectHeight, default: implementation dependent) top Y coordinate of the axis.
-MouseAxisEnd=(integer MouseAxisStart - MouseRectHeight, default: implementation dependent) bottom Y coordinate of the axis.
-
-TextRectLeft=(integer 0 - Width, default: 0) relative X of left border of the text rectangle.
-TextRectTop=(integer 0 - Height, default: implementation dependent) relative Y of top border of the text rectangle.
-TextRectWidth=(integer 0 - Width, default: Width) width of the text rectangle.
-TextRectHeight=(integer 0 - Height, default: implementation dependent) height of the text rectangle.
-TextBreakWidth=(integer 0 - text rectangle width, default: TextWidth) If 0, no text is displayed. Otherwise the value speciﬁes the maximum line length used for text breaking.
-
-
-[General999]
-General is a push button with the following additional combination data store attributes (used to store one combination).
-
-REQUIRED ATTRIBUTES :
-NumberOfCouplers=(integer 0 - number of coupler deﬁned in the ODF, required) Number of coupler states stored in this combination. The entries are called CouplerNumber999 and CouplerManual999.
-NumberOfDivisionalCouplers=(integer 0 - divisional coupler count, required if storing of divisional coupler in the generals is enabled) Number of divisional coupler state stored in this combination. The entries are called DivisionalCouplerNumber999.
-NumberOfStops=(integer 0 - number of stops deﬁned in the ODF, required) Number of stop states stored in this combination. The entries are called StopNumber999 and StopManual999.
-NumberOfTremulants=(integer 0 - tremulant count, required) Number of tremulant states stored in this combination. The entries are called TremulantNumber999.
-
-CouplerNumber999=(integer -999 - 999, required) Number of the coupler on the manual. If the value is negative, it is turned off, else it is turned on.
-CouplerManual999=(integer manual number, required) Number of the manual, which contains the coupler.
-DivisionalCouplerNumber999=(integer -divisional coupler count -divisional coupler count, required) Number of the divisional coupler. If the value is negative, it is turned off, else it is turned on.
-StopNumber999=(integer -manual stop count - manual stop count, required) Number of the stop on the manual. If the value is negative, it is turned off, else turned on.
-StopManual999=(integer manual number, required) Number of the manual, which contains the stop.
-SwitchNumber999=(integer -switch count - switch count, required) Number of the switch. If the value is negative, it is turned off, else it is turned on.
-TremulantNumber999=(integer -tremulant count - tremulant count, required) Number of the tremulant. If the value is negative, it is turned off, else turned on.
-
-OPTIONAL ATTRIBUTES :
-NumberOfSwitches=(integer 0 - switch count, default: 0) Number of switch states stored in this combination. The entries are called SwitchNumber999.
-Protected=(boolean, default: false) If true, the stored combination cannot be changed.
-
-+ attributes of a push button, see [PushButton]
-
-
-[Image999]
-Image allows to display an image on a panel. It tiles the image if it is bigger than the image object size.
-
-REQUIRED ATTRIBUTES :
-Image=(string, required) Speciﬁes the ﬁle name of an image to use as a bitmap. If the bitmap contains a mask for transparency, it will be used.
-
-OPTIONAL ATTRIBUTES :
-Mask=(string, default: empty) File name for a external mask for the bitmap. If empty, no mask is added.
-PositionX=(integer 0 - panel width, default: 0) X coordinate of the left side. to override X position for button.
-PositionY=(integer 0 - panel height, default: 0) Y coordinate of the left side.
-Width=(integer 0 - panel width, default: bitmap width) Width of the button. If larger than the bitmap, the bitmap is tiled.
-Height=(integer 0 - panel height, default: bitmap height) Height of the button. If larger than the bitmap, the bitmap is tiled.
-TileOffsetX=(integer 0 - bitmap width, default: 0) X position on the bitmap of the left pixel of the button.
-TileOffsetY=(integer 0 - bitmap width, default: 0) Y position on the bitmap of the top pixel of the button.
-
-
-[Label999]
-Label allows to display a text label on a panel. The background is an image. It is tiled if the image is smaller than the label area.
-
-OPTIONAL ATTRIBUTES :
-Name=(string, default: empty) The text to display on this object
-FreeXPlacement=(boolean, default: true) True means that the X position is determined by DispXpos, else by DispDrawstopCol and DispSpanDrawstopColToRight.
-FreeYPlacement=(boolean, default: true) True means that the Y position is determined by DispYpos, else by DispAtTopOfDrawstopCol.
-DispXpos=(integer 0-panel width, default: 0) absolute X position.
-DispYpos=(integer 0-panel height, default: 0) absolute Y position.
-DispAtTopOfDrawstopCol=(boolean, required if FreeYPlacement is false) If true, the label is displayed above the drawstop, else below.
-DispDrawstopCol=(integer 1- number of drawstop columns, required if FreeXPlacement is false) Position label at the speciﬁed drawstop column.
-DispSpanDrawstopColToRight=(boolean, required if FreeXPlacement is false) If true, move label half of the drawstop to the right.
-DispLabelColour=(color, default: black) Color for the label text.
-DispLabelFontSize=(font size, default: normal) Size of the label font.
-DispLabelFontName=(string, default: empty) Font for the text. Empty means use the group label font of the panel.
-DispImageNum=(integer 1-12, default: 1) Builtin bitmap set to use (see image below).
-§§OdfEdit_res/ImageNumLabel.png
-
-Image=(string, default: use internal bitmap according to DispImageNum) Specify the ﬁle name of an image to use as bitmap. If the bitmap contains a mask for transparency, it will be used.
-Mask=(string, default: empty) File name for a external mask for the bitmap. If empty, no mask is added.
-
-PositionX=(integer 0 - panel width, default: according to the deﬁnitions above) Allow to override X position for button.
-PositionY=(integer 0 - panel height, default: according to deﬁntions above) Allow to override Y position for button.
-Width=(integer 0 - panel width, default: bitmap width) Width of the button. If larger than the bitmap, the bitmap is tiled.
-Height=(integer 0 - panel height, default: bitmap height) Height of the button. If larger than the bitmap, the bitmap is tiled.
-TileOffsetX=(integer 0 - bitmap width, default: 0) X position on the bitmap of the left pixel of the button.
-TileOffsetY=(integer 0 - bitmap height, default: 0) Y position on the bitmap of the top pixel of the button.
-
-TextRectLeft=(integer 0 - Width, default: 0) relative X of left border of the text rectangle.
-TextRectTop=(integer 0 - Height, default: 0) relative Y of top border of the text rectangle.
-TextRectWidth=(integer 0 - Width, default: Width) width of the text rectangle.
-TextRectHeight=(integer 0 - Height, default: Height) height of the text rectangle.
-TextBreakWidth=(integer 0 - text rectangle width, default: Width) If 0, no text is displayed. Otherwise the value speciﬁes the maximum line length used for text breaking.
-
-
-[Manual999]
-Manual is associated with a number of stops, tremulants, divisionals and couplers. The accessible range can be played via MIDI, the rest of the logical keys can only be triggered by (octave) couplers.
-Best practise is to specify the visible manuals in the order of appearance, lowest ﬁrst. Invisible manuals and those used for special effects should be speciﬁed after the visible ones.
-
-REQUIRED ATTRIBUTES :
-Name=(string, required) Name of the manual.
-NumberOfLogicalKeys=(integer 1-192, required) Number of keys on this manual (including non-playable ones).
-FirstAccessibleKeyLogicalKeyNumber=(integer 1 - NumberOfLogicalKeys, required) number of the ﬁrst usable key.
-FirstAccessibleKeyMIDINoteNumber=(integer 0 - 127, required) MIDI note number of the ﬁrst MIDI acessible key.
-
-NumberOfAccessibleKeys=(integer 0 - 85, required) number of MIDI accessible keys.
-NumberOfCouplers=(integer 0-999, default: 0) Number of couplers associated with this manual. Starting with 1, for each coupler, there is a Coupler999 setting.
-NumberOfDivisionals=(integer 0-999, default: 0) Number of divisionals associated with this manual. Starting with 1, for each divisional, there is a Divisional999 setting.
-NumberOfStops=(integer 0-999, required) Number of stops associated with this manual. Starting with 1, for each stop, there is a Stop999 setting.
-NumberOfSwitches=(integer 0 - number of switches, default: 0) Number of switches associated with this manual. Starting with 1, for each switch, there is a Switch999 setting.
-NumberOfTremulants=(integer 0 - number of tremulants, default: 0) Number of tremulants associated with this manual. Starting with 1, for each tremulant, there is a Tremulant999 setting.
-
-Coupler999=(integer, required) Number of the Coupler999 section containing the coupler details.
-Divisional999=(integer, required) Number of the Divisional999 section containg the coupler details.
-Stop999=(integer, required) Number of the Stop999 section containing the stop details.
-Switch999=(integer, required) Number of the Switch999 section containg the switch details.
-Tremulant999=(integer, required) Number of the Tremulant999 section containg the tremulant details.
-
-OPTIONAL ATTRIBUTES :
-MIDIKey000 - MIDIKey127=(integer 0-127, default: same MIDI key number) Allows to map the MIDI note in MIDIKey999 to a different number. This mapping is used by the default manual MIDI matching type - others may or may not use this mapping table.
-MIDIInputNumber=(integer 0 - 200, default: 0) This number is used while building the initial MIDI conﬁguration to map the manual object to what MIDI device the the user has set for the respective pedal/manual. 0 means no association. 1 maps to pedal, 2 to ﬁrst manual, 3 to second manual etc. NOTE: the GUI only allows the association of the ﬁrst few manuals. Second touch manuals can be set to the same number as the main manual as the user then only has to conﬁgure the low velocity to make it work.
-Displayed=(boolean, default: false) If true, the manual is visible on the main panel.
-
-The various GUI manual attributes are speciﬁed for the different key types. They are named: C, Cis, D, Dis, E, F, Fis, G, Gis, A, Ais, B.
-If it is the ﬁrst key on the manual, it is preﬁxed with First. If it is the last key on the manual, it is preﬁxed with Last. So valid values are eg. Gis, FirstDis, LastAis.
-In the following, these values will be marked as KEYTYPE.
-
-If the manual is displayed, it contains the following OPTIONAL GUI attributes:
-PositionX=(integer 0 - panel width, default: according to layout model) Allow to override X position for manual.
-PositionY=(integer 0 - panel height, default: according to layout model) Allow to override Y position for manual.
-
-ImageOn_KEYTYPE=(string, default: implementation dependent bitmap) Bitmap for the speciﬁed key type, if the key is pressed. The bitmap may contain a mask.
-ImageOff_KEYTYPE=(string, default: implementation dependent bitmap) Bitmap for the speciﬁed key type, if the key is not pressed. The bitmap may contain a mask.
-MaskOn_KEYTYPE=(string, default: empty string) Mask for the corresponding On bitmap. If empty, no external mask is loaded.
-MaskOff_KEYTYPE=(string, default: corresponding on mask) Mask for the corresponding Off bitmap. If empty, no external mask is loaded.
-Width_KEYTYPE=(integer 0 - 500, default: implementation dependent) This value is added to the x position of the current key to determine the position of the next key.
-Offset_KEYTYPE=(integer -500 - 500, default: implementation dependent) This value can be used to adjust the display of the current key, eg. to place a sharp key overlapped with the previous key.
-YOffset_KEYTYPE=(integer 0 - 500, default: 0) This value is can be used to adjust the Y coordinate of the current key.
-
-Key999ImageOn=(string, default: corresponding ImageOn_KEYTYPE) Allows to set the on bitmap for the 999 key.
-Key999ImageOff=(string, default: corresponding ImageOff_KEYTYPE) Allows to set the off bitmap for the 999 key.
-Key999MaskOn=(string, default: corresponding MaskOn_KEYTYPE) Allows to set the on mask for the 999 key.
-Key999MaskOff=(string, default: corresponding MaskOff_KEYTYPE) Allows to set the off mask for the 999 key.
-Key999Width=(integer 0 - 500, default: corresponding Width_KEYTYPE) Allows to set the width of the 999 key.
-Key999Offset=(integer -500 - 500, default: corresponding Offset_KEYTYPE) This value is can be used to adjust the display of the 999 key, eg. to place a sharp key overlapped with the previous 999 key.
-Key999YOffset=(integer 0 - 500, default: corresponding YOffset_KEYTYPE) This value is can be used to adjust the Y coordinate of the 999 key.
-Key999MouseRectLeft=(integer 0 - key bitmap width - 1 , default: 0) relative X of left border of the mouse rectangle.
-Key999MouseRectTop=(integer 0 - key bitmap height - 1, default: 0) relative Y of top border of the mouse rectangle.
-Key999MouseRectWidth=(integer 0 - key bitmap width, default: key bitmap width) width of the mouse rectangle.
-Key999MouseRectHeight=(integer 0 - key bitmap height, default: key bitmap height) height of the mouse rectangle.
-
-DispKeyColourInverted=(boolean, default: false) True means, the black keys are drawn in a light color while the white keys are drawn in a dark color.
-DispKeyColourWooden=(boolean, default: false) True means, that a wood background is used for the keys.
-DisplayFirstNote=(integer 0 - 127, default: FirstAccessibleKeyMIDINoteNumber) Display the ﬁrst key as the following note.
-
-DisplayKeys=(integer 1 - NumberOfAccessibleKeys, default: NumberOfAccessibleKeys) number of keys to display.
-DisplayKey999=(integer 0 - 127, default: FirstAccessibleKeyMIDINoteNumber + 999) The number in the key (999) is between 1 and DisplayKeys. It contains the midi number of the backend key, that is connected to this GUI key.
-DisplayKey999Note=(integer 0 - 127, default: FirstAccessibleKeyMIDINoteNumber + 999) The number in the key (999) is between 1 and DisplayKeys. It contains the midi number of the displayed frontend GUI key.
-
-
-[Panel999]
-Panel000 is the main panel with new display format. Additional panels start with number 001. It includes the display metrics.
-The layout of any panel is described by a layout model (see the below image). The available space is split vertically into three columns.
-The left and the right columns contain drawstops laid out via a mesh.
-The middle row is vertically divided:
-- At the bottom, the pedal and its buttons are placed (if present).
-- Above, an extra row of buttons may follow.
-- The next row contains the enclosures.
-- Then all manuals with their associated buttons follow.
-- The two rows are a block of buttons and pistons.
-The exact order can be speciﬁed via an attribute.
-
-REQUIRED ATTRIBUTES (new panel format) :
-Name=(string, required for non-main panels) Name of the panel.
-HasPedals=(boolean, required) the panel includes a keyboard displayed as pedal.
-NumberOfGUIElements=(integer 0-999, required for the main panel with new panel format, default 0 for any other panel) Number of elements on the panel. The section of the GUI elements are called Panel999Element999.
-
-OPTIONAL ATTRIBUTES (new panel format) :
-Group=(string, default: empty, only for non-main panels) If not empty, place it in the submenu with the speciﬁed name, else directly in the panel menu.
-NumberOfImages=(integer 0-999, default: 0) Number of images on the panel. The section of the label GUI deﬁnitions are called Panel999Image999.
-
-REQUIRED DISPLAY METRICS ATTRIBUTES (both new and old panel formats) :
-DispScreenSizeHoriz=(panel size, required) Height of the panel.
-DispScreenSizeVert=(panel size, required) Width of the panel.
-
-DispDrawstopBackgroundImageNum=(bitmap number, required) Shown as 01 in the image below.
-DispDrawstopInsetBackgroundImageNum=(bitmap number, required) Background of the drawstops columns pairs when DispPairDrawstopCols=Y
-DispConsoleBackgroundImageNum=(bitmap number, required) Shown as 05 in the image below.
-DispKeyHorizBackgroundImageNum=(bitmap number, required) Shown as 13 in the image below.
-DispKeyVertBackgroundImageNum=(bitmap number, required) Shown as 20 in the image below.
-§§OdfEdit_res/BackgroundRegion.png
-Possible bitmap numbers are :
-§§OdfEdit_res/BitmapNum.png
-
-DispControlLabelFont=(string, required) Name of the font for button labels.
-DispShortcutKeyLabelFont=(string, required) Name of the font for keyboard labels.
-DispShortcutKeyLabelColour=(color, required) Color for shortcut labels
-DispGroupLabelFont=(string, required) Font name for labels.
-
-DispDrawstopCols=(integer 2-12, required) Number of drawstop columns. Must be even. NOTE: If you want more than 12 drawstop columns, you must use absolute positioning.
-DispDrawstopRows=(integer 1-20, required) Number of drawstop rows. NOTE: If you want more than 20 drawstop rows you must use absolute positioning.
-DispDrawstopColsOffset=(boolean, required) If true, each second row of drawstops on the left/right is displayed vertically shifted.
-DispPairDrawstopCols=(boolean, required) Group two drawstop rows together. Number of drawstop rows must be divisible by 4.
-DispExtraDrawstopRows=(integer 0-99, required) Number of drawstop rows in the center block. The row numbers start with 100.
-DispExtraDrawstopCols=(integer 0 - 40, required) Number of drawstop columns in the center block.
-DispButtonCols=(integer 1-32, required) Number of columns for displaying pistons in the center block.
-DispExtraButtonRows=(integer 0-99, required) Number of rows for displaying extra pistons in the center block. The row numbers start with 100.
-DispExtraPedalButtonRow=(boolean, required) Display an extra piston row with row number 9.
-DispButtonsAboveManuals=(boolean, required) Display the pistons associated with the manual above (true) or below (false) the manual.
-DispExtraDrawstopRowsAboveExtraButtonRows=(boolean, required) Display extra drawstop block above or below the extra piston block.
-
-DispTrimAboveManuals=(boolean, required)
-DispTrimBelowManuals=(boolean, required)
-DispTrimAboveExtraRows=(boolean, required)
-
-OPTIONAL DISPLAY METRICS ATTRIBUTES (both new and old panel formats) :
-DispDrawstopWidth=(integer 1-150, default: 78) Drawstop width used for layout calculation.
-DispDrawstopHeight=(integer 1-150, default: 69) Drawstop height used for layout calculation.
-DispDrawstopOuterColOffsetUp=(boolean, required if DispDrawstopColsOffset is true) Determines if second row is shifted up or down.
-DispPistonWidth=(integer 1-150, default: 44) Piston width used for layout calculation.
-DispPistonHeight=(integer 1-150, default: 40) Piston height used for layout calculation.
-DispEnclosureWidth=(integer 1-150, default: 52) Enclosure width used for layout calculation.
-DispEnclosureHeight=(integer 1-150, default: 63) Enclosure width used for layout calculation.
-DispPedalHeight=(integer 1-500, default: 40) Pedal height used for layout calculation.
-DispPedalKeyWidth=(integer 1-500, default: 7) Width of one pedal key used for layout calculation.
-DispExtraPedalButtonRowOffset=(boolean, required if DispExtraPedalButtonRow is true) Move extra pistons row slightly to the left.
-DispExtraPedalButtonRowOffsetRight=(boolean, required if DispExtraPedalButtonRow is true) Move extra pistons row slightly to the right.
-DispManualHeight=(integer 1-500, default: 32) Manual height used for layout calculation.
-DispManualKeyWidth=(integer 1-500, default: 12) Width of one manual key used for layout calculation.
-
-REQUIRED ATTRIBUTES (old panel format) :
-Name=(string, required) Name of the panel.
-HasPedals=(boolean, required) Includes a manual displayed as pedal.
-
-NumberOfCouplers=(integer 0-999, required) Number of couplers on the panel. The section of the couplers GUI deﬁnitions are called Panel999Coupler999.
-NumberOfDivisionals=(integer 0-999, required) Number of divisionals on the panel. The section of the divisionals GUI deﬁnitions are called Panel999Divisional999.
-NumberOfDivisionalCouplers=(integer 0 - number of deﬁned divisional couplers, required) Number of divisional couplers on the panel. The section of the divisional coupler GUI deﬁnitions are called Panel999DivisionalCoupler999.
-NumberOfEnclosures=(integer 0 - number of deﬁned enclosures, required) Number of enclosures on the panel. The section of the enclosures GUI deﬁnitions are called Panel999Enclosure999.
-NumberOfGenerals=(integer 0 - number of deﬁned generals, required) Number of generals on the panel. The section of the generals GUI deﬁnitions are called Panel999General999.
-NumberOfImages=(integer 0-999, required) Number of images on the panel. The section of the image GUI deﬁnitions are called Panel999Image999.
-NumberOfLabels=(integer 0-999, required) Number of labels on the panel. The section of the label GUI deﬁnitions are called Panel999Label999.
-NumberOfManuals=(integer 0 - number of deﬁned manuals) number of manuals to display on this panel.
-NumberOfReversiblePistons=(integer 0 - number of deﬁned reversible pistons, required) Number of reversible pistons on the panel. The section of the reversible pistons GUI deﬁnitions are called Panel999ReversiblePiston999.
-NumberOfStops=(integer 0-999, required) Number of stops on the panel. The section of the stops GUI deﬁnitions are called Panel999Stop999.
-NumberOfTremulants=(integer 0 - number of deﬁned tremulants, required) Number of tremulant on the panel. The section of the tremulants GUI deﬁnitions are called Panel999Tremulant999.
-
-Coupler999=(valid coupler number, required) Reference to the divisional on the main panel.
-Coupler999Manual=(valid manual number, required) Reference to the manual of the coupler on the main panel.
-Divisional999=(valid divisional number, required) Reference to the divisional on the main panel.
-Divisional999Manual=(valid manual number, required) Reference to the manual of the divisional on the main panel.
-DivisionalCoupler999=(valid divisional coupler number, required) Reference to the divisional coupler on the main panel.
-Enclosure999=(valid enclosure number, required) Reference to the enclosure on the main panel.
-General999=(valid general number, required) Reference to the general on the main panel.
-Manual999=(valid manual number, required) Number of the manual to use a speciﬁed manual on the panel.
-ReversiblePiston999=(valid reversible piston number, required) Reference to the reversible piston on the main panel.
-Stop999=(valid stop number, required) Reference to the stop on the main panel.
-Stop999Manual=(valid manual number, required) Reference to the manual of the stop on the main panel.
-Switch999=(valid switch number, required) Reference to the switch on the main panel.
-Tremulant999=(valid tremulant number, required) Reference to the tremulant on the main panel.
-
-OPTIONAL ATTRIBUTES (old panel format) :
-Group=(string, default: empty) If not empty, place it in the submenu with the speciﬁed name, else directly in the panel menu.
-NumberOfSetterElements=(integer 0-999, default: 0) Number of setter elements on the panel. The section of the GUI deﬁnitions are called Panel999SetterElement999.
-NumberOfSwitches=(integer 0 - number of deﬁned switches, default: 0) Number of switches on the panel. The section of the switches GUI deﬁnitions are called Panel999Switch999.
-
-
-[Panel999Element999]
-It displays one GUI element in the Panel999. The Type attribute describes the function (one type per object section), the other attributes depend on the function as described below.
-
-REQUIRED ATTRIBUTES :
-Type=Coupler
-Manual=(valid manual number, required) Number of the manual.
-Coupler=(valid coupler number, required) Number of the coupler on the manual.
-+ attributes of a coupler, see [Coupler999]
-
-Type=Divisional
-Manual=(valid manual number, required) Number of the manual.
-Divisional=(valid divisional number, required) Number of the divisional on the manual.
-+ attributes of a divisional, see [Divisional999]
-
-Type=DivisionalCoupler
-DivisionalCoupler=(valid divisional coupler number, required) Number of the divisional coupler.
-+ attributes of a divisional coupler, see [DivisionalCoupler999]
-
-Type=Enclosure
-Enclosure=(valid enclosure number, required) Number of the enclosure.
-+ attributes of an enclosure, see [Enclosure999]
-
-Type=General
-General=(valid general number, required) Number of the general.
-+ attributes of a general, see [General999]
-
-Type=Label
-+ attributes of a label, see [Label999]
-
-Type=Manual
-Manual=(valid manual number, required) Number of the manual.
-+ attributes of a manual, see [Manual999]
-
-Type=ReversiblePiston
-ReversiblePiston=(valid reversible piston number, required) Number of the reversible piston.
-+ attributes of a reversible piston, see [ReversiblePiston999]
-
-Type=Stop
-Manual=(valid manual number, required) Number of the manual.
-Stop=(valid stop number, required) Number of the stop on the manual.
-+ attributes of a stop, see [Stop999]
-
-Type=Swell (Represents the crescendo swell)
-+ attributes of an enclosure, see [Enclosure999]
-
-Type=Switch
-Switch=(valid switch number, required) Number of the switch.
-+ attributes of a switch, see [Switch999]
-
-Type=Tremulant
-Tremulant=(valid tremulant number, required) Number of the tremulant.
-+ attributes of a tremulant, see [Tremulant999]
-
-Type=(a setter element, see the types in [SetterElement999])
-+ attributes of a setter element, see [SetterElement999]
-
-
-[Panel999Image999]
-It displays one image in the Panel999. It tiles the image if it is bigger than image size.
-
-attributes of an image, see [Image999]
-
-
-[Panel999xxxxx999]
-It displays one element xxxxx in the Panel999 (old panel format, xxxxx can be Coupler, Divisional, DivisionalCoupler, Enclosure, General, Label, ReversiblePiston, SetterElement, Stop, Switch or Tremulant).
-
-attributes of a xxxxx, see [xxxxx999]
-
-
-[Piston]
-Piston is a push button which triggers other elements.
-
-REQUIRED ATTRIBUTES :
-ObjecType=(string, required) Type of the element to trigger. Value can be STOP, COUPLER, SWITCH or TREMULANT.
-ManualNumber=(integer ﬁrst manual index - last manual index, required for stops and coupler) The manual, to which the referenced object belongs.
-ObjectNumber=(integer, required) Determines the number of the object. Depending on the object it must be a valid stop/coupler/switch number on the referenced manual or a valid global tremulant number.
-
-+ attributes of a push button, see [PushButton]
-
-
-[PushButton]
-Push button is a button without any state, used in Divisional, General or Piston objects. It is displayed as a piston.
-
-attributes of a button, see [Button]
-
-
-[Rank999]
-Rank represents a row of pipes. It can either be part of a stop section or appear in its own section.
-A rank section contains the attributes of each of its pipes too. The attributes of each pipe are preﬁxed with Pipe999 (number starting with 1) as described below.
-
-REQUIRED ATTRIBUTES :
-Name=(string, required) Name of the rank. The name may be presented to the user in lists too, therefore it should be descriptive.
-FirstMidiNoteNumber=(integer 0-256, if the rank is part of a stop section, the default value is derived from the associated manuals. Otherwise required) Midi note number of the ﬁrst pipe.
-WindchestGroup=(integer 1 - number of windchests, required) specify the windchest on which the pipes of the rank are placed.
-Percussive=(boolean, required) If false, the samples are played as is (without any loop/release handling).
-
-NumberOfLogicalPipes=(integer 1-192, required) Number of pipes in this rank.
-Pipe999=(string, required) Relative path to the sample WAV ﬁle of the ﬁrst attack. It may be listed as REF:aa:bb:cc too. In that case, it means that this pipe is borrowed from manual aa, ﬁrst rank of stop bb, the pipe cc. It may contain DUMMY, which deﬁnes a non-sounding placeholder.
-
-OPTIONAL ATTRIBUTES :
-AmplitudeLevel=(ﬂoat 0-1000, default: 100) Linear amplitude scale factor applied to the whole rank. 100 means no change.
-Gain=(ﬂoat -120 - 40, default: 0) Amplitude scale factor in dB applied to the whole rank. 0 means no change.
-PitchTuning=(ﬂoat -1200-1200, default: 0) Retune the rank by the speciﬁed number of cents.
-TrackerDelay=(integer 0 - 10000, default: 0) Delay introduced by the tracker for that rank.
-HarmonicNumber=(ﬂoat 1-1024, default: 8) Harmonic number (= 64 / rank size), eg. 2 2/3 => 64 / (2 2/3) = 24. The harmonic number is used determining alternative tunings.
-PitchCorrection=(ﬂoat -1200-1200, default: 0) Correction factor in cent for the pitch speciﬁed in the sample. This setting is used for retuning to other temperaments.
-MinVelocityVolume=(ﬂoat 0-1000, default: 100) Linear amplitude scale factor at low velocity applied to the whole rank. 100 means no change.
-MaxVelocityVolume=(ﬂoat 0-1000, default: 100) Linear amplitude scale factor at high velocity applied to the whole rank. 100 means no change.
-AcceptsRetuning=(boolean, default: true) Determines if the rank will be retuned according to the current temperament. Retuning should be only disabled for sound effects.
-
-Pipe999Percussive=(boolean, default: rank percussive setting) If false, the samples are played as is (without any loop/release handling).
-Pipe999AmplitudeLevel=(ﬂoat 0-1000, default: 100) Linear amplitude scale factor applied to the pipe (in addition to the organ/rank factor). 100 means no change.
-Pipe999Gain=(ﬂoat -120 - 40, default: 0) Amplitude scale factor in dB applied to the pipe (in addition to the organ/rank factor). 0 means no change.
-Pipe999PitchTuning=(ﬂoat -1200-1200, default: 0) Retune this pipe the speciﬁed number of cents (in addition to the organ/rank factor).
-Pipe999TrackerDelay=(integer 0 - 10000, default: 0) Delay introduced by the tracker for that pipe.
-Pipe999LoadRelease=(boolean, default: reverse of percussive setting) If true, the release part is loaded from the ﬁrst attack sample.
-Pipe999AttackVelocity=(int 0 - 127, default: 0) minimum velocity to use this attack sample.
-Pipe999MaxTimeSinceLastRelease=(int -1 - 100000, default: -1) maximum time since the last release of the key to be able to use that attack. -1 means inﬁnite.
-Pipe999IsTremulant=(int -1 - 1, default: -1) 1 means, that it is played, if the associated wave-based tremulant is on. 0 means, that it is played, if the associated wave-based tremulant is off. -1 means, that it is not affected by a wave-based tremulant.
-Pipe999MaxKeyPressTime=(int -1 - 100000, default: -1) Up to this time value in ms, the release sample is chosen. -1 means inﬁnite.
-Pipe999AttackStart=(int 0 - 158760000, default: 0) Allows to override the start of the sample. This option is speciﬁed in samples.
-Pipe999CuePoint=(int -1 - 158760000, default: -1) Allows to override the cue point for the release. -1 means use from the wave ﬁle. This option is speciﬁed in samples.
-Pipe999ReleaseEnd=(int -1 - 158760000, default: -1) Allows to override the end of the release. -1 means play till the end of the wav. This option is speciﬁed in samples.
-Pipe999HarmonicNumber=(ﬂoat 1-1024, default: rank harmonic number) Harmonic number (= 64 / rank size), eg. 2 2/3 => 64 / (2 2/3) = 24.
-Pipe999MIDIKeyNumber=(integer -1 - 127, default: -1) If -1, use pitch information from the Pipe999 sample, else override the information in the sample with this midi note number (Pipe999PitchCorrection is used for speciﬁng the fraction). Specifying the midi note number also reset the pitch fraction in the sample to 0.
-Pipe999PitchCorrection=(ﬂoat -1200-1200, default: rank pitch correction) Correction factor in cent for the pitch speciﬁed in the sample. This setting is used for retuning to other temperaments.
-Pipe999AcceptsRetuning=(boolean, default: rank setting) Determines if the pipe will be retuned according to the current temperament. Retuning should be only disabled for sound effects.
-Pipe999WindchestGroup=(interger 1 - number of windchests, default: rank windchest) specify the windchest, on which this pipe is placed.
-Pipe999MinVelocityVolume=(ﬂoat 0-1000, default: corresponding rank setting) Linear amplitude scale factor at low velocity applied to the pipe. 100 means no change.
-Pipe999MaxVelocityVolume=(ﬂoat 0-1000, default: corresponding rank setting) Linear amplitude scale factor at high velocity applied to the pipe. 100 means no change.
-
-Pipe999LoopCount=(int 0 - 100, default: 0) Allows to override the loops in the WAV ﬁle. 0 means use loops from the wave ﬁle.
-Pipe999Loop999Start=(int 0 - 158760000, default: 0) Start sample of the loop. The value must be within the WAV ﬁle. This option is speciﬁed in samples.
-Pipe999Loop999End=(int Pipe999Loop999Start + 1 - 158760000, required if Pipe999LoopCount is not zero) End sample of the loop. The value must be within the WAV ﬁle. This option is speciﬁed in samples.
-
-Pipe999AttackCount=(int 0 - 100, default: 0) Number of additional attack samples.
-Pipe999Attack999=(string, required) Relative path to the sample WAV ﬁle.
-Pipe999Attack999LoadRelease=(boolean, default: reverse of percussive setting) If true, the release part is loaded.
-Pipe999Attack999AttackVelocity=(int 0 - 127, default: 0) minimum velocity to use this attack sample.
-Pipe999Attack999MaxTimeSinceLastRelease=(int -1 - 100000, default: -1) maximum time since the last release of the key to be able to use that attack. -1 means inﬁnite.
-Pipe999Attack999IsTremulant=(int -1 - 1, default: -1) 1 means, that it is played, if the associated wave-based tremulant is on. 0 means, that it is played, if the associated wave-based tremulant is off. -1 means, that it not affected by a wave-based tremulant.
-Pipe999Attack999MaxKeyPressTime=(int -1 - 100000, default: -1) Up to this time value in ms, the release sample is choosen. -1 means inﬁnite.
-Pipe999Attack999AttackStart=(int 0 - 158760000, default: 0) Allows to override the start of the sample. This option is speciﬁed in samples.
-Pipe999Attack999CuePoint=(int -1 - 158760000, default: -1) Allows to override the cue point for the release. -1 means use from the wave ﬁle. This option is speciﬁed in samples.
-Pipe999Attack999ReleaseEnd=(int -1 - 158760000, default: -1) Allows to override the end of the release. -1 means play till the end of the wav. This option is speciﬁed in samples.
-Pipe999Attack999LoopCount=(int 0 - 100, default: 0) Allows to override the loops in the WAV ﬁle. 0 means use loops from the wave ﬁle.
-Pipe999Attack999Loop999Start=(int 0 - 158760000, default: 0) Start sample of the loop. The value must be within the WAV ﬁle. This option is speciﬁed in samples.
-Pipe999Attack999Loop999End=(int Pipe999Attack999Loop999Start + 1 - 158760000, required if Pipe999LoopCount is not zero) End sample of the loop. The value must be within the WAV ﬁle. This option is speciﬁed in samples.
-
-Pipe999ReleaseCount=(int 0 - 100, default: 0) Number of additional release samples.
-Pipe999Release999=(string, required) Relative path to the sample WAV ﬁle.
-Pipe999Release999IsTremulant=(int -1 - 1, default: -1) 1 means, that it is played, if the associated wave-based tremulant is on. 0 means, that it is played, if the associated wave-based tremulant is off. -1 means, that it not affected by a wave-based tremulant.
-Pipe999Release999MaxKeyPressTime=(int -1 - 100000, default: -1) Up to this time value in ms, the release sample is choosen. -1 means inﬁnite.
-Pipe999Release999CuePoint=(int -1 - 158760000, default: -1) Allows to override the cue point for the release. -1 means use from the wave ﬁle.
-Pipe999Release999ReleaseEnd=(int -1 - 158760000, default: -1) Allows to override the end of the release. -1 means play till the end of the wav. This option is speciﬁed in samples.
-
-Pipe999LoopCrossfadeLength=(int 0 - 120, default: 0) Crossfade length in ms between loop start and loop end. A cross fade requires enough samples before the start of the loop.
-Pipe999ReleaseCrossfadeLength=(int 0 - 200, default: 0) Crossfade length in ms between loop and the release (or other attacks). 0 means automatic selection.
-
-
-[ReversiblePiston999]
-Not defined in the GrandOrgue help, unknown attributes, probably at least the one of a switch.
-
-
-[SetterElement999]
-It is possible to display various setter elements on the panels. The Type attribute (one type per object section) describes the function, the other attributes depend on the function.
-
-REQUIRED ATTRIBUTES :
-Type=CrescendoLabel (Represents a label with crescendo state, ie the current step that the crescendo pedal is at, from 1 to 32)
-+ attributes of a label, see [Label999]
-
-Type=CrescendoA, CrescendoB, CrescendoC or CrescendoD (Buttons to switch between the various crescendo modes, displayed as button per default)
-+ attributes of a button, see [Button]
-
-Type=CrescendoPrev, CrescendoNext or CrescendoCurrent (Buttons for controling the crescendo combinations, displayed as button per default)
-+ attributes of a button, see [Button]
-
-Type=Current (Recall current number button of the setter, displayed as button per default)
-+ attributes of a button, see [Button]
-
-Type=Full (Button to enable storing all elements in the setter, restrictions from the ODF are ignored, displayed as button per default)
-+ attributes of a button, see [Button]
-
-Type=GC (General cancel button of the setter, displayed as button per default)
-+ attributes of a button, see [Button]
-
-Type=General01 - General50 (Buttons for the setter generals, displayed as button per default)
-+ attributes of a button, see [Button]
-
-Type=GeneralLabel (Represents a label with the general bank number)
-+ attributes of a label, see [Label999]
-
-Type=GeneralPrev or GeneralNext (Buttons for switching banks of the setter generals, displayed as button per default)
-+ attributes of a button, see [Button]
-
-Type=Home (Move to 000 button of the setter, displayed as button per default)
-+ attributes of a button, see [Button]
-
-Type=Insert or Delete (Buttons to insert/delete a combination, displayed as button per default)
-+ attributes of a button, see [Button]
-
-Type=L0, L1, L2, L3, L4, L5, L6, L7, L8 or L9 (Recall combination with the speciﬁed digit as last digit button of the setter, displayed as button per default)
-+ attributes of a button, see [Button]
-
-Type=M100, M10, M1, P1, P10 or P100 (+/- 1/10/100 button of the setter, displayed as button per default)
-+ attributes of a button, see [Button]
-
-Type=PitchLabel (Label displaying the current pitch shift of the organ)
-+ attributes of a label, see [Label999]
-
-Type=PitchP1, PitchP10, PitchP100, PitchM1, PitchM10 or PitchM100 (Buttons for controlling the organ pitch +1, +10, +100, -1, -10, -100 cent, displayed as button per default)
-+ attributes of a button, see [Button]
-
-Type=Prev, Next or Set (Prev/next/set button of the setter, displayed as button per default)
-+ attributes of a button, see [Button]
-
-Type=Regular, Scope or Scoped (Button to switch between the various setter modes, displayed as button per default)
-+ attributes of a button, see [Button]
-
-Type=Save (Save button, displayed as button per default)
-+ attributes of a button, see [Button]
-
-Type=SequencerLabel (Represents the current number of the setter)
-+ attributes of a label, see [Label999]
-
-Type=TemperamentLabel (Label displaying the current temperament of the organ)
-+ attributes of a label, see [Label999]
-
-Type=TemperamentPrev or TemperamentNext (Buttons for switching temperaments, displayed as button per default)
-+ attributes of a button, see [Button]
-
-Type=TransposeDown or TransposeUp (Buttons for transposing, displayed as button per default)
-+ attributes of a button, see [Button]
-
-Type=TransposeLabel (Label displaying the current transpose setting)
-+ attributes of a label, see [Label999]
-
-
-[Stop999]
-Stop object is a drawstop which consists of a number of ranks. If the number of ranks is set to zero, the stop contains one rank, which is deﬁned in the stop section - else it references a list of ranks.
-Only the accessible pipes can be triggered from the manual.
-
-REQUIRED ATTRIBUTES :
-FirstAccessiblePipeLogicalKeyNumber=(integer 1-128, required) The key number on the manual of the ﬁrst accessible pipe.
-FirstAccessiblePipeLogicalPipeNumber=(integer 1 - 192, required if NumberOfRanks=0) The number of the ﬁrst pipe accessible from the manual. If NumberOfRanks is not 0, this setting is not necessary.
-
-NumberOfAccessiblePipes=(integer 1 - 192, required) Number of pipes, that are playable from the manual starting from the ﬁrst acessible pipe.
-
-Rank999=(integer 0 - rank count speciﬁed in the organ section, required) Reference to a rank from the organ section.
-
-OPTIONAL ATTRIBUTES :
-NumberOfRanks=(integer 0 - 999, default: 0) Number of referenced ranks. If zero, one rank deﬁnition is included in the stop section. The lists of references is speciﬁed via the Rank999... settings.
-
-Rank999FirstPipeNumber=(integer 1 - number of pipes in the rank, default: 1) Number of ﬁrst mapped pipe from the rank.
-Rank999PipeCount=(integer 0 - remaining number of pipes in the rank, default: remaining number of pipes in the rank) Number of pipes mapped from the rank.
-Rank999FirstAccessibleKeyNumber=(integer 1 - NumberOfAccessiblePipes, default: 1) Key number offset (starting with FirstAccessiblePipeLogicalKeyNumber) for the pipe referenced by Rank999FirstPipeNumber.
-
-+ attributes of a rank if NumberOfRanks is zero, see [Rank999]
-+ attributes of a drawstop, see [DrawStop]
-
-
-[Switch999]
-Switch is a drawstop without any additional attributes. It can be used, for example, to trigger stop action noises and key action noises.
-
-attributes of a drawstop, see [DrawStop]
-
-
-[Tremulant999]
-Tremulant is a drawstop with additional attributes.
-
-REQUIRED ATTRIBUTES :
-In case of synthesised tremulants :
-Period=(integer 32-44100, required) Period of the tremulant in ms
-StartRate=(integer 1-100, required) Determines the startup time of the tremulant.
-StopRate=(integer 1-100, required) Determines the stop time of the tremulant.
-AmpModDepth=(integer 1-100, required) Determines, how much the volume will be changed.
-
-OPTIONAL ATTRIBUTES :
-TremulantType=(enumeration, default: Synth) Type of the tremulant. Valid values are: Synth (synthesised tremulant) and Wave (tremulant based on different wave samples).
-
-+ attributes of a drawstop, see [DrawStop]
-
-
-[WindchestGroup999]
-Windchest represents a wind-chest on which pipes of ranks are placed.
-
-REQUIRED ATTRIBUTES :
-NumberOfEnclosures=(integer 0 - enclosure count, required) Number of enclosures, which inﬂuence this windchest. The list is speciﬁed by the Enclosure999 entries in the windchest section.
-NumberOfTremulants=(integer 0 - tremulant count, required) Number of tremulants, which inﬂuence this windchest. The list is specifed by the Tremulant999 entries in the windchest section.
-
-Enclosure999=(integer 1 - enclosure count, required) Number of an enclosure, which inﬂuences this windchest.
-Tremulant999=(integer 1 - tremulant count, required) Number of a tremulant, which inﬂuences this windchest.
-
-OPTIONAL ATTRIBUTES :
-Name=(string, default: implementation dependent) Display name of this windchest.
-"""
-
 # first line of code executed at the launch of the script
 # if we are in the main execution environment, call the main function of the application
 if __name__ == '__main__': main()
