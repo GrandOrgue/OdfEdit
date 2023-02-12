@@ -1,11 +1,12 @@
 #-------------------------------------------------------------------------------
 # Name:        OdfEdit
 # Purpose:     Application helping to edit an organ definition file (ODF) in plain text
+#              and permitting to convert a Hauptwerk ODF into GrandOrgue ODF
 #              The ODF can be used in the GrandOrgue application
 #              Implemented with Python 3
 #              Tested in Windows 10 and Ubuntu 21.10
 #              It is contains 4 classes :
-#                   C_ODF to manage and check the ODF data
+#                   C_ODF to manage and check the loaded/edited ODF data
 #                   C_HW2GO to manage the convertion from a Hauptwerk ODF to a GrandOrgue ODF
 #                   C_GUI to manage the graphical user interface of this application
 #                   CreateToolTip to display a tool tip on a GUI widget
@@ -33,13 +34,21 @@
 #                          fix made in the function check_attribute_value to not change out of range integer value and better check HTML color code
 #                          use the PIL library instead of Tk to check the sample set images sizes
 #                          first implementation of the Hauptwerk to GrandOrgue ODF conversion feature
-#   v2.1 - 22 Dec.  2023 - HW to GO : fix for files path separator management in various OS
-#                          HW to GO : get the actual files path/name/extension case from the HW sample set instead of from the HW ODF
-#                          HW to GO : some design changes without functional impact
-#                          HW to GO : added general sound stops (blower, bells, ...) and stop action noise support
+#   v2.1 - 22 Dec.  2023 - HW2GO : fix for files path separator management in various OS
+#                          HW2GO : get the actual files path/name/extension case from the HW sample set instead of from the HW ODF
+#                          HW2GO : some design changes without functional impact
+#                          HW2GO : added general sound stops (blower, bells, ...) and stop action noise support
+#   v2.2 - 12 Jan. 2023  - HW2GO : improved and more robust way to detect Stop / Coupler / Switch objects to build
+#                          HW2GO : fix of issues observed with some newly tested HW sample sets
+#                          HW2GO : added support of HW continuous control and enclosure objects, converted into GO enclosure objects
+#                          GUI : graphical user interface rework with resizable width for lists and notebook areas
+#                          GUI : Organ object placed systematically at the top of the objects list
 #-------------------------------------------------------------------------------
 
-MAIN_WINDOW_TITLE = "OdfEdit - v2.1"
+APP_VERSION = 'v2.2'
+MAIN_WINDOW_TITLE = 'OdfEdit - ' + APP_VERSION
+ORGAN_COMMENT = 'GrandOrgue ODF automatically generated from a Hauptwerk ODF by OdfEdit ' + APP_VERSION + ' (see github.com/GrandOrgue/ODFEdit)'
+DEV_MODE = False
 
 import os
 import shutil
@@ -52,12 +61,11 @@ import tkinter.font as tkf
 from PIL import Image  ## install with : pip install pillow
 from lxml import etree ## install instruction : https://stackoverflow.com/a/40202702
 
-DISP_HW_OBJECTS_TREE = True # True or False, to display or not a notebook tab with Hauptwerk objects tree if a Hauptwerk ODF is loaded
-
-HW_CONV_MSG = """An ODF will be built in order to permit to use the selected Hauptwerk sample set with the GrandOrgue application. None file of the Hauptwerk sample set will be modified.
+# warning message displayed before to start a HW to GO ODF conversion
+HW_CONV_MSG = """An ODF will be built in order to use the selected Hauptwerk sample set in the GrandOrgue application. None file of the Hauptwerk sample set will be modified.
 ATTENTION :
 - Please do this operation only with a free Hauptwerk sample set or a not-free sample set that you have duly paid for, and if the editor of this sample set does not preclude its use outside Hauptwerk application.
-- Don't expect to have necessarily with GrandOrgue the sound quality and all control possibilities that this sample set can provide with Hauptwerk.
+- Don't expect to have necessarily with GrandOrgue the sound quality and all control possibilities that this sample set can have with Hauptwerk.
 """
 
 IDX_OBJ_NAME = 0 # index in the objects dictionnary entry list of the object name
@@ -86,10 +94,10 @@ ATTR_TYPE_OBJECT_REF = 14      # used in many objects to make a reference to ano
 ATTR_TYPE_PIPE_WAVE = 15       # used in Rank
 
 # constants to identify a link between objects
-TO_PARENT = False
-TO_CHILD = True
-
-OS_NAME = os.name
+TO_PARENT = 1
+TO_CHILD = 2
+FIRST_ONE = True
+MANDATORY = True
 
 #-------------------------------------------------------------------------------------------------
 class C_ODF:
@@ -690,6 +698,8 @@ class C_ODF:
 
         self.check_nb_attr = 0
 
+        self.events_log_add("ODF data check report :")
+
         # update the panel format flag
         self.check_odf_panel_format()
         if self.new_panel_format:
@@ -1153,7 +1163,7 @@ class C_ODF:
         self.check_attribute_value(object_UID, lines_list, 'DispLabelText', ATTR_TYPE_STRING, False)
         self.check_attribute_value(object_UID, lines_list, 'EnclosureStyle', ATTR_TYPE_INTEGER, False, 1, 4)
 
-        ret = self.check_attribute_value(object_UID, lines_list, 'BitmapCount', ATTR_TYPE_INTEGER, False, 1, 127)
+        ret = self.check_attribute_value(object_UID, lines_list, 'BitmapCount', ATTR_TYPE_INTEGER, False, 1, 128)
         if ret.isdigit():
             for idx in range(1, int(ret)+1):
                 image = self.check_attribute_value(object_UID, lines_list, f'Bitmap{str(idx).zfill(3)}', ATTR_TYPE_FILE_NAME, True)
@@ -2256,8 +2266,8 @@ class C_HW2GO():
 
         # check the extension of the given file name
         filename_str, file_extension_str = os.path.splitext(file_name_str)
-        if file_extension_str != '.Organ_Hauptwerk_xml':
-            self.events_log_add(f'ERROR : The file "{file_name_str}" does not have the expected extension .Organ_Hauptwerk_xml')
+        if file_extension_str != '.Organ_Hauptwerk_xml' and file_extension_str != '.xml':
+            self.events_log_add(f'ERROR : The file "{file_name_str}" does not have the expected extension .xml or .Organ_Hauptwerk_xml')
             return False
 
         # check the existence of the given file name
@@ -2354,7 +2364,7 @@ class C_HW2GO():
                         # no object ID recovered from the attributes
                         if object_id_attr_name_str != '':
                             # the object should have had an ID attribute
-                            self.events_log_add(f'ERROR : attribute {object_id_attr_name_str} with integer value not found in the object {HW_object_type_str} #{object_id_counter_int}')
+                            self.events_log_add(f'ERROR : attribute {object_id_attr_name_str} not found in the object {HW_object_type_str} #{object_id_counter_int}')
                         # use as object ID the objects counter
                         object_id_int = object_id_counter_int
 
@@ -2527,14 +2537,16 @@ class C_HW2GO():
                 self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'SourceSwitchID', 'Switch', TO_PARENT)
                 self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'DestSwitchID', 'Switch', TO_CHILD)
                 self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ConditionSwitchID', 'Switch', TO_PARENT)
-                # make direct link between source and destination switches
-                HW_source_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'SourceSwitchID')
-                HW_dest_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'DestSwitchID')
-                HW_cond_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'ConditionSwitchID')
-                if HW_source_switch_dic != None and HW_dest_switch_dic != None :
-                    self.HW_ODF_do_link_between_obj(HW_source_switch_dic, HW_dest_switch_dic, TO_CHILD)
-                    if HW_cond_switch_dic != None:
-                        self.HW_ODF_do_link_between_obj(HW_cond_switch_dic, HW_dest_switch_dic, TO_CHILD)
+                if DEV_MODE:
+                    # only in development mode to speed up the links creation in application mode, this parent/child association is not used to convert the HW to GO ODF
+                    # make direct link between source and destination switches
+                    HW_source_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'SourceSwitchID')
+                    HW_dest_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'DestSwitchID')
+                    HW_cond_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'ConditionSwitchID')
+                    if HW_source_switch_dic != None and HW_dest_switch_dic != None :
+                        self.HW_ODF_do_link_between_obj(HW_source_switch_dic, HW_dest_switch_dic, TO_CHILD)
+                        if HW_cond_switch_dic != None:
+                            self.HW_ODF_do_link_between_obj(HW_cond_switch_dic, HW_dest_switch_dic, TO_CHILD)
 
         HW_object_type_str = 'SwitchExclusiveSelectGroupElement'
         self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
@@ -2600,8 +2612,10 @@ class C_HW2GO():
             for HW_object_dic in self.HW_ODF_dic[HW_object_type_str].values():
                 self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'RankID', 'Rank', TO_PARENT)
                 self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'ControllingPalletSwitchID', 'Switch', TO_PARENT)
-                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'WindSupply_SourceWindCompartmentID', 'WindCompartment', TO_PARENT)
-                self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'WindSupply_OutputWindCompartmentID', 'WindCompartment', TO_CHILD)
+                if DEV_MODE:
+                    # only in development mode to speed up the links creation in application mode, this parent/child association is not used to convert the HW to GO ODF
+                    self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'WindSupply_SourceWindCompartmentID', 'WindCompartment', TO_PARENT)
+                    self.HW_ODF_do_link_between_obj_by_id(HW_object_dic, 'WindSupply_OutputWindCompartmentID', 'WindCompartment', TO_CHILD)
 
         HW_object_type_str = 'Pipe_SoundEngine01_Layer'
         self.progress_status_show_function(f'Building the Hauptwerk ODF objects tree... {HW_object_type_str}')
@@ -2742,11 +2756,11 @@ class C_HW2GO():
         # recover the value of the ID permitting to establish a linkage between the two objects
         linkage_id_value_int = myint(self.HW_ODF_get_attribute_value(HW_object_dic, HW_attr_id_name_str))
 
-        if linkage_id_value_int != None:
+        if linkage_id_value_int != None and linkage_id_value_int != 0:
             try:
                 linked_object_dic = self.HW_ODF_dic[linked_object_type_str][linkage_id_value_int]
             except:
-                self.events_log_add(f'INTERNAL ERROR : object type {linked_object_type_str} with ID {linkage_id_value_int} not found')
+                self.events_log_add(f'INTERNAL ERROR : {HW_object_dic["_HW_uid"]} - not found reference to object type {linked_object_type_str} with ID {linkage_id_value_int}')
                 return False
             else:
                 return self.HW_ODF_do_link_between_obj(HW_object_dic, linked_object_dic, link_type_int)
@@ -2789,7 +2803,7 @@ class C_HW2GO():
     #-------------------------------------------------------------------------------------------------
     def HW_ODF_get_attribute_value(self, HW_object_dic, attr_name_str, mandatory_bool=False):
         # return the string value string of the given attribute defined in the given object sub-dictionary of the Hauptwerk ODF dictionary
-        # generate a log in case of attribute not found and if mandatory_bool=True, mandatory_bool=False permits to get silently an attribute which the presence is optional
+        # generate a log in case of attribute not found and if mandatory_bool=MANDATORY (True), mandatory_bool=False permits to get silently an attribute which the presence is optional
         # return None if the attribute name is not defined in the given dictionary
 
         if HW_object_dic == None:
@@ -2846,11 +2860,13 @@ class C_HW2GO():
             return None
 
     #-------------------------------------------------------------------------------------------------
-    def HW_ODF_get_linked_objects_dic_by_type(self, HW_object_dic, object_type_str, link_type_int, only_first_one_bool=False):
-        # return a list containing the dictionary of the objects which are parent/child of the given object and which has the given object type
-        # the given link_type_int must be TO_PARENT or TO_CHILD
-        # if only_first_one_bool = True, only the first occurence is returned as a dictionary, not as a list
-        # return an empty list or None (if only first one) if there is no parent/child found
+    def HW_ODF_get_linked_objects_dic_by_type(self, HW_object_dic, object_type_str, link_type_int, first_occurence=False, sorted_id_list=False, sorted_name_list=False):
+        # return a list containing the dictionary of the HW objects which are parent/child (according to link_type_int) of the given object and which has the given object type
+        # link_type_int must be equal to TO_PARENT or TO_CHILD
+        # if sorted_id_list is equal to True, the returned objects list is sorted by object ID order
+        # if sorted_name_list is equal to True (and sorted_id_list is equal to False), the returned objects list is sorted by object name order
+        # if first_occurence = FIRST_ONE (True), only the first occurence of the linked object is returned as a dictionary, not as a list
+        # return an empty list or None (if first_occurence=True) if there is no parent/child found
 
         HW_linked_objects_dic_list = []
         HW_linked_object_dic = None
@@ -2859,7 +2875,7 @@ class C_HW2GO():
             if link_type_int == TO_PARENT:
                 for HW_obj_dic in HW_object_dic['_parents']:
                     if HW_obj_dic['_HW_uid'][:-6] == object_type_str:
-                        if only_first_one_bool:
+                        if first_occurence:
                             HW_linked_object_dic = HW_obj_dic
                             break
                         else:
@@ -2868,7 +2884,7 @@ class C_HW2GO():
             elif link_type_int == TO_CHILD:
                 for HW_obj_dic in HW_object_dic['_children']:
                     if HW_obj_dic['_HW_uid'][:-6] == object_type_str:
-                        if only_first_one_bool:
+                        if first_occurence:
                             HW_linked_object_dic = HW_obj_dic
                             break
                         else:
@@ -2876,9 +2892,24 @@ class C_HW2GO():
             else:
                 self.events_log_add('INTERNAL ERROR : undefined link type given to HW_ODF_get_linked_objects_dic_by_type')
 
-        if only_first_one_bool:
+        if first_occurence:
             return HW_linked_object_dic
         else:
+            if (sorted_id_list or sorted_name_list) and len(HW_linked_objects_dic_list) > 1:
+                id_list = []
+                name_id_list = []
+                for HW_obj_dic in HW_linked_objects_dic_list:
+                    id_list.append(int(HW_obj_dic['_HW_uid'][-6:]))
+                    name_id_list.append(HW_obj_dic['Name'] + '=' + HW_obj_dic['_HW_uid'][-6:])
+                HW_linked_objects_dic_list = []
+                if sorted_id_list:
+                    for id in sorted(id_list):
+                        HW_linked_objects_dic_list.append(self.HW_ODF_get_object_dic(object_type_str, id))
+                else:
+                    for name_id in sorted(name_id_list):
+                        name, id = name_id.split('=')
+                        HW_linked_objects_dic_list.append(self.HW_ODF_get_object_dic(object_type_str, int(id)))
+
             return HW_linked_objects_dic_list
 
     #-------------------------------------------------------------------------------------------------
@@ -2964,7 +2995,7 @@ class C_HW2GO():
             return False
 
         # recover the data from the ImageSet
-        HW_image_attr_dic['InstallationPackageID'] = myint(self.HW_ODF_get_attribute_value(HW_image_set_dic, 'InstallationPackageID', True))
+        HW_image_attr_dic['InstallationPackageID'] = myint(self.HW_ODF_get_attribute_value(HW_image_set_dic, 'InstallationPackageID', MANDATORY))
 
         if HW_image_attr_dic['ImageWidthPixelsTiling'] != None:
             HW_image_attr_dic['ImageWidthPixels'] = HW_image_attr_dic['ImageWidthPixelsTiling']
@@ -2991,7 +3022,7 @@ class C_HW2GO():
             if image_index == None: image_index = 1  # if the attribute ImageIndexWithinSet is not defined, it is the index 1 by default
             if image_index == HW_image_index_in_set_int:
                 # it is the expected ImageSetElement object
-                ret = self.HW_ODF_get_attribute_value(image_set_elem_dic, 'BitmapFilename', True)
+                ret = self.HW_ODF_get_attribute_value(image_set_elem_dic, 'BitmapFilename')
                 if ret != None:
                     HW_image_attr_dic['BitmapFilename'] = self.convert_HW2GO_file_name(ret, HW_image_attr_dic['InstallationPackageID'])
                 else:
@@ -3043,7 +3074,7 @@ class C_HW2GO():
         if not HW_text_inst_dic['_HW_uid'][:-6] == 'TextInstance':
             return False
 
-        HW_text_attr_dic['Text'] = self.HW_ODF_get_attribute_value(HW_text_inst_dic, 'Text', True)
+        HW_text_attr_dic['Text'] = self.HW_ODF_get_attribute_value(HW_text_inst_dic, 'Text', MANDATORY)
         HW_text_attr_dic['XPosPixels'] = myint(self.HW_ODF_get_attribute_value(HW_text_inst_dic, 'XPosPixels'))
         HW_text_attr_dic['YPosPixels'] = myint(self.HW_ODF_get_attribute_value(HW_text_inst_dic, 'YPosPixels'))
         HW_text_attr_dic['AttachedToAnImageSetInstance'] = self.HW_ODF_get_attribute_value(HW_text_inst_dic, 'AttachedToAnImageSetInstance')
@@ -3093,62 +3124,98 @@ class C_HW2GO():
         return True
 
     #-------------------------------------------------------------------------------------------------
-    def HW_ODF_get_controlling_switches(self, HW_object_dic, HW_switch_data_dic, branch_nb = 0):
-        # recursive fonction to make the list of the displayed HW Switch objects which control the given HW object (Stop, KeyAction, Switch)
-        # return in the given HW_switch_data_dic the following data :
-        #     controlling_switches : dictionary with as keys the branch number (0 is the main controlling branch without condition, higher numbers are for conditional branches)
-        #                            and as values the list of displayed HW Switch objects having control on the given HW object
-        #     switch_branches_nb : number of conditional switch branches involved in the control
-        #     switch_asgn_code : value of the attribute DefaultInputOutputSwitchAsgnCode if found in one of the controlling switches
-        #     checked_switches : list of HW Switch objects checked during the scan of the controlling switches
+    def HW_ODF_get_linked_switches_list(self, HW_object_dic, building_data_dic, linking_direction):
+        # recursive function to make the list of all the HW Switch objects directly linked as parent or child to the given HW object (Stop, KeyAction or Switch)
+        # the parameter building_data_dic must be an empty dictionary for the first call
+        # returned values are present in this dictionary :
+        #  'HW_switches_list'  : list of the HW Switch objects linked together in the given direction TO_PARENT or TO_CHILD from the given HW object
+        #  'default_to_engage' : True if one of the linked HW switches has this field at 'Y', else False
+        #  'inverting'         : True if one of the SwitchLinkage linking two HW switches together makes a switch state invertion, else False
 
-        if len(HW_switch_data_dic) == 0:
-            # dictionary empty, create the two keys
-            HW_switch_data_dic['controlling_switches'] = {0: []}
-            HW_switch_data_dic['switch_branches_nb'] = 0
-            HW_switch_data_dic['switch_asgn_code'] = None
-            HW_switch_data_dic['checked_switches'] = []
+        # used HW objects :
+        #   Switch C> SwitchLinkage (EngageLinkActionCode=1 or undefined, DisengageLinkActionCode=2 or undefined, other below) C> Switch
+        #   SwitchLinkage other attributes :
+        #     ConditionSwitchID : if defined and at OFF state the SourceSwitchID the state is not applied to DestSwitchID
+        #     SourceSwitchLinkIfEngaged    : default 'Y', if 'N' destination switch is the inverted state of source switch
+        #     ConditionSwitchLinkIfEngaged : default 'Y'
+        #     ReevaluateIfCondSwitchChangesState : default 'N'
+
+        if HW_object_dic == None:
+            return
+
+        if len(building_data_dic) == 0:
+            # first call of this recursive function, initialize data
+            building_data_dic['HW_switches_list'] = []
+            building_data_dic['default_to_engage'] = False
+            building_data_dic['clickable'] = False
+            building_data_dic['inverting'] = False
 
         HW_object_type = HW_object_dic['_HW_uid'][:-6]
-        if HW_object_type == 'Stop':
-            # the given HW object is a Stop, recover its controlling switch
-            HW_cntrl_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'ControllingSwitchID')
-            self.HW_ODF_get_controlling_switches(HW_cntrl_switch_dic, HW_switch_data_dic, branch_nb)
+        if HW_object_type == 'Switch':
+            if HW_object_dic not in building_data_dic['HW_switches_list']:
+                # the given HW object is a Switch and has not been already checked
+                building_data_dic['HW_switches_list'].append(HW_object_dic)
+
+                # memorize if the given HW switch is engaged by default
+                if self.HW_ODF_get_attribute_value(HW_object_dic, 'DefaultToEngaged') == 'Y':
+                    building_data_dic['default_to_engage'] = True
+
+                # memorize if the given HW switch is clickable
+                if self.HW_ODF_get_attribute_value(HW_object_dic, 'Clickable') == 'Y':
+                    building_data_dic['clickable'] = True
+
+                # check the HW Switch objects controlled by the given HW Switch
+                for HW_switch_linkage_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'SwitchLinkage', linking_direction):
+                    # parse the children HW SwitchLinkage objects of the HW Switch
+                    HW_engage_action_code = myint(self.HW_ODF_get_attribute_value(HW_switch_linkage_dic, 'EngageLinkActionCode'))
+                    HW_disengage_action_code = myint(self.HW_ODF_get_attribute_value(HW_switch_linkage_dic, 'DisengageLinkActionCode'))
+                    HW_source_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_switch_linkage_dic, 'SourceSwitchID')
+                    HW_dest_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_switch_linkage_dic, 'DestSwitchID')
+                    HW_cond_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_switch_linkage_dic, 'ConditionSwitchID')
+                    if (((linking_direction == TO_PARENT and HW_object_dic == HW_dest_switch_dic) or
+                         (linking_direction == TO_CHILD  and HW_object_dic == HW_source_switch_dic)) and
+                        (HW_engage_action_code == None or HW_engage_action_code == 1) and
+                        (HW_disengage_action_code == None or HW_disengage_action_code == 2) and
+                        HW_cond_switch_dic == None):
+                        # the HW Switch is the source/destination of the linkage (without a condition) and it has standard action codes
+
+                        if self.HW_ODF_get_attribute_value(HW_switch_linkage_dic, 'SourceSwitchLinkIfEngaged') == 'N':
+                            # the current SwitchLinkage object is a switch state inverting linkage
+                            building_data_dic['inverting'] = True
+
+                        if linking_direction == TO_PARENT:
+                            self.HW_ODF_get_linked_switches_list(HW_source_switch_dic, building_data_dic, linking_direction)
+                        else:
+                            self.HW_ODF_get_linked_switches_list(HW_dest_switch_dic, building_data_dic, linking_direction)
+
+        elif HW_object_type == 'Stop':
+            # the given HW object is a Stop, recover its controlling parent switch, then recall this function with the parent switch as parameter
+            if linking_direction == TO_PARENT:
+                HW_cntrl_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'ControllingSwitchID')
+                self.HW_ODF_get_linked_switches_list(HW_cntrl_switch_dic, building_data_dic, linking_direction)
         elif HW_object_type == 'KeyAction':
-            # the given HW object is a KeyAction, recover its controlling switch
-            HW_cntrl_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'ConditionSwitchID')
-            if HW_cntrl_switch_dic != None:
-                self.HW_ODF_get_controlling_switches(HW_cntrl_switch_dic, HW_switch_data_dic, branch_nb)
+            # the given HW object is a KeyAction, recover its controlling parent switch, then recall this function with the parent switch as parameter
+            if linking_direction == TO_PARENT:
+                HW_cntrl_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'ConditionSwitchID')
+                self.HW_ODF_get_linked_switches_list(HW_cntrl_switch_dic, building_data_dic, linking_direction)
 
-        elif HW_object_type == 'Switch' and HW_object_dic not in HW_switch_data_dic['checked_switches']:
-            # the given HW object is a Switch and has not been already checked
+    #-------------------------------------------------------------------------------------------------
+    def HW_ODF_get_controlling_continuous_control(self,HW_cont_ctrl_dic):
+        # returns the HW ContinuousControl object which has a graphical interface to control the given HW ContinuousControl (it can be the one given)
+        # returns None if there is no such object
 
-            HW_switch_data_dic['checked_switches'].append(HW_object_dic)
+        HW_img_set_inst_dic = self.HW_ODF_get_object_dic_by_ref_id('ImageSetInstance', HW_cont_ctrl_dic, 'ImageSetInstanceID')
+        while HW_img_set_inst_dic == None and HW_cont_ctrl_dic != None:
+            # the given HW ContinuousControl has no graphical interface
+            # search in its parents one having a graphical interface
+            HW_cont_ctrl_link_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_cont_ctrl_dic, 'ContinuousControlLinkage', TO_PARENT, FIRST_ONE)
+            HW_cont_ctrl_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_cont_ctrl_link_dic, 'ContinuousControl', TO_PARENT, FIRST_ONE)
+            HW_img_set_inst_dic = self.HW_ODF_get_object_dic_by_ref_id('ImageSetInstance', HW_cont_ctrl_dic, 'ImageSetInstanceID')
 
-            asgn_code = myint(self.HW_ODF_get_attribute_value(HW_object_dic, 'DefaultInputOutputSwitchAsgnCode'))
-            if asgn_code != None:
-                # recover the assignment code of the HW Switch
-                HW_switch_data_dic['switch_asgn_code'] = asgn_code
-
-            if self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'ImageSetInstance', TO_CHILD, True) != None:
-                # the HW Switch has a child ImageSetInstance object, so it is displayed in a panel, add it to the controlling switches list
-                if branch_nb not in HW_switch_data_dic['controlling_switches'].keys():
-                    # no dictionary entry created yet for the current branch number, create it
-                    HW_switch_data_dic['controlling_switches'][branch_nb] = []
-                HW_switch_data_dic['controlling_switches'][branch_nb].append(HW_object_dic)
-
-            for HW_switch_linkage_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'SwitchLinkage', TO_PARENT):
-                # parse the parent SwitchLinkage objects of the given HW Switch
-                HW_cntrl_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_switch_linkage_dic, 'SourceSwitchID')
-                self.HW_ODF_get_controlling_switches(HW_cntrl_switch_dic, HW_switch_data_dic, branch_nb)
-
-                HW_cond_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_switch_linkage_dic, 'ConditionSwitchID')
-                if HW_cond_switch_dic != None:
-                    # the given HW Switch is controlled as well by a condition switch
-                    # new conditional controlling branch to create
-                    HW_switch_data_dic['switch_branches_nb'] += 1
-                    HW_switch_data_dic['controlling_switches'][HW_object_dic['_HW_uid'][-6:]] = []
-                    self.HW_ODF_get_controlling_switches(HW_cond_switch_dic, HW_switch_data_dic, HW_switch_data_dic['switch_branches_nb'])  # HW_object_dic['_HW_uid'][-6:])
+        if HW_img_set_inst_dic == None and HW_cont_ctrl_dic == None:
+            return None
+        else:
+            return HW_cont_ctrl_dic
 
     #-------------------------------------------------------------------------------------------------
     def HW_ODF_save2organfile(self, file_name_str):
@@ -3183,7 +3250,7 @@ class C_HW2GO():
             return False
 
         with open(file_name_str, 'w', encoding=ENCODING_UTF8_BOM) as f:
-            f.write(';GrandOrgue ODF automatically generated from a Hauptwerk ODF by the OdfEdit tool (github.com/GrandOrgue/ODFEdit)\n')
+            f.write('; ' + ORGAN_COMMENT + '\n')
             f.write('\n')
             for obj_id, obj_attr_dic in self.GO_ODF_dic.items():
                 f.write(f'[{obj_id}]\n')
@@ -3217,86 +3284,87 @@ class C_HW2GO():
             self.GO_objects_type_nb_dic.clear()
             self.GO_objects_type_nb_dic['Stop'] = 0
             self.GO_objects_type_nb_dic['Coupler'] = 0
+            self.silent_loop_file_used = False
 
             # build the various GO objects in the GO ODF dictionary from the HW ODF
             # the order of calling the below functions is important, there are dependencies between some of them
 
             progress_status_update_fct('Building the GrandOrgue Organ object...')
-            if self.GO_ODF_build_Organ_object() == None :
+            if self.GO_ODF_build_Organ_object() == '':
                 self.events_log_add(f'ERROR : issue occured while building the GO Organ object')
                 return False
 
-##            progress_status_update_fct('Building the GrandOrgue WindchestGroup objects...')
-##            if self.GO_ODF_build_WindchestGroup_objects() == 0 :
-##                self.events_log_add(f'ERROR : no GO WindchestGroup object could be created')
-##                return False
+            HW_sorted_display_pages_id_list = sorted(self.HW_ODF_dic['DisplayPage'].keys())
+            HW_sorted_divisions_id_list = sorted(self.HW_ODF_dic['Division'].keys())
 
-##            progress_status_update_fct('Building the GrandOrgue Rank objects...')
-##            if self.GO_ODF_build_Rank_objects() == 0 :
-##                self.events_log_add(f'ERROR : no GO Rank object could be created')
-##                return False
-
-            # build the GO Panel objects by sorted HW DisplayPage ID
-            progress_status_update_fct('Building the GrandOrgue Panel objects...')
-            for HW_disp_page_id in sorted(self.HW_ODF_dic['DisplayPage'].keys()):
+            # build the GO Panel objects by sorted HW DisplayPage ID order
+            progress_status_update_fct('Building the GrandOrgue Panels...')
+            for HW_disp_page_id in HW_sorted_display_pages_id_list:
                 HW_disp_page_dic = self.HW_ODF_get_object_dic('DisplayPage', HW_disp_page_id)
                 self.GO_ODF_build_Panel_object(HW_disp_page_dic)
 
-            # build the GO Manual objects by HW DisplayPage
-            progress_status_update_fct('Building the GrandOrgue Manual objects...')
-            for HW_division_id in sorted(self.HW_ODF_dic['Division'].keys()):
-                # parse the defined HW Division objects by increasing ID order
+            # build the GO Manual objects by sorted HW Division ID order
+            progress_status_update_fct('Building the GrandOrgue Manuals...')
+            HW_last_division_id = 0
+            for HW_division_id in HW_sorted_divisions_id_list:
+                HW_last_division_id = HW_division_id
                 HW_division_dic = self.HW_ODF_dic['Division'][HW_division_id]
                 self.GO_ODF_build_Manual_object(HW_division_dic)
 
-            # build the GO Coupler objects linked to the HW Division / Keyboard / KeyAction objects
-            for HW_division_dic in self.HW_ODF_dic['Division'].values():
-                # parse the defined HW Division objects
-                for HW_keyboard_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_division_dic, 'Keyboard', TO_CHILD):
+            # build the GO Coupler objects by sorted HW Division ID -> Keyboard -> KeyAction
+            for HW_division_id in HW_sorted_divisions_id_list:
+                HW_division_dic = self.HW_ODF_dic['Division'][HW_division_id]
+                for HW_keyboard_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_division_dic, 'Keyboard', TO_CHILD, sorted_id_list=True):
                     # parse the HW Keyboard objects belonging to the current HW Division
-                    for HW_key_action_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_keyboard_dic, 'KeyAction', TO_CHILD):
+                    for HW_key_action_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_keyboard_dic, 'KeyAction', TO_CHILD, sorted_id_list=True):
                         # parse the HW KeyAction objects belonging to the current HW Keyboard
                         if self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_key_action_dic, 'ConditionSwitchID') != None:
                             # the current KeyAction is controlled by a switch, it is a normally a keyboards coupler
-                            progress_status_update_fct(f'Building the GrandOrgue Coupler objects... {HW_key_action_dic["Name"]}')
-                            self.GO_ODF_build_Coupler_object(HW_key_action_dic)
+                            progress_status_update_fct(f'Building the GrandOrgue Coupler "{HW_key_action_dic["Name"]}"...')
+                            self.GO_ODF_build_Drawstop_objects(HW_key_action_dic, HW_division_dic)
 
-            # build the GO Stop objects linked to the HW Division objects
-            for HW_division_dic in self.HW_ODF_dic['Division'].values():
-                # parse the defined HW Division objects
-                for HW_stop_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_division_dic, 'Stop', TO_CHILD):
+            # build the GO Stop objects by sorted HW Division ID order
+            for HW_division_id in HW_sorted_divisions_id_list:
+                HW_division_dic = self.HW_ODF_dic['Division'][HW_division_id]
+                for HW_stop_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_division_dic, 'Stop', TO_CHILD, sorted_id_list=True):
                     # parse the HW Stop objects belonging to the current HW Division
-                    progress_status_update_fct(f'Building the GrandOrgue Stop objects... {HW_stop_dic["Name"]}')
-                    self.GO_ODF_build_Stop_object(HW_stop_dic)
+                    progress_status_update_fct(f'Building the GrandOrgue Stop "{HW_stop_dic["Name"]}"...')
+                    self.GO_ODF_build_Drawstop_objects(HW_stop_dic, HW_division_dic)
 
-            # build the other GO objects based on the HW visible control objects which have not been yet associated to a GO object
-            progress_status_update_fct('Building the other GrandOrgue control objects...')
-            for HW_disp_page_dic in self.HW_ODF_dic['DisplayPage'].values():
-                # parse the various HW DisplayPage objects
+            # build the GO Stop objects not built before, parsing the HW switches of the display pages which have not be converted to GO object
+            progress_status_update_fct('Building other GrandOrgue objects...')
+            HW_division_dic = self.HW_ODF_dic['Division'][HW_last_division_id] # by default the other drawstops are assigned to the last division
+            for HW_disp_page_id in HW_sorted_display_pages_id_list:
+                HW_disp_page_dic = self.HW_ODF_get_object_dic('DisplayPage', HW_disp_page_id)
                 for HW_switch_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_disp_page_dic, 'Switch', TO_CHILD):
                     # parse the HW Switch objects displayed in the current HW DisplayPage
                     if HW_switch_dic['_GO_uid'] == '':
-                        # the HW Switch is not already assigned to a GO object, try it
-                        self.GO_ODF_build_Stop_object(HW_switch_dic)
+                        # the HW Switch is not already assigned to a GO object, try if a GO Stop can be built based on what it controls
+                        self.GO_ODF_build_Drawstop_objects(HW_switch_dic, HW_division_dic)
 
             progress_status_update_fct('Completing the build...')
-##            print(self.GO_objects_type_nb_dic)
 
             if self.silent_loop_file_used:
-                # copy the file SilentLoop.wav in the root folder of the HW sample set if used by a GO Stop
-                if not(os.path.isfile(self.HW_sample_set_path_str + os.sep + 'SilentLoop.wav')):
-                    # the file is not already copied in the HW sample set root folder
-                    shutil.copy(f"{os.path.dirname(__file__) + os.sep + 'SilentLoop.wav'}", self.HW_sample_set_path_str)
+                # the file SilentLoop.wav is referenced by the GO ODF for a GO drawstop noise
+                # copy it in the root folder of the HW sample set
+                if not(os.path.exists(self.HW_sample_set_path_str + os.sep + 'SilentLoop.wav')):
+                    # the file is not already copied in the HW sample set root folder, copy it
+                    shutil.copy(os.path.dirname(__file__) + os.sep + 'SilentLoop.wav', self.HW_sample_set_path_str)
+            else:
+                # the file SilentLoop.wav is referenced by the GO ODF
+                # remove it in the root folder of the HW sample set if it was placed here by a previous version of OdfEdit
+                if os.path.exists(self.HW_sample_set_path_str + os.sep + 'SilentLoop.wav'):
+                    # the file is present in the HW sample set root folder, delete it
+                    os.remove(self.HW_sample_set_path_str + os.sep + 'SilentLoop.wav')
 
-            # remove from the GO ODF the attributes _GO_uid added in Panel and Manual objects for building the ODF
+            # remove from the GO ODF the attributes starting by '_' added in Panel and Manual objects for building the ODF
             for obj_uid, obj_attr_dic in self.GO_ODF_dic.items():
-                if obj_uid[:-3] in ('Panel', 'Manual'):
-                    obj_attr_list = list(obj_attr_dic.keys())
-                    for obj_attr_name_str in obj_attr_list:
-                        if obj_attr_name_str == '_GO_uid':
+                if obj_uid.startswith(('Panel', 'Manual', 'Wind')):
+                    for obj_attr_name_str in list(obj_attr_dic.keys()):
+                        if obj_attr_name_str[0] == '_':
                             del self.GO_ODF_dic[obj_uid][obj_attr_name_str]
 
-            # save the HW ODF data in a GO ODF format (for development/debug purpose)
+            # save the HW ODF data in a GO ODF format (for development/debug purpose, more easy to read than a xml file)
 ##            self.HW_ODF_save2organfile(HW_ODF_file_name_str + '.organ')
 
             # save the built GO ODF data in a .organ file
@@ -3308,28 +3376,29 @@ class C_HW2GO():
     #-------------------------------------------------------------------------------------------------
     def GO_ODF_build_Organ_object(self):
         # build the GO Organ object from the HW ODF
-        # return None if an issue has occured, else return the created GO Organ dictionary
+        # return '' if an issue has occured, else return the UID of the created GO Organ
 
-        # HW objects used : _General, RequiredInstallationPackage
+        # used HW objects :
+        #   _General, RequiredInstallationPackage
 
         # get the dictionary of the HW _General object
         HW_general_dic = self.HW_ODF_get_object_dic('_General')
         if HW_general_dic == None:
             self.events_log_add(f'ERROR : missing _General object in the Hauptwerk ODF dictionary')
-            return None
+            return ''
 
         # check if the folders of the required installation packages are present in the folder OrganInstallationPackages
         self.available_HW_packages_id_list = []
         for HW_install_pack_dic in self.HW_ODF_dic['RequiredInstallationPackage'].values():
             # parse and check the defined HW RequiredInstallationPackage objects
-            HW_package_id = myint(self.HW_ODF_get_attribute_value(HW_install_pack_dic, 'InstallationPackageID', True))
+            HW_package_id = myint(self.HW_ODF_get_attribute_value(HW_install_pack_dic, 'InstallationPackageID', MANDATORY))
             if HW_package_id == None:
-                return None
+                return ''
 
-            HW_package_name = self.HW_ODF_get_attribute_value(HW_install_pack_dic, 'Name', True)
-            HW_package_supplier = self.HW_ODF_get_attribute_value(HW_install_pack_dic, 'SupplierName', True)
+            HW_package_name = self.HW_ODF_get_attribute_value(HW_install_pack_dic, 'Name', MANDATORY)
+            HW_package_supplier = self.HW_ODF_get_attribute_value(HW_install_pack_dic, 'SupplierName', MANDATORY)
             if HW_package_name == None or HW_package_supplier == None:
-                return None
+                return ''
 
             folder_name = os.path.join(self.HW_sample_set_path_str, 'OrganInstallationPackages', str(HW_package_id).zfill(6))
             if not os.path.isdir(folder_name):
@@ -3341,22 +3410,21 @@ class C_HW2GO():
                 self.available_HW_packages_id_list.append(HW_package_id)
 
         # recover the main installation package ID
-        HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_general_dic, 'OrganInfo_InstallationPackageID', True))
+        HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_general_dic, 'OrganInfo_InstallationPackageID', MANDATORY))
         if HW_install_package_id == None:
-            return None
+            return ''
 
         # add an entry in the GO ODF dictionary for the Organ object
-        GO_organ_dic = self.GO_ODF_dic['Organ'] = {}
+        GO_organ_uid = 'Organ'
+        GO_organ_dic = self.GO_ODF_dic[GO_organ_uid] = {}
 
         GO_organ_dic['ChurchName'] = mystr(self.HW_ODF_get_attribute_value(HW_general_dic, 'Identification_Name'))
         GO_organ_dic['ChurchAddress'] = mystr(self.HW_ODF_get_attribute_value(HW_general_dic, 'OrganInfo_Location'))
         GO_organ_dic['OrganBuilder'] = mystr(self.HW_ODF_get_attribute_value(HW_general_dic, 'OrganInfo_Builder'))
         GO_organ_dic['OrganBuildDate'] = mystr(self.HW_ODF_get_attribute_value(HW_general_dic, 'OrganInfo_BuildDate'))
         #GO_organ_dic['OrganComments'] = mystr(self.HW_ODF_get_attribute_value(HW_general_dic, 'OrganInfo_Comments'))
-        GO_organ_dic['OrganComments'] = 'GrandOrgue definition file automatically generated by the tool OdfEdit for a sample set made for Hauptwerk'
-        GO_organ_dic['RecordingDetails'] = mystr(self.HW_ODF_get_attribute_value(HW_general_dic, 'Control_OrganDefinitionSupplierName', True))
-
-        GO_organ_dic['InfoFilename'] = mystr(self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_general_dic, 'OrganInfo_InfoFilename'), HW_install_package_id))
+        GO_organ_dic['OrganComments'] = ORGAN_COMMENT
+        GO_organ_dic['RecordingDetails'] = mystr(self.HW_ODF_get_attribute_value(HW_general_dic, 'Control_OrganDefinitionSupplierName', MANDATORY))
 
         GO_organ_dic['HasPedals'] = 'N'
         GO_organ_dic['NumberOfManuals'] = 0
@@ -3379,30 +3447,33 @@ class C_HW2GO():
         GO_organ_dic['Gain'] = str(float(self.HW_ODF_get_attribute_value(HW_general_dic, 'AudioOut_AmplitudeLevelAdjustDecibels')))
 
         # recover the ID of the HW default display page (will be used in other GO_ODF_build_xxx functions)
-        self.HW_default_display_page_id = myint(self.HW_ODF_get_attribute_value(HW_general_dic, 'SpecialObjects_DefaultDisplayPageID', True))
+        self.HW_default_display_page_id = myint(self.HW_ODF_get_attribute_value(HW_general_dic, 'SpecialObjects_DefaultDisplayPageID', MANDATORY))
         if self.HW_default_display_page_id == None:
-            return None
+            return ''
 
         # add in the HW _General object the ID of the corresponding GO object
         HW_general_dic['_GO_uid'] = 'Organ'
 
-        return GO_organ_dic
+        return GO_organ_uid
 
     #-------------------------------------------------------------------------------------------------
     def GO_ODF_build_Panel_object(self, HW_disp_page_dic):
         # build the GO Panel999 corresponding to the given HW DisplayPage
         # build also the GO Panel999Image999 and Panel999Element999 Label objects of this panel
-        # return the dictionary of the created GO Panel object, or None if no panel created
+        # return the UID of the created GO Panel object, or '' if no panel created
 
-        # HW objects used :
+        # used HW objects :
         #   _General
-        #   DisplayPage C> ImageSetInstance
-        #   DisplayPage C> TextInstance
+        #   DisplayPage
+        #   DisplayPage C> Keyboard
+        #   DisplayPage C> ImageSetInstance C> ImageSet C> ImageSetElement (in function GO_ODF_build_PanelImage_object)
+        #   DisplayPage C> TextInstance C> TextStyle                       (in function GO_ODF_build_PanelElement_Label_object)
+        #   DisplayPage C> TextInstance C> ImageSetInstance C> ImageSet C> ImageSetElement  (idem as above line)
 
         # get the ID of the HW DisplayPage object
-        HW_page_id = myint(self.HW_ODF_get_attribute_value(HW_disp_page_dic, 'PageID', True))
+        HW_page_id = myint(self.HW_ODF_get_attribute_value(HW_disp_page_dic, 'PageID', MANDATORY))
 
-        if self.HW_ODF_get_linked_objects_dic_by_type(HW_disp_page_dic, 'Keyboard', TO_CHILD, True) != None:
+        if self.HW_ODF_get_linked_objects_dic_by_type(HW_disp_page_dic, 'Keyboard', TO_CHILD, FIRST_ONE) != None:
             # the current HW DisplayPage object contains at least one Keyboard object in his children, so it is the HW console page
             self.HW_console_display_page_id = HW_page_id
 
@@ -3488,15 +3559,16 @@ class C_HW2GO():
             # parse the HW TextInstance objects of the given display page
             self.GO_ODF_build_PanelElement_Label_object(HW_text_inst_dic, GO_panel_dic)
 
-        return GO_panel_dic
+        return GO_panel_uid
 
     #-------------------------------------------------------------------------------------------------
     def GO_ODF_build_PanelImage_object(self, HW_img_set_inst_dic, GO_panel_dic):
         # build the GO Panel999Image999 object corresponding to the given HW ImageSetInstance and in the given GO Panel
-        # return the dictionary of the created GO PaneL Image object, or None if no panel image created
+        # return the UID of the created GO PaneL Image object, or '' if no panel image created
         # sub-function of GO_ODF_build_Panel_object
 
-        # HW objects used : ImageSetInstance C> ImageSet C> ImageSetElement
+        # used HW objects :
+        #   ImageSetInstance C> ImageSet C> ImageSetElement
 
         image_attr_dic = {}
         if self.HW_ODF_get_image_attributes(HW_img_set_inst_dic, image_attr_dic) and image_attr_dic['BitmapFilename'] != None:
@@ -3539,19 +3611,19 @@ class C_HW2GO():
             # add in the HW ImageSetInstance object the ID of the corresponding GO object
             HW_img_set_inst_dic['_GO_uid'] = GO_panel_image_uid
 
-            return GO_panel_image_dic
+            return GO_panel_image_uid
         else:
-            return None
+            return ''
 
     #-------------------------------------------------------------------------------------------------
     def GO_ODF_build_PanelElement_Label_object(self, HW_text_inst_dic, GO_panel_dic):
         # build the GO Panel999Element999 object (type Label) corresponding to the given HW TextInstance and in the given GO Panel
-        # return the dictionary of the created GO Panel Element object, or None if no panel element created
+        # return the UID of the created GO Panel Element object, or '' if no panel element created
         # sub-function of GO_ODF_build_Panel_object
 
-        # HW objects used :
-        #    TextInstance C> TextStyle
-        #    TextInstance C> ImageSetInstance C> ImageSet C> ImageSetElement
+        # used HW objects :
+            #   TextInstance C> TextStyle
+            #   TextInstance C> ImageSetInstance C> ImageSet C> ImageSetElement
 
         text_attr_dic = {}
         if self.HW_ODF_get_text_attributes(HW_text_inst_dic, text_attr_dic):
@@ -3673,68 +3745,42 @@ class C_HW2GO():
             if text_attr_dic['ImageSetInstanceDic'] != None:
                 text_attr_dic['ImageSetInstanceDic']['_GO_uid'] = GO_panel_element_uid
 
-            return GO_panel_element_dic
+            return GO_panel_element_uid
         else:
-            return None
+            return ''
 
     #-------------------------------------------------------------------------------------------------
-    def GO_ODF_build_Manual_object(self, HW_object_dic):
-        # build the GO Manual999 object based on the given HW object : Keyboard or KeyboardKey or Division
-        # keyboard_key  : seen in sample set Graboswki Ermelo, Paradisi Groningen/StMichel
-        # keyboard      : seen in sample set Graboswki Ledziny/Skrzatusz, Augustine Dreischor/Lorris
+    def GO_ODF_build_Manual_object(self, HW_division_dic):
+        # build the GO Manual999 object based on the given HW Division
+        # return the UID of the GO Manuel object build or already existing, or '' if no panel element created
 
-        # HW objects used :
-        #      1 : Division C> Keyboard C> KeyboardKey P> Switch C> ImageSetInstance C> ImageSet
-        #   or 2 : Division C> Keyboard C> KeyImageSet C> ImageSet
-
-        if HW_object_dic['_HW_uid'][:-6] == 'KeyboardKey':
-            # the given HW object is a KeyboardKey
-            # get the HW Keyboard object to which belongs the given HW KeyboardKey
-            HW_division_dic = None
-            HW_keyboard_dic = self.HW_ODF_get_object_dic_by_ref_id('Keyboard', HW_object_dic, 'KeyboardID')
-        elif HW_object_dic['_HW_uid'][:-6] == 'Keyboard':
-            # the given HW object is a Keyboard
-            HW_division_dic = None
-            HW_keyboard_dic = HW_object_dic
-        elif HW_object_dic['_HW_uid'][:-6] == 'Division':
-            # the given HW object is a Division
-            HW_division_dic = HW_object_dic
-            HW_keyboard_dic = None
-            HW_keyboards_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_division_dic, 'Keyboard', TO_CHILD)
-            for HW_keyb_dic in HW_keyboards_dic_list:
-                # parse the HW Keyboard objects belonging to the given HW Division, to search the first one which has a KeyImageSet or KeyboardKey child
-                if (self.HW_ODF_get_linked_objects_dic_by_type(HW_keyb_dic, 'KeyImageSet', TO_CHILD, True) != None or
-                    self.HW_ODF_get_linked_objects_dic_by_type(HW_keyb_dic, 'KeyboardKey', TO_CHILD, True) != None):
-                    HW_keyboard_dic = HW_keyb_dic
-                    break
-        else:
-            # wrong given HW object type
-            self.events_log_add(f'INTERNAL ERROR : wrong object type {HW_object_dic["_HW_uid"]} provided to GO_ODF_build_Manual_object')
-            return False
-
-        # get the HW Division to which belongs the HW Keyboard if not already known
-        if HW_division_dic == None:
-            HW_division_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_keyboard_dic, 'Division', TO_PARENT, True)
-            if HW_division_dic == None:
-                # cannot continue if the division ID is unknown
-                self.events_log_add(f'INTERNAL ERROR : unable to know to which division belongs the keyboard {HW_keyboard_dic["Name"]}')
-                return False
-        HW_division_id = int(HW_division_dic['_HW_uid'][-6:])
-        HW_division_name = self.HW_ODF_get_attribute_value(HW_division_dic, 'Name')
+        # used HW objects :
+        #   Division C> Keyboard C> KeyboardKey P> Switch C> ImageSetInstance C> ImageSet C> ImageSetElement  ==> keyboard_display_mode = 1
+        #   Division C> Keyboard C> KeyImageSet C> ImageSet C> ImageSetElement                                ==> keyboard_display_mode = 2
 
         if HW_division_dic['_GO_uid'] != '':
             # a GO manual has been already assigned to the HW division, we can exit
-            return True
+            return HW_division_dic['_GO_uid']
+
+        # get the first visible HW Keyboard associated to the given HW Division
+        HW_keyboard_dic = None
+        for HW_keyb_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_division_dic, 'Keyboard', TO_CHILD):
+            # parse the HW Keyboard objects belonging to the given HW Division, to search the first one which has a KeyImageSet or KeyboardKey child
+            if (self.HW_ODF_get_linked_objects_dic_by_type(HW_keyb_dic, 'KeyImageSet', TO_CHILD, FIRST_ONE) != None or
+                self.HW_ODF_get_linked_objects_dic_by_type(HW_keyb_dic, 'KeyboardKey', TO_CHILD, FIRST_ONE) != None):
+                HW_keyboard_dic = HW_keyb_dic
+                break
 
         # get how the HW keyboard is graphically defined
         keyboard_display_mode = 0  # by default the keyboard is not visible
         if HW_keyboard_dic != None:
-            if self.HW_ODF_get_linked_objects_dic_by_type(HW_keyboard_dic, 'KeyboardKey', TO_CHILD, True) != None:
+            if self.HW_ODF_get_linked_objects_dic_by_type(HW_keyboard_dic, 'KeyboardKey', TO_CHILD, FIRST_ONE) != None:
                 keyboard_display_mode = 1  # the keyboard is graphically defined by KeyboardKey objects (which should be linked to a Switch + ImageSetInstance)
             elif self.HW_ODF_get_attribute_value(HW_keyboard_dic, 'KeyGen_KeyImageSetID') != None:
                 keyboard_display_mode = 2  # the keyboard is graphically defined by a KeyImageSet object
 
         # define the GO Manual999 object to associate to this HW Division
+        HW_division_id = int(HW_division_dic['_HW_uid'][-6:])
         if HW_division_id == 1:
             # Pedal division
             GO_manual_uid = 'Manual000'
@@ -3812,7 +3858,7 @@ class C_HW2GO():
         # get the HW DisplayPage in which is displayed the keyboard
         if keyboard_display_mode == 1:
             # recover this from the HW ImageSetInstance of the first key of the keyboard
-            HW_img_set_instance_id = myint(self.HW_ODF_get_attribute_value(keys_switch_dic[first_midi_note_nb_int], 'Disp_ImageSetInstanceID', True))
+            HW_img_set_instance_id = myint(self.HW_ODF_get_attribute_value(keys_switch_dic[first_midi_note_nb_int], 'Disp_ImageSetInstanceID', MANDATORY))
             HW_img_set_instance_dic = self.HW_ODF_get_object_dic('ImageSetInstance', HW_img_set_instance_id)
             keyboard_disp_page_id = myint(self.HW_ODF_get_attribute_value(HW_img_set_instance_dic, 'DisplayPageID'))
         elif keyboard_display_mode == 2:
@@ -3824,7 +3870,7 @@ class C_HW2GO():
             GO_panel_uid = HW_disp_page_dic['_GO_uid']
             GO_panel_dic = self.GO_ODF_dic[GO_panel_uid]
 
-        GO_manual_dic['Name'] = HW_division_name
+        GO_manual_dic['Name'] = self.HW_ODF_get_attribute_value(HW_division_dic, 'Name')
         GO_manual_dic['Displayed'] = 'Y' if keyboard_display_mode != 0 else 'N'
         GO_manual_dic['NumberOfLogicalKeys'] = nb_keys_int
         GO_manual_dic['NumberOfAccessibleKeys'] = nb_keys_int
@@ -3838,7 +3884,7 @@ class C_HW2GO():
 
         if keyboard_display_mode == 0:
             # the keyboard is not visible, we can stop here the definition of the GO Manual
-            return True
+            return GO_manual_uid
 
         # by default the manual display attributes are put in the GO Manual999
         GO_disp_manual_dic = GO_manual_dic
@@ -3855,8 +3901,8 @@ class C_HW2GO():
             GO_panel_element_dic = self.GO_ODF_dic[GO_panel_element_uid] = {}
 
             GO_panel_element_dic['Type'] = 'Manual'
-            #GO_panel_element_dic['Name'] = HW_division_name  # attribute not used by GrandOrgue, so generating a warning in GO
             GO_panel_element_dic['Manual'] = int(GO_manual_uid[-3:])
+            GO_panel_element_dic['_GO_uid'] = GO_manual_uid
 
             # the manual display attributes will be put in the GO Panel999Element999
             GO_disp_manual_dic = GO_panel_element_dic
@@ -3968,6 +4014,8 @@ class C_HW2GO():
                 self.GO_ODF_build_Manual_keyimage_by_keytype(HW_key_img_set_dic, 'WholeNatural', GO_disp_manual_dic, 'LastF')
                 GO_disp_manual_dic['Width_LastF'] = self.HW_ODF_get_attribute_value(HW_key_img_set_dic, 'HorizSpacingPixels_LeftOfNaturalFromLeftOfNatural')
 
+        return GO_manual_uid
+
     #-------------------------------------------------------------------------------------------------
     def GO_ODF_build_Manual_keyimage_by_keytype(self, HW_key_img_set_dic, HW_key_type, GO_disp_manual_dic, GO_key_type):
         # add to the given GO manual object ID the key images attributes of the given HW key type
@@ -4000,12 +4048,12 @@ class C_HW2GO():
 
         if HW_switch_dic == None: return
 
-        HW_img_set_instance_id = myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetInstanceID', True))
+        HW_img_set_instance_id = myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetInstanceID', MANDATORY))
         HW_img_set_instance_dic = self.HW_ODF_get_object_dic('ImageSetInstance', HW_img_set_instance_id)
 
         # get the key engaged and disengaged images indexes
-        key_up_img_index = myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetIndexDisengaged', True))
-        key_down_img_index = myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetIndexEngaged', True))
+        key_up_img_index = myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetIndexDisengaged', MANDATORY))
+        key_down_img_index = myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetIndexEngaged', MANDATORY))
 
         # add in the HW Switch and ImageSetInstance objects the UID of the corresponding GO object
         HW_switch_dic['_GO_uid'] = GO_disp_manual_dic['_GO_uid']
@@ -4038,7 +4086,7 @@ class C_HW2GO():
 
         # width/offset of the key, width calculated by the diff of XPos of the key and its next one
         if HW_next_switch_dic != None:
-            HW_next_img_set_instance_id = myint(self.HW_ODF_get_attribute_value(HW_next_switch_dic, 'Disp_ImageSetInstanceID', True))
+            HW_next_img_set_instance_id = myint(self.HW_ODF_get_attribute_value(HW_next_switch_dic, 'Disp_ImageSetInstanceID', MANDATORY))
             HW_next_img_set_instance_dic = self.HW_ODF_get_object_dic('ImageSetInstance', HW_next_img_set_instance_id)
 
             next_image_dic = {}
@@ -4048,474 +4096,227 @@ class C_HW2GO():
             GO_disp_manual_dic['Key' + key_nb_3digit_str + 'Offset'] = '0'
 
     #-------------------------------------------------------------------------------------------------
-    def GO_ODF_build_Stop_object(self, HW_object_dic):
-        # build GO Stop999 objects which can be build from the given HW object (Stop or Switch or Keyboard or KeyAction)
+    def GO_ODF_build_Drawstop_objects(self, HW_object_dic, HW_division_dic):
+        # build all the possible GO drawstop objects (Stop, Coupler) from the given HW object (Stop, KeyAction, Switch) and their linked HW switches
 
-        # if a HW Stop is given, build one or several GO Stop type below linked to a same new GO Switch and GO Manual :
-        #   1 - drawstop for pipes sound : GO Stop linked to Rank(s)
-        #          from HW Stop C> StopRank(s) (ActionTypeCode = 1, ActionEffectCode = 1) C> Rank C> Pipe_SoundEngine01 ...
-        #   2 - drawstop for general noise (blower, ambient, bells, ...) : GO stop with rank data inside
-        #          from HW Stop C> StopRank (ActionTypeCode = 21, ActionEffectCode = 1) C> Rank C> Pipe_SoundEngine01 ...
-        #   3 - drawstop engage action noise : GO Stop with rank data inside
-        #          from HW Stop C> StopRank (ActionTypeCode = 21, ActionEffectCode = 2) C> Rank C> Pipe_SoundEngine01 ...
-        #          or   HW Stop P> Switch C> Pipe_SoundEngine01 C> Pipe_SoundEngine01Layer C> Pipe_SoundEngine01_AttackSample ...
-        #          or   HW Stop P> Switch C> SwitchLinkage (EngageLinkActionCode=4, DisengageLinkActionCode=7) C> Switch C> Pipe_SoundEngine01 ...
-        #   4 - drawstop disengage action noise : GO Stop with rank data inside
-        #          from HW Stop C> StopRank (ActionTypeCode = 21, ActionEffectCode = 3) C> Rank C> Pipe_SoundEngine01 ...
-        #          or   HW Stop P> Switch C> Pipe_SoundEngine01 C> Pipe_SoundEngine01Layer C> Pipe_SoundEngine01_AttackSample + Pipe_SoundEngine01_ReleaseSample ...
-        #          or   HW Stop P> Switch C> SwitchLinkage (EngageLinkActionCode=7, DisengageLinkActionCode=4) C> Switch C> Pipe_SoundEngine01 ...
-        #          or   HW Stop P> Switch C> SwitchLinkage (EngageLinkActionCode=1, DisengageLinkActionCode=2) C> Switch C> Pipe_SoundEngine01 ...
-        #   5 - manual keys press noise : GO Stop linked to a Rank (no link with a Switch)
-        #          from HW Stop C> StopRank(s) (ActionTypeCode = 1, ActionEffectCode = 2) C> Rank C> Pipe_SoundEngine01 ...
-        #   6 - manual keys release noise  : GO Stop linked to a Rank (no link with a Switch)
-        #          from HW Stop C> StopRank(s) (ActionTypeCode = 1, ActionEffectCode = 3) C> Rank C> Pipe_SoundEngine01 ...
+        # used HW objects for various kinds of drawstop :
+        #   coupler :
+        #     Switch C> KeyAction
+        #   pipes stop :
+        #     Switch C> Stop C> StopRank(s) (ActionTypeCode = 1, ActionEffectCode = 1) C> Rank C> Pipe_SoundEngine01 ...
+        #   drawstop engage noise stop :
+        #     Switch C> Stop C> StopRank (ActionTypeCode = 21, ActionEffectCode = 2) C> Rank C> Pipe_SoundEngine01 ...
+        #     Switch C> SwitchLinkage (EngageLinkActionCode=4, DisengageLinkActionCode=7) C> Switch C> Pipe_SoundEngine01 ...
+        #   drawstop engage noise stop or general noise stop (i.e. blower) :
+        #     Switch C> Pipe_SoundEngine01 C> Pipe_SoundEngine01Layer C> Pipe_SoundEngine01_AttackSample (no ReleaseSample) ...
+        #   drawstop disengage noise stop :
+        #     Switch C> Stop C> StopRank (ActionTypeCode = 21, ActionEffectCode = 3) C> Rank C> Pipe_SoundEngine01 ...
+        #     Switch C> SwitchLinkage (EngageLinkActionCode=7, DisengageLinkActionCode=4) C> Switch C> Pipe_SoundEngine01 ...
+        #     Switch C> SwitchLinkage (EngageLinkActionCode=1, DisengageLinkActionCode=2, SourceSwitchLinkIfEngaged=N) C> Switch C> Pipe_SoundEngine01 ...
+        #     Switch C> Pipe_SoundEngine01 C> Pipe_SoundEngine01Layer C> Pipe_SoundEngine01_ReleaseSample (AttackSample ignored) ...
+        #   general noise stop (i.e. blower) :
+        #     Switch C> Stop C> StopRank (ActionTypeCode = 21, ActionEffectCode = 1) C> Rank C> Pipe_SoundEngine01 ...
 
-        # if a HW Keyboard is given, build one or several new GO Stop type below linked to a GO Manual :
-        #   5 - manual keys press noise  : GO Stop linked to a Rank
-        #          from HW Keyboard C> KeyboardKey P> Switch C> SwitchLinkage (EngageLinkActionCode=4, DisengageLinkActionCode=7) C> Switch C> Pipe_SoundEngine01 ...
-        #          or   HW Keyboard C> KeyboardKey P> Switch C> Pipe_SoundEngine01 C> Pipe_SoundEngine01Layer C> Pipe_SoundEngine01_AttackSample ...
-        #   6 - manual keys release noise : GO Stop linked to a Rank
-        #          from HW Keyboard C> KeyboardKey P> Switch C> SwitchLinkage (EngageLinkActionCode=7, DisengageLinkActionCode=4) C> Switch C> Pipe_SoundEngine01 ...
-        #          or   HW Keyboard C> KeyboardKey P> Switch C> Pipe_SoundEngine01 C> Pipe_SoundEngine01Layer C> Pipe_SoundEngine01_AttackSample + Pipe_SoundEngine01_ReleaseSample ...
-
-        # if a HW Switch is given, build one new GO Stop type below linked to a new GO Switch and GO Manual001 :
-        #   2 - drawstop for general noise (blower, ambient, bells, ...) : GO stop with rank data inside
-        #          from HW Switch C> Pipe_SoundEngine01 ...
-        #          or   HW Switch C> SwitchLinkage C> Switch C> Pipe_SoundEngine01 ...
-
-        # check the type of given HW object
-        # get the GO Manual to which associate the GO Stop(s) to build
+        GO_object_name = HW_object_dic['Name']
+        GO_manual_dic = self.GO_ODF_dic[HW_division_dic['_GO_uid']]
         HW_object_type = HW_object_dic['_HW_uid'][:-6]
-        if HW_object_type == 'Stop':
-            HW_division_dic = self.HW_ODF_get_object_dic_by_ref_id('Division', HW_object_dic, 'DivisionID')
-            GO_manual_dic = self.GO_ODF_dic[HW_division_dic['_GO_uid']]
-        elif HW_object_type == 'Keyboard':
-            HW_division_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'Division', TO_PARENT)
-            GO_manual_dic = self.GO_ODF_dic[HW_division_dic['_GO_uid']]
-        elif HW_object_type == 'KeyAction':
-            HW_source_keyboard_dic = self.HW_ODF_get_object_dic_by_ref_id('Keyboard', HW_object_dic, 'SourceKeyboardID')
-            HW_source_division_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_source_keyboard_dic, 'Division', TO_PARENT, True)
-            GO_manual_dic = self.GO_ODF_dic[HW_source_division_dic['_GO_uid']]
-        elif HW_object_type == 'Switch':
-            # without known division to assign, by default assign to the Manual001
-            GO_manual_dic = self.GO_ODF_dic['Manual001']
-        else:
+
+        nb_couplers = 0
+        nb_pipes_stops = 0
+        nb_noise_stops = 0
+
+        # get the list of the HW switches which are linked to the given HW object
+        # in case of given KeyAction or Stop object, consider the parent controlling HW switches
+        # in case of given Switch object, consider the children controlled HW switches
+        HW_switches_data_dic = {}
+        self.HW_ODF_get_linked_switches_list(HW_object_dic, HW_switches_data_dic, TO_CHILD if HW_object_type == 'Switch' else TO_PARENT)
+
+        # try to build GO stops for each linked HW switch depenting on what it is controlling
+        GO_objects_list = []
+        for HW_switch_dic in HW_switches_data_dic['HW_switches_list']:
+
+            # check the Switch C> KeyAction use case
+            HW_key_action_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_switch_dic, 'KeyAction', TO_CHILD, FIRST_ONE)
+            if HW_key_action_dic != None and HW_key_action_dic['_GO_uid'] == '':  # and nb_couplers == 0:
+                # the current HW switch is controlling a KeyAction which is not already assigned to a GO object
+                # and it is the first coupler to build in link with the given HW object
+                GO_coupler_dic = self.GO_ODF_build_Coupler_object(HW_key_action_dic)
+                if GO_coupler_dic != None:
+                    GO_coupler_dic['_object_type'] = 'Coupler'
+                    nb_couplers += 1
+                    GO_objects_list.append(GO_coupler_dic)
+
+            # check the Switch C> Stop C> StopRank use cases
+            pipes_stop_checked = False
+            for HW_stop_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_switch_dic, 'Stop', TO_CHILD):
+                # parse the HW Stop objects which are children of the given HW Switch object if any
+                for HW_stop_rank_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_stop_dic, 'StopRank', TO_CHILD):
+                    # parse the HW StopRank objects which are children of the current HW Stop object if any
+                    HW_rank_dic = self.HW_ODF_get_object_dic_by_ref_id('Rank', HW_stop_rank_dic, 'RankID')
+                    HW_rank_nb_pipes = len(self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD))
+                    if HW_rank_nb_pipes > 0:
+                        HW_action_type_code = myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'ActionTypeCode'))
+                        HW_action_effect_code = myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'ActionEffectCode'))
+                        if HW_action_type_code == 1 and HW_action_effect_code == 1 and not pipes_stop_checked:
+                            # matching use case for building a pipes stop object
+                            pipes_stop_checked = True
+                            GO_stop_dic = self.GO_ODF_build_Stop_pipes_object(HW_stop_dic, GO_manual_dic)
+                            if GO_stop_dic != None:
+                                GO_stop_dic['_object_type'] = 'Stop'
+                                nb_pipes_stops += 1
+                                GO_objects_list.append(GO_stop_dic)
+
+                        elif HW_action_type_code == 21 and HW_action_effect_code in (1, 2, 3):
+                            # matching use case for building a noise stop object (general, attack, release)
+                            HW_pipe_dic = None
+                            # take into account a MIDI note increment if defined to use the proper Pipe_SoundEngine01 object
+                            HW_div_midi_note_increment_to_rank = myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'MIDINoteNumIncrementFromDivisionToRank'))
+                            if HW_div_midi_note_increment_to_rank != None and HW_div_midi_note_increment_to_rank != 0:
+                                # search for the Pipe_SoundEngine01 object having the given MIDI note number
+                                for HW_pipe_check_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD):
+                                    midi_note_nb = myint(self.HW_ODF_get_attribute_value(HW_pipe_check_dic, 'NormalMIDINoteNumber'))
+                                    if midi_note_nb == None: midi_note_nb = 60
+                                    if midi_note_nb == HW_div_midi_note_increment_to_rank:
+                                        HW_pipe_dic = HW_pipe_check_dic
+                                        break
+                            if HW_pipe_dic == None:
+                                # Pipe_SoundEngine01 object not found, take the first Pipe_SoundEngine01 child of the Rank
+                                HW_pipe_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD, FIRST_ONE)
+                            if HW_pipe_dic != None:
+                                # a Pipe_SoundEngine01 can be used to build the noise stop
+                                if HW_action_effect_code == 2: # drawstop engage noise
+                                    attack_bool = True
+                                elif HW_action_effect_code == 3: # drawstop disengage noise
+                                    attack_bool = False
+                                else: # general noise stop
+                                    attack_bool = None
+                                GO_stop_dic = self.GO_ODF_build_Stop_noise_object(HW_pipe_dic, GO_object_name, attack_bool)
+                                if GO_stop_dic != None:
+                                    GO_stop_dic['_object_type'] = 'Stop'
+                                    nb_noise_stops += 1
+                                    GO_objects_list.append(GO_stop_dic)
+
+            # check the Switch C> SwitchLinkage use cases
+            for HW_switch_linkage_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_switch_dic, 'SwitchLinkage', TO_CHILD):
+                # parse the HW SwitchLinkage objects which are children of the given HW Switch object if any
+                EngageLinkActionCode = myint(self.HW_ODF_get_attribute_value(HW_switch_linkage_dic, 'EngageLinkActionCode'))
+                DisengageLinkActionCode = myint(self.HW_ODF_get_attribute_value(HW_switch_linkage_dic, 'DisengageLinkActionCode'))
+                SourceSwitchLinkIfEngaged = self.HW_ODF_get_attribute_value(HW_switch_linkage_dic, 'SourceSwitchLinkIfEngaged')
+                HW_dest_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_switch_linkage_dic, 'DestSwitchID')
+                if HW_dest_switch_dic != None:
+                    HW_pipe_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_dest_switch_dic, 'Pipe_SoundEngine01', TO_CHILD, FIRST_ONE)
+                    if HW_pipe_dic != None:
+                        GO_stop_dic = None
+                        if EngageLinkActionCode == 4 and DisengageLinkActionCode == 7:
+                            # matching use case for building a drawstop engage noise
+                            GO_stop_dic = self.GO_ODF_build_Stop_noise_object(HW_pipe_dic, GO_object_name, True)
+                        elif ((EngageLinkActionCode == 7 and DisengageLinkActionCode == 4) or
+                              (EngageLinkActionCode == 1 and DisengageLinkActionCode == 2 and SourceSwitchLinkIfEngaged == 'N')):
+                            # matching use case for building a drawstop disengage noise
+                            GO_stop_dic = self.GO_ODF_build_Stop_noise_object(HW_pipe_dic, GO_object_name, False)
+                        if GO_stop_dic != None:
+                            GO_stop_dic['_object_type'] = 'Stop'
+                            nb_noise_stops += 1
+                            GO_objects_list.append(GO_stop_dic)
+
+            # check the Switch C> Pipe_SoundEngine01 use cases
+            for HW_pipe_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_switch_dic, 'Pipe_SoundEngine01', TO_CHILD):
+                # parse the HW Pipe_SoundEngine01 objects which are children of the given HW Switch object if any
+                GO_stop_dic = self.GO_ODF_build_Stop_noise_object(HW_pipe_dic, GO_object_name, None)
+                if GO_stop_dic != None:
+                    GO_stop_dic['_object_type'] = 'Stop'
+                    nb_noise_stops += 1
+                    GO_objects_list.append(GO_stop_dic)
+
+        if len(GO_objects_list) == 0:
+            # none GO object built
             return
 
-        # get the visible HW Switch which are controlling the given HW object
-        HW_switch_data_dic = {}
-        self.HW_ODF_get_controlling_switches(HW_object_dic, HW_switch_data_dic)
+        if ((nb_couplers == 0 and nb_pipes_stops == 0 and int(nb_noise_stops % 2) == 0) or
+            (not HW_switches_data_dic['clickable'] and not HW_switches_data_dic['default_to_engage'])):
+            # don't build drawstops if there are even number of noise stops (attack / release noises only)
+            # and no pipes/coupler stop (case of demo sample sets with pipes stops without pipes inside)
+            # this permits to avoid having switches in the GO panels which control nothing behind
+            # or no clickable switch and not engaged by default to control the coupler/stop
+            # this permits to avoid having objects in the GO ODF which are not controlled by a switch
+            for HW_switch_dic in HW_switches_data_dic['HW_switches_list']:
+                HW_switch_dic['_GO_uid'] = 'NONE'
+            return
 
-        drawstop_noise_allowed = True # flag used to not build stop draw noise if no stop pipes sound has been build (case of demo sample sets)
+        # build the GO switches corresponding to the visible HW switches
+        GO_switch_uid = ''
+        for HW_switch_dic in HW_switches_data_dic['HW_switches_list']:
+            GO_switch_uid  = self.GO_ODF_build_Switch_object(HW_switch_dic, GO_switch_uid , GO_object_name)
 
-        for stop_type in range(0, 6):
-            # parse the various possible stop types which can be built
-            # try to build each type of stop from the given HW object
-            GO_stop_data_dic = {}
-            GO_stop_data_dic['NumberOfAccessiblePipes'] = 0
-            if stop_type == 0:    # pipes rank sound
-                self.GO_ODF_build_Stop_pipes_sound(HW_object_dic, GO_stop_data_dic, GO_manual_dic)
-            elif stop_type == 1:  # general noise
-                self.GO_ODF_build_Stop_gen_noise(HW_object_dic, GO_stop_data_dic)
-            elif stop_type == 2 and drawstop_noise_allowed:  # drawstop engage noise
-                self.GO_ODF_build_Stop_draw_noise(HW_object_dic, GO_stop_data_dic, True)
-            elif stop_type == 3 and drawstop_noise_allowed:  # drawstop disengage noise
-                self.GO_ODF_build_Stop_draw_noise(HW_object_dic, GO_stop_data_dic, False)
-            elif stop_type == 4:  # keyboard key press noise
-                self.GO_ODF_build_Stop_keys_noise(HW_object_dic, GO_stop_data_dic, GO_manual_dic, True)
-            elif stop_type == 5:  # keyboard key release noise
-                self.GO_ODF_build_Stop_keys_noise(HW_object_dic, GO_stop_data_dic, GO_manual_dic, False)
+        # build the GO coupler/stop objects in the GO ODF dictionary
+        for GO_obj_data_dic in GO_objects_list:
+            GO_object_type = GO_obj_data_dic['_object_type']
+
+            # create a new GO object (coupler or stop) in the GO ODF dictionary
+            self.GO_objects_type_nb_dic[GO_object_type] += 1
+            GO_object_uid = GO_object_type + str(self.GO_objects_type_nb_dic[GO_object_type]).zfill(3)
+            GO_object_dic = self.GO_ODF_dic[GO_object_uid] = {}
+
+            # copy in it the current GO object attributes
+            for key, value in GO_obj_data_dic.items():
+                if key[0] != '_':
+                    GO_object_dic[key] = value
+
+            # add the GO switch in the GO object
+            if GO_switch_uid != '':
+                GO_object_dic['Function'] = 'And'
+                GO_object_dic['SwitchCount'] = 1
+                GO_object_dic['Switch001'] = GO_switch_uid[-3:]
             else:
-                break
+                GO_object_dic['DefaultToEngaged'] = 'Y' if HW_switches_data_dic['default_to_engage'] else 'N'
 
-            if GO_stop_data_dic['NumberOfAccessiblePipes'] > 0:
-                # data with accessible pipes have been retrieved from the HW object to build a GO Stop of the current type
+            # add the GO object to the GO Manual to which it belongs
+            GO_manual_dic['NumberOf' + GO_object_type + 's'] += 1
+            GO_manual_dic[GO_object_type + str(GO_manual_dic['NumberOf' + GO_object_type + 's']).zfill(3)] = GO_object_uid[-3:]
 
-                # create a new GO Stop999 object
-                self.GO_objects_type_nb_dic['Stop'] += 1
-                GO_stop_uid = 'Stop' + str(self.GO_objects_type_nb_dic['Stop']).zfill(3)
-                GO_stop_dic = self.GO_ODF_dic[GO_stop_uid] = {}
-
-                GO_stop_dic['Name'] = self.HW_ODF_get_attribute_value(HW_object_dic, 'Name', True)
-                if stop_type == 2:
-                    GO_stop_dic['Name'] += ' (engage noise)'
-                elif stop_type == 3:
-                    GO_stop_dic['Name'] += ' (disengage noise)'
-
-                # copy the stop data in the GO Stop
-                for key, value in GO_stop_data_dic.items():
-                    GO_stop_dic[key] = value
-
-                if len(HW_switch_data_dic['controlling_switches'][0]) > 0:
-                    # the given HW object is controlled by direct not conditional visible HW Switch : link the GO Stop to GO Switch objects
-                    GO_stop_dic['Function'] = 'And'
-                    GO_stop_dic['SwitchCount'] = 0
-                    # build the GO Switch objects which are controlling the GO Stop
-                    for ctrl_branch_id in range(0, 1):   #HW_switch_data_dic['switch_branches_nb'] + 1):
-                        GO_switch_uid = '' # unique GO Switch object for all the controlling switches of the same branch
-                        for HW_switch_dic in HW_switch_data_dic['controlling_switches'][ctrl_branch_id]:
-                            # parse the HW Switch objects which are controlling the HW object in the same branch
-                            GO_switch_uid = self.GO_ODF_build_Switch_object(HW_switch_dic, GO_switch_uid)
-
-                            # add in the HW controlling Switch object the ID of the corresponding GO object
-                            HW_switch_dic['_GO_uid'] = GO_switch_uid
-
-                        # link the built GO Switch to the GO object (which has an And fonction)
-                        GO_stop_dic['SwitchCount'] += 1
-                        GO_stop_dic['Switch' + str(GO_stop_dic['SwitchCount']).zfill(3)] = GO_switch_uid[-3:]
-
-                        # define the behavior of the GO Switch on Genaral Cancel button push
-                        if GO_switch_uid != '':
-                            GO_switch_dic = self.GO_ODF_dic[GO_switch_uid]
-                            if stop_type == 0: # stop for pipes sound
-                                GO_switch_dic['GCState'] = 0
-                            elif stop_type == 1: # stop for general noise
-                                GO_switch_dic['GCState'] = -1
-                else:
-                    GO_stop_dic['DefaultToEngaged'] = 'N'
-
-                # add the GO Stop to the GO Manual to which it belongs
-                GO_manual_dic['NumberOfStops'] += 1
-                GO_manual_dic['Stop' + str(GO_manual_dic['NumberOfStops']).zfill(3)] = GO_stop_uid[-3:]
-
-                # add in the HW Stop object the UID of the corresponding GO object
-                HW_object_dic['_GO_uid'] = GO_stop_uid
-            else:
-                # indicate in the controlling visible HW Switch objects that they will not be used, if they are not yet associated to a GO Switch
-                # this permit to ignore them when the HW Switch of the display pages are parsed to manage the one not yet used in GO ODF
-                if len(HW_switch_data_dic['controlling_switches']) > 0:
-                    # the given HW object is controlled by visible HW Switch
-                    for ctrl_branch_id in range(0, 1):   #HW_switch_data_dic['switch_branches_nb'] + 1):
-                        for HW_switch_dic in HW_switch_data_dic['controlling_switches'][ctrl_branch_id]:
-                            # parse the HW Switch objects which are controlling the HW object in the same branch
-                            if HW_switch_dic['_GO_uid'] == '':
-                                HW_switch_dic['_GO_uid'] = 'NONE'
-
-                if stop_type == 0 and HW_object_type == 'Stop' and not('Rank001' in GO_stop_data_dic.keys()):
-                    # a stop for pipes sound have been build but without pipes : block the build of stop action noise
-                    drawstop_noise_allowed = False
-
-    #-------------------------------------------------------------------------------------------------
-    def GO_ODF_build_Stop_pipes_sound(self, HW_stop_dic, GO_stop_data_dic, GO_manual_dic):
-        # try to build GO Stop data with link to GO Rank(s) for pipes sound generation from the given HW object (HW Stop only)
-
-        # HW objects used :
-        #   Stop C> StopRank(s) (ActionTypeCode = 1, ActionEffectCode = 1) C> Rank C> Pipe_SoundEngine01 ...
-
-        if HW_stop_dic['_HW_uid'][:-6] != 'Stop':
-            return
-
-        # codes permitting to identify HW StopRank objects dedicated to pipes sound samples
-        HW_action_type_code = 1
-        HW_action_effect_code = 1
-
-        # get some data about the GO manual to which is attached the GO Stop
-        manual_first_midi_note = GO_manual_dic['FirstAccessibleKeyMIDINoteNumber']
-        manual_nb_keys = GO_manual_dic['NumberOfLogicalKeys']
-
-        GO_stop_nb_ranks = 0
-
-        # add ranks data to the GO Stop object
-        for HW_stop_rank_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_stop_dic, 'StopRank', TO_CHILD):
-            # parse the HW StopRank objects which are children of the given HW Stop object
-
-            # get the HW Rank associated to the current HW StopRank
-            HW_rank_dic = self.HW_ODF_get_object_dic_by_ref_id('Rank', HW_stop_rank_dic, 'RankID')
-            HW_rank_nb_pipes = len(self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD))
-
-            if (HW_rank_nb_pipes > 0 and
-                HW_action_type_code == myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'ActionTypeCode')) and
-                HW_action_effect_code == myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'ActionEffectCode'))):
-                # StopRank with at least one linked pipe to add to the GO Stop (some demo sample sets can have linked rank without pipe inside)
-
-                GO_stop_data_dic['FirstAccessiblePipeLogicalKeyNumber'] = 0
-                GO_stop_data_dic['NumberOfRanks'] = 0
-
-                # get the GO Rank associated to the HW Rank
-                GO_rank_uid = HW_rank_dic['_GO_uid']
-                if GO_rank_uid == '':
-                    # there is not yet a GO Rank built for the current HW Rank
-                    GO_rank_dic = self.GO_ODF_build_Rank_object(HW_rank_dic)
-                    GO_rank_uid = HW_rank_dic['_GO_uid']
-                else:
-                    # the HW Rank is already associated to a GO Rank
-                    GO_rank_dic = self.GO_ODF_dic[GO_rank_uid]
-
-                HW_div_nb_mapped_inputs = myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'NumberOfMappedDivisionInputNodes'))
-                if HW_div_nb_mapped_inputs == None: HW_div_nb_mapped_inputs = 61  # observed with HW Augustine Lorris sample set, this data is not defined for the Larigot stop
-
-                HW_div_midi_note_first_mapped_input = myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'MIDINoteNumOfFirstMappedDivisionInputNode'))
-                HW_div_midi_note_increment_to_rank = myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'MIDINoteNumIncrementFromDivisionToRank'))
-
-                # add the GO Rank to the GO Stop
-                GO_stop_nb_ranks += 1
-                GO_stop_data_dic['Rank' + str(GO_stop_nb_ranks).zfill(3)] = GO_rank_uid[-3:]
-
-                # convert the current HW StopRank data into GO Stop data
-                if HW_div_midi_note_increment_to_rank != None:
-                    # there is a note increment between the manual key number and the rank pipe number
-                    if HW_div_midi_note_first_mapped_input != None:
-                        GO_rank_first_access_key_nb = HW_div_midi_note_first_mapped_input - manual_first_midi_note + 1
-                        GO_stop_rank_first_pipe_nb = HW_div_midi_note_first_mapped_input + HW_div_midi_note_increment_to_rank - GO_rank_dic['FirstMidiNoteNumber'] + 1
-                    else:
-                        if HW_div_midi_note_increment_to_rank < 0:
-                            GO_rank_first_access_key_nb = 1 - HW_div_midi_note_increment_to_rank
-                        else:
-                            GO_rank_first_access_key_nb = 1
-                        GO_stop_rank_first_pipe_nb = GO_rank_first_access_key_nb + HW_div_midi_note_increment_to_rank
-                elif HW_div_midi_note_first_mapped_input != None:
-                    # there is no note increment defined but there is a mapping defined for the first input of the division which can act on the rank
-                    GO_rank_first_access_key_nb = HW_div_midi_note_first_mapped_input - manual_first_midi_note + 1
-                    GO_stop_rank_first_pipe_nb = HW_div_midi_note_first_mapped_input - GO_rank_dic['FirstMidiNoteNumber'] + 1
-                else:
-                    # no increment and no mapping defined, by default the first key of the keyboard acts on the first pipe of the rank for this stop
-                    GO_rank_first_access_key_nb = 1
-                    GO_stop_rank_first_pipe_nb = 1
-
-                GO_stop_rank_pipe_count = HW_div_nb_mapped_inputs
-                if GO_stop_rank_pipe_count > GO_rank_dic['NumberOfLogicalPipes']:
-                    # the stop is using more pipes than what is defined in the rank
-                    GO_stop_rank_pipe_count = GO_rank_dic['NumberOfLogicalPipes']
-                if GO_rank_first_access_key_nb + GO_stop_rank_pipe_count - 1 > manual_nb_keys:
-                    # the rank range is going beyond the highest key of the manual (observed with a sample set) : reduce its number of accessible pipes
-                    GO_stop_rank_pipe_count = manual_nb_keys - GO_rank_first_access_key_nb + 1
-
-                GO_stop_data_dic[f'Rank{str(GO_stop_nb_ranks).zfill(3)}PipeCount'] = GO_stop_rank_pipe_count
-                GO_stop_data_dic[f'Rank{str(GO_stop_nb_ranks).zfill(3)}FirstAccessibleKeyNumber'] = GO_rank_first_access_key_nb
-                GO_stop_data_dic[f'Rank{str(GO_stop_nb_ranks).zfill(3)}FirstPipeNumber'] = GO_stop_rank_first_pipe_nb
-
-                # add in the HW StopRank object the UID of the corresponding GO object
-                HW_stop_rank_dic['_GO_uid'] = GO_rank_uid
-
-
-        if GO_stop_nb_ranks > 0:
-            # based on the Rank999xxx attributes created just before in the GO Stop for each HW StopRank, compute remaining attributes of the GO Stop
-            # identify the first and last keys of the manual which can access to the ranks associated to the stop
-            GO_stop_first_access_key_nb = 999
-            GO_stop_last_access_key_nb = 0
-            for r in range(1, GO_stop_nb_ranks + 1):
-                rank_first_key = GO_stop_data_dic[f'Rank{str(r).zfill(3)}FirstAccessibleKeyNumber']
-                rank_last_key = rank_first_key + GO_stop_data_dic[f'Rank{str(r).zfill(3)}PipeCount'] - 1
-                if GO_stop_first_access_key_nb > rank_first_key:
-                    GO_stop_first_access_key_nb = rank_first_key
-                if GO_stop_last_access_key_nb < rank_last_key:
-                    GO_stop_last_access_key_nb = rank_last_key
-
-            GO_stop_data_dic['FirstAccessiblePipeLogicalKeyNumber'] = GO_stop_first_access_key_nb
-            GO_stop_data_dic['NumberOfAccessiblePipes'] = GO_stop_last_access_key_nb - GO_stop_first_access_key_nb + 1
-            GO_stop_data_dic['NumberOfRanks'] = GO_stop_nb_ranks
-
-            # adjust the Rank999FirstAccessibleKeyNumber attributes so that it is an offset value compated to FirstAccessiblePipeLogicalKeyNumber and no more an absolute value
-            for r in range(1, GO_stop_nb_ranks + 1):
-                GO_stop_data_dic[f'Rank{str(r).zfill(3)}FirstAccessibleKeyNumber'] -= (GO_stop_data_dic['FirstAccessiblePipeLogicalKeyNumber'] - 1)
-
-    #-------------------------------------------------------------------------------------------------
-    def GO_ODF_build_Stop_gen_noise(self, HW_object_dic, GO_stop_data_dic):
-        # try to build GO Stop data with rank data inside for general noise rendering from the given HW object (Stop or Switch)
-
-        # HW objects used :
-        #      HW Stop C> StopRank (ActionTypeCode = 21, ActionEffectCode = 1) C> Rank C> Pipe_SoundEngine01 ...
-        #   or HW Switch C> Pipe_SoundEngine01 ...
-        #   or HW Switch C> SwitchLinkage C> Switch C> Pipe_SoundEngine01 ...
-        # GO Stop with link to GO Rank(s)
-
-        HW_object_type = HW_object_dic['_HW_uid'][:-6]
-        if not HW_object_type in ('Stop', 'Switch'):
-            return
-
-        # look for the HW Pipe_SoundEngine01 object which contains the general noise sample
-        HW_pipe_dic = None
-
-        if HW_object_type == 'Stop':
-            # codes permitting to identify HW StopRank object dedicated to general noise sample
-            HW_action_type_code = 21
-            HW_action_effect_code = 1
-            for HW_stop_rank_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'StopRank', TO_CHILD):
-                # parse the HW StopRank objects which are children of the given HW Stop object
-                # get the HW Rank associated to the current HW StopRank
-                HW_rank_dic = self.HW_ODF_get_object_dic_by_ref_id('Rank', HW_stop_rank_dic, 'RankID')
-                HW_rank_nb_pipes = len(self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD))
-                if (HW_action_type_code == myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'ActionTypeCode')) and
-                    HW_action_effect_code == myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'ActionEffectCode')) and
-                    HW_rank_nb_pipes > 0):
-                    # StopRank with at least one linked pipe to add to the GO Stop (some demo sample sets can have linked rank without pipe inside)
-                    HW_pipe_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD, True)
-                    break
-
-        elif HW_object_type == 'Switch':
-            HW_pipe_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'Pipe_SoundEngine01', TO_CHILD, True)
-            if HW_pipe_dic == None:
-                # the HW Switch has no child Pipe_SoundEngine01 object, look if it controls an other HW Switch which has a child Pipe_SoundEngine01
-                HW_switch_linkage_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'SwitchLinkage', TO_CHILD, True)
-                if HW_switch_linkage_dic != None:
-                    # the HW Switch is controlling a HW SwitchLinkage
-                    HW_dest_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_switch_linkage_dic, 'DestSwitchID')
-                    HW_pipe_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_dest_switch_dic, 'Pipe_SoundEngine01', TO_CHILD, True)
-
-        if HW_pipe_dic != None:
-            GO_stop_data_dic['NumberOfAccessiblePipes'] = 1
-            GO_stop_data_dic['FirstAccessiblePipeLogicalKeyNumber'] = 1
-            GO_stop_data_dic['FirstAccessiblePipeLogicalPipeNumber'] = 1
-            # fill the GO stop data dictionary with the pipe data of the found HW Pipe_SoundEngine01 object
-            self.GO_ODF_build_Rank_data_in_stop(HW_pipe_dic, GO_stop_data_dic)
-
-    #-------------------------------------------------------------------------------------------------
-    def GO_ODF_build_Stop_draw_noise(self, HW_object_dic, GO_stop_data_dic, engage_bool):
-        # try to build GO Stop data with rank data inside for drawstop action noise rendering from the given HW object (Stop or Switch)
-
-        # HW objects used :
-        # drawstop engage action noise :
-        #      Stop C> StopRank (ActionTypeCode = 21, ActionEffectCode = 2) C> Rank C> Pipe_SoundEngine01 ...
-        #   or Stop P> Switch C> Pipe_SoundEngine01 ...
-        #   or Stop P> Switch C> Pipe_SoundEngine01 ... Pipe_SoundEngine01_AttackSample (LoadSampleRange_EndPositionTypeCode=2)  A IMPLEMENTER Ernelo
-        #   or Stop P> Switch C> SwitchLinkage (EngageLinkActionCode=4, DisengageLinkActionCode=7) C> Switch C> Pipe_SoundEngine01 ...
-        #   or Stop P> Switch P> SwitchLinkage P> Switch C> SwitchLinkage (EngageLinkActionCode=4, DisengageLinkActionCode=7) C> Switch C> Pipe_SoundEngine01 ...
-        #   or KeyAction P> Switch C> Pipe_SoundEngine01 ...
-        #
-        # drawstop disengage action noise :
-        #      Stop C> StopRank (ActionTypeCode = 21, ActionEffectCode = 3) C> Rank C> Pipe_SoundEngine01 ...
-        #   or Stop P> Switch C> Pipe_SoundEngine01 ... Pipe_SoundEngine01_AttackSample (LoadSampleRange_EndPositionTypeCode=7)  A IMPLEMENTER Ernelo
-        #   or Stop P> Switch C> SwitchLinkage (EngageLinkActionCode=1, DisengageLinkActionCode=2) C> Switch C> Pipe_SoundEngine01 ...
-        #   or Stop P> Switch C> SwitchLinkage (EngageLinkActionCode=7, DisengageLinkActionCode=4) C> Switch C> Pipe_SoundEngine01 ...
-        #   or Stop P> Switch P> SwitchLinkage P> Switch C> SwitchLinkage (EngageLinkActionCode=7, DisengageLinkActionCode=4) C> Switch C> Pipe_SoundEngine01 ...
-        #   or KeyAction P> Switch C> SwitchLinkage (EngageLinkActionCode=1, DisengageLinkActionCode=2) C> Switch C> Pipe_SoundEngine01 ...
-
-        HW_object_type = HW_object_dic['_HW_uid'][:-6]
-        if not HW_object_type in ('Stop', 'KeyAction'):
-            return
-
-        # look for the HW Pipe_SoundEngine01 object which contains the drawstop action noise sample
-        HW_pipe_dic = None
-
-        if engage_bool:
-            # codes permitting to identify HW StopRank object dedicated to drawstop engage action noise sample
-            HW_action_type_code = 21
-            HW_action_effect_code = 2
-        else:
-            # codes permitting to identify HW StopRank object dedicated to drawstop engage action noise sample
-            HW_action_type_code = 21
-            HW_action_effect_code = 3
-
-        for HW_stop_rank_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'StopRank', TO_CHILD):
-            # parse the HW StopRank objects which are children of the given HW Stop object
-            # get the HW Rank associated to the current HW StopRank
-            HW_rank_dic = self.HW_ODF_get_object_dic_by_ref_id('Rank', HW_stop_rank_dic, 'RankID')
-            HW_rank_nb_pipes = len(self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD))
-            if (HW_action_type_code == myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'ActionTypeCode')) and
-                HW_action_effect_code == myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'ActionEffectCode')) and
-                HW_rank_nb_pipes > 0):
-                # StopRank with at least one linked Pipe_SoundEngine01 object to add to the GO Stop
-                HW_div_midi_note_increment_to_rank = myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'MIDINoteNumIncrementFromDivisionToRank'))
-                if HW_div_midi_note_increment_to_rank != None and HW_div_midi_note_increment_to_rank != 0:
-                    # search for the Pipe_SoundEngine01 object having the given MIDI note number
-                    for HW_pipe_check_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD):
-                        midi_note_nb = myint(self.HW_ODF_get_attribute_value(HW_pipe_check_dic, 'NormalMIDINoteNumber'))
-                        if midi_note_nb == None: midi_note_nb = 60
-                        if midi_note_nb == HW_div_midi_note_increment_to_rank:
-                            HW_pipe_dic = HW_pipe_check_dic
-                            break
-
-                if HW_pipe_dic == None:
-                    # Pipe_SoundEngine01 object not yet found, take the first child of the Rank
-                    HW_pipe_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD, True)
-                break
-
-        if HW_pipe_dic == None:
-            # no Pipe_SoundEngine01 found in the previous type of search : look for a HW Switch object parent of the HW Stop
-            HW_switch_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'Switch', TO_PARENT, True)
-            if HW_switch_dic != None:
-                for i in range(0,2):
-                    HW_pipe_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_switch_dic, 'Pipe_SoundEngine01', TO_CHILD, True)
-                    if HW_pipe_dic != None and engage_bool:
-                        # Pipe_SoundEngine01 for engage noise
-                        pass
-                    else:
-                        # search for a SwitchLinkage with specific EngageLinkActionCode and DisengageLinkActionCode values
-                        for HW_switch_linkage_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_switch_dic, 'SwitchLinkage', TO_CHILD):
-                            # the HW Switch is controlling a HW SwitchLinkage
-                            EngageLinkActionCode = myint(self.HW_ODF_get_attribute_value(HW_switch_linkage_dic, 'EngageLinkActionCode'))
-                            DisengageLinkActionCode = myint(self.HW_ODF_get_attribute_value(HW_switch_linkage_dic, 'DisengageLinkActionCode'))
-                            HW_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_switch_linkage_dic, 'DestSwitchID')
-                            if (HW_switch_dic != None and
-                                ((engage_bool and EngageLinkActionCode == 4 and DisengageLinkActionCode == 7) or
-                                 (not engage_bool and
-                                  ((EngageLinkActionCode == 1 and DisengageLinkActionCode == 2) or
-                                   (EngageLinkActionCode == 7 and DisengageLinkActionCode == 4))))):
-                                HW_pipe_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_switch_dic, 'Pipe_SoundEngine01', TO_CHILD, True)
-                                break
-                    # no linked Pipe_SoundEngine01 object found, search in the controlling switch
-                    HW_switch_linkage_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_switch_dic, 'SwitchLinkage', TO_PARENT, True)
-                    if HW_switch_linkage_dic != None:
-                        HW_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_switch_linkage_dic, 'SourceSwitchID')
-                        if HW_switch_dic == None:
-                            break
-
-        if HW_pipe_dic != None:
-            GO_stop_data_dic['NumberOfAccessiblePipes'] = 1
-            GO_stop_data_dic['FirstAccessiblePipeLogicalKeyNumber'] = 1
-            GO_stop_data_dic['FirstAccessiblePipeLogicalPipeNumber'] = 1
-            # fill the GO stop data dictionary with the pipe data of the found HW Pipe_SoundEngine01 object
-            self.GO_ODF_build_Rank_data_in_stop(HW_pipe_dic, GO_stop_data_dic, not engage_bool)
-
-    #-------------------------------------------------------------------------------------------------
-    def GO_ODF_build_Stop_keys_noise(self, HW_object_dic, GO_stop_data_dic, GO_manual_dic, press_bool):
-        # try to build GO Stop data with rank data inside for keyboard keys action noise rendering from the given HW object (Stop or Switch)
-
-        # HW objects used :
-        # key press :
-        #      Stop C> StopRank(s) (ActionTypeCode = 1, ActionEffectCode = 2) C> Rank C> Pipe_SoundEngine01 ...
-        #   or Keyboard C> KeyboardKey P> Switch C> SwitchLinkage (EngageLinkActionCode=4, DisengageLinkActionCode=7) C> Switch C> Pipe_SoundEngine01 ...
-        #   or Keyboard C> KeyboardKey P> Switch C> Pipe_SoundEngine01 C> Pipe_SoundEngine01Layer C> Pipe_SoundEngine01_AttackSample ...
-        # key release :
-        #      Stop C> StopRank(s) (ActionTypeCode = 1, ActionEffectCode = 3) C> Rank C> Pipe_SoundEngine01 ...
-        #   or Keyboard C> KeyboardKey P> Switch C> SwitchLinkage (EngageLinkActionCode=7, DisengageLinkActionCode=4) C> Switch C> Pipe_SoundEngine01 ...
-        #   or Keyboard C> KeyboardKey P> Switch C> Pipe_SoundEngine01 C> Pipe_SoundEngine01Layer C> Pipe_SoundEngine01_AttackSample + Pipe_SoundEngine01_ReleaseSample ...
-        pass
+            # write in the HW object the UID of the corresponding GO object
+            HW_object_dic['_GO_uid'] = GO_object_uid
 
     #-------------------------------------------------------------------------------------------------
     def GO_ODF_build_Coupler_object(self, HW_key_action_dic):
-        # build the GO Coupler999 object corresponding to the given HW KeyAction object
+        # build a GO Coupler object corresponding to the given HW KeyAction object, without assigning it an UID (i.e. not built in the GO ODF dictionary)
+        # return the dictionary of the build Coupler object, or None in case of building issue
 
-        # get the visible HW Switch which are controlling the given HW KeyAction
-        HW_switch_data_dic = {}
-        self.HW_ODF_get_controlling_switches(HW_key_action_dic, HW_switch_data_dic)
-        if len(HW_switch_data_dic['controlling_switches']) == 0:
-            # the given HW KeyAction is controlled by none visible HW Switch (this should not happen)
-            return
+        # used HW objects :
+        #   KeyAction P> Keyboard P> Division  (source division)
+        #   KeyAction C> Keyboard C> Division  (destination division)
+        #   KeyAction C> Division              (destination division)
 
-        # get the source division of the HW KeyAction
+        # get the HW source division of the HW KeyAction
         HW_source_keyboard_dic = self.HW_ODF_get_object_dic_by_ref_id('Keyboard', HW_key_action_dic, 'SourceKeyboardID')
-        HW_source_division_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_source_keyboard_dic, 'Division', TO_PARENT, True)
+        HW_source_division_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_source_keyboard_dic, 'Division', TO_PARENT, FIRST_ONE)
         if HW_source_division_dic == None:
-            self.events_log_add(f'INTERNAL ERROR : unable to find the HW source division/keyboard of the KeyAction {self.HW_ODF_get_attribute_value(HW_key_action_dic, "Name")}')
-            return
+            # no existing HW source division/keyboard of the KeyAction, the Coupler cannot be built
+            return None
 
-        # get the destination division of the HW KeyAction
+        # get the HW destination division of the HW KeyAction
         HW_dest_division_dic = self.HW_ODF_get_object_dic_by_ref_id('Division', HW_key_action_dic, 'DestDivisionID')
         if HW_dest_division_dic == None:
             HW_dest_keyboard_dic = self.HW_ODF_get_object_dic_by_ref_id('Keyboard', HW_key_action_dic, 'DestKeyboardID')
             if HW_dest_keyboard_dic != None:
-                HW_dest_division_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_dest_keyboard_dic, 'Division', TO_PARENT, True)
+                HW_dest_division_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_dest_keyboard_dic, 'Division', TO_PARENT, FIRST_ONE)
         if HW_dest_division_dic == None:
-            self.events_log_add(f'INTERNAL ERROR : unable to find the HW destination division/keyboard of the KeyAction {self.HW_ODF_get_attribute_value(HW_key_action_dic, "Name")}')
-            return
+            # no existing HW destination division/keyboard of the KeyAction, the Coupler cannot be built
+            return None
 
         # get the corresponding GO source and destination Manual UID
         GO_source_manual_uid = HW_source_division_dic['_GO_uid']
         if GO_source_manual_uid == '':
             self.events_log_add(f'INTERNAL ERROR : unable to find the GO source manual for the KeyAction {self.HW_ODF_get_attribute_value(HW_key_action_dic, "Name")}')
-            return
+            return None
         GO_source_manual_dic = self.GO_ODF_dic[GO_source_manual_uid]
 
         GO_dest_manual_uid = HW_dest_division_dic['_GO_uid']
         if GO_dest_manual_uid == '':
             self.events_log_add(f'INTERNAL ERROR : unable to find the GO destination manual for the KeyAction {self.HW_ODF_get_attribute_value(HW_key_action_dic, "Name")}')
-            return
+            return None
 
-        # create a GO Coupler999 object
-        self.GO_objects_type_nb_dic['Coupler'] += 1
-        GO_coupler_uid = 'Coupler' + str(self.GO_objects_type_nb_dic['Coupler']).zfill(3)
-        GO_coupler_dic = self.GO_ODF_dic[GO_coupler_uid] = {}
+        GO_coupler_dic = {}
 
         GO_coupler_dic['Name'] = self.HW_ODF_get_attribute_value(HW_key_action_dic, 'Name')
         GO_coupler_dic['Displayed'] = 'N'
@@ -4539,54 +4340,93 @@ class C_HW2GO():
         GO_coupler_dic['CoupleToSubsequentUpwardIntramanualCouplers'] = 'N'
         GO_coupler_dic['CoupleToSubsequentDownwardIntramanualCouplers'] = 'N'
 
-        # add the coupler in the GO source manual
-        GO_source_manual_dic['NumberOfCouplers'] += 1
-        GO_source_manual_dic['Coupler' + str(GO_source_manual_dic['NumberOfCouplers']).zfill(3)] = GO_coupler_uid[-3:]
-
-        if len(HW_switch_data_dic['controlling_switches'][0]) > 0:
-            # the given HW KeyAction is controlled by direct not conditional visible HW Switch : link the GO Coupler to GO Switch objects
-            GO_coupler_dic['Function'] = 'And'
-            GO_coupler_dic['SwitchCount'] = 0
-            # build the GO Switch objects which are controlling the GO Coupler
-            for ctrl_branch_id in range(0, 1):  #HW_switch_data_dic['switch_branches_nb'] + 1):
-                GO_switch_uid = '' # unique GO Switch object for all the controlling switches of the same branch
-                for HW_switch_dic in HW_switch_data_dic['controlling_switches'][ctrl_branch_id]:
-                    # parse the HW Switch objects which are controlling the HW KeyAction in the same branch
-                    GO_switch_uid = self.GO_ODF_build_Switch_object(HW_switch_dic, GO_switch_uid)
-
-                    # add in the HW controlling Switch object the ID of the corresponding GO object
-                    HW_switch_dic['_GO_uid'] = GO_switch_uid
-
-                # link the built GO Switch to the GO Coupler (which has an And fonction)
-                GO_coupler_dic['SwitchCount'] += 1
-                GO_coupler_dic['Switch' + str(GO_coupler_dic['SwitchCount']).zfill(3)] = GO_switch_uid[-3:]
-
-                # define the behavior of the GO Switch on Genaral Cancel button push
-                if GO_switch_uid != '':
-                    GO_switch_dic = self.GO_ODF_dic[GO_switch_uid]
-                    GO_switch_dic['GCState'] = 0
-        else:
-            # the given HW KeyAction is not controlled by not conditional visible HW Switch : enable it by default
-            GO_coupler_dic['DefaultToEngaged'] = 'Y'
-
-        # write in the HW KeyAction object the UID of the corresponding GO object
-        HW_key_action_dic['_GO_uid'] = GO_coupler_uid
-
-        # build GO stops for coupler drawstop noises if any
-        self.GO_ODF_build_Stop_object(HW_key_action_dic)
+        return GO_coupler_dic
 
     #-------------------------------------------------------------------------------------------------
-    def GO_ODF_build_Switch_object(self, HW_switch_dic, linked_GO_switch_uid = ''):
-        # add a GO Switch with the properties of the given HW Switch object, only if it is has graphical properties and is not a key switch
+    def GO_ODF_build_Stop_pipes_object(self, HW_stop_dic, GO_manual_dic):
+        # build a GO Stop object linked to ranks of pipes from the given HW Stop object, without assigning it an UID (i.e. not built in the GO ODF dictionary)
+        # return the dictionary of the build Stop object, or None in case of building issue
+        # or if there are no pipes linked to this Stop (case of demo sample sets for some stops not included in the demo)
+
+        # used HW objects :
+        #   Stop
+        #   Stop C> StopRank(s) (ActionTypeCode = 1, ActionEffectCode = 1) C> Rank C> Pipe_SoundEngine01 ... (in function GO_ODF_build_Rank_data_out_stop)
+
+        # create a new GO Stop object
+        GO_stop_dic = {}
+
+        GO_stop_dic['Name'] = self.HW_ODF_get_attribute_value(HW_stop_dic, 'Name')
+
+        # fill the rank attributes of the stop
+        self.GO_ODF_build_Rank_data_out_stop(HW_stop_dic, GO_stop_dic, GO_manual_dic)
+
+        if GO_stop_dic['NumberOfAccessiblePipes'] == 0:
+            # no pipe accessible for the built stop
+            return None
+        else:
+            return GO_stop_dic
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Stop_noise_object(self, HW_pipe_dic, object_name, attack_bool):
+        # build a GO Stop object containing a noise sample from the given HW Pipe_SoundEngine01 object, without assigning it an UID (i.e. not built in the GO ODF dictionary)
+        # give to the GO Stop the given object name
+        # the noise sample building is made depenting on the attack status (attack or release sample)
+        # return the dictionary of the build Stop object, or None if no HW pipe provided
+
+        # used HW objects :
+        #   Pipe_SoundEngine01 C> Pipe_SoundEngine01_Layer C> Pipe_SoundEngine01_AttackSample C> Sample   (in function GO_ODF_build_Rank_data_in_stop)
+        #   Pipe_SoundEngine01 C> Pipe_SoundEngine01_Layer C> Pipe_SoundEngine01_ReleaseSample C> Sample  (in function GO_ODF_build_Rank_data_in_stop)
+
+        if HW_pipe_dic != None:
+            # create a new GO Stop object
+            GO_stop_dic = {}
+
+            if attack_bool == True:
+                GO_stop_dic['Name'] = object_name + ' (on noise)'
+            elif attack_bool == False:
+                GO_stop_dic['Name'] = object_name + ' (off noise)'
+            else:
+                GO_stop_dic['Name'] = object_name + ' (noise)'
+
+            # fill the GO stop dictionary with the data of the provided HW Pipe_SoundEngine01 object
+            self.GO_ODF_build_Rank_data_in_stop(HW_pipe_dic, GO_stop_dic, attack_bool)
+
+            return GO_stop_dic
+        else:
+            return None
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Stop_keys_noise_object(self, HW_object_dic, GO_manual_dic, attack_bool):
+        # try to build GO Stop data with rank data inside for keyboard keys action noise rendering from the given HW object (Stop or Keyboard)
+
+        # used HW objects :
+        #   attack noise (key press) :
+        #      Stop C> StopRank(s) (ActionTypeCode = 1, ActionEffectCode = 2) C> Rank C> Pipe_SoundEngine01 ...
+        #      Keyboard C> KeyboardKey P> Switch C> SwitchLinkage (EngageLinkActionCode=4, DisengageLinkActionCode=7) C> Switch C> Pipe_SoundEngine01 ...
+        #      Keyboard C> KeyboardKey P> Switch C> Pipe_SoundEngine01 C> Pipe_SoundEngine01Layer C> Pipe_SoundEngine01_AttackSample ...
+        #   release noise (key release) :
+        #      Stop C> StopRank(s) (ActionTypeCode = 1, ActionEffectCode = 3) C> Rank C> Pipe_SoundEngine01 ...
+        #      Keyboard C> KeyboardKey P> Switch C> SwitchLinkage (EngageLinkActionCode=7, DisengageLinkActionCode=4) C> Switch C> Pipe_SoundEngine01 ...
+        #      Keyboard C> KeyboardKey P> Switch C> Pipe_SoundEngine01 C> Pipe_SoundEngine01Layer C> Pipe_SoundEngine01_AttackSample + Pipe_SoundEngine01_ReleaseSample ...
+
+        pass # TO BE DONE, low priority
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Switch_object(self, HW_switch_dic, linked_GO_switch_uid = '', switch_name = ''):
+        # build a GO Switch with the properties of the given HW Switch object, only if it is has graphical properties and is not a key switch
         # link it to the given existing GO Switch if provided
-        # return the UID of the added GO Switch or of the linked GO Switch if provided
+        # give to the GO Switch the given switch name if provided
+        # return the UID of the added GO Switch or the linked GO Switch if provided
+
+        # used HW objects :
+        #   Switch C> ImageSetInstance
 
         # get the HW ImageSetInstance object associated to the given HW Switch object if any
         HW_img_set_inst_dic = self.HW_ODF_get_object_dic_by_ref_id('ImageSetInstance', HW_switch_dic, 'Disp_ImageSetInstanceID')
         # get the ID of the HW display page in which the switch is displayed if any
-        HW_switch_disp_page_id = myint(self.HW_ODF_get_attribute_value(HW_img_set_inst_dic, 'DisplayPageID', True))
+        HW_switch_disp_page_id = myint(self.HW_ODF_get_attribute_value(HW_img_set_inst_dic, 'DisplayPageID', MANDATORY))
         # get the HW KeyboardKey children object of the given HW Switch object if any
-        HW_keyboard_key_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_switch_dic, 'KeyboardKey', TO_CHILD, True)
+        HW_keyboard_key_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_switch_dic, 'KeyboardKey', TO_CHILD, FIRST_ONE)
 
         if HW_switch_disp_page_id == None or HW_img_set_inst_dic == None or HW_keyboard_key_dic != None:
             # this HW Switch object has no display page ID or is not referencing a HW ImageSetInstance object or is controlling a HW KeyboardKey object
@@ -4595,7 +4435,7 @@ class C_HW2GO():
             return GO_switch_uid
 
         # if the given HW Switch is already associated to a GO Switch, consider this GO Switch as a linked switch
-        if HW_switch_dic['_GO_uid'] != "" and HW_switch_dic['_GO_uid'] != "NONE":
+        if HW_switch_dic['_GO_uid'] != "" and HW_switch_dic['_GO_uid'] != 'NONE':
             linked_GO_switch_uid = HW_switch_dic['_GO_uid']
 
         # determine which switch configuration to manage
@@ -4612,7 +4452,8 @@ class C_HW2GO():
             else:
                 switch_config = 4 # new Panel999Element999 switch to display in another panel, linked to the given Switch999
 
-        switch_name = self.HW_ODF_get_attribute_value(HW_switch_dic, 'Name')
+        if switch_name == '':
+            switch_name = self.HW_ODF_get_attribute_value(HW_switch_dic, 'Name')
 
         if switch_config in (1, 3):
             # new GO Switch999 to create
@@ -4635,7 +4476,7 @@ class C_HW2GO():
             GO_switch_dic = self.GO_ODF_dic[GO_switch_uid]
 
         if switch_config in (3, 4):
-            # new GO Panel999Element999 switch object to create
+            # new GO Panel999Element999 switch object to create to display the switch in the non default panel
             # recover the GO panel UID corresponding to the HW display page ID of the switch
             HW_disp_page_dic = self.HW_ODF_get_object_dic('DisplayPage', HW_switch_disp_page_id)
             GO_panel_uid = HW_disp_page_dic['_GO_uid']
@@ -4709,197 +4550,269 @@ class C_HW2GO():
 
         return GO_switch_uid
 
-##    #-------------------------------------------------------------------------------------------------
-##    def GO_ODF_build_Rank_objects(self):
-##        # build the Rank999 objects of the GrandOrgue ODF dictionary from the Hauptwerk ODF dictionary
-##        # build as many GO Rank999 objects as HW Rank objects which have pipes defined inside
-##        # return the number of created GO Rank objects
-##
-##        # HW source objects used :
-##        #   WindCompartment C> Pipe_SoundEngine01
-##        #   Rank C> Pipe_SoundEngine01 C> Pipe_SoundEngine01_Layer C> Pipe_SoundEngine01_AttackSample C> Sample
-##        #   Rank C> Pipe_SoundEngine01 C> Pipe_SoundEngine01_Layer C> Pipe_SoundEngine01_ReleaseSample C> Sample
-##
-##
-####        HW_ranks_names_dic = {}
-####        for HW_rank_dic in self.HW_ODF_dic['Rank'].values():
-####            HW_ranks_names_dic[self.HW_ODF_get_attribute_value(HW_rank_dic, 'Name')] = HW_rank_dic
-####        for HW_rank_name in sorted(HW_ranks_names_dic.keys()):
-####            # parse the defined HW Rank objects by increasing rank name
-####            HW_rank_dic = HW_ranks_names_dic[HW_rank_name]
-##
-##        for HW_rank_id in sorted(self.HW_ODF_dic['Rank'].keys()):
-##            # parse the defined HW Rank objects by increasing ID order
-##            HW_rank_dic = self.HW_ODF_dic['Rank'][HW_rank_id]
-##
-##            self.progress_status_show_function(f'Building the GrandOrgue Rank objects... {HW_rank_dic["Name"]}')
-##
-##            # get the list of the HW Pipe_SoundEngine01 objects which are children of the current HW Rank object
-##            HW_pipes_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD)
-##            if len(HW_pipes_dic_list) > 0:
-##                # the current HW rank has pipes defined inside
-##
-##                # create a GO Rank999 object
-##                self.GO_ODF_dic['Organ']['NumberOfRanks'] += 1
-##                GO_rank_uid = 'Rank' + str(self.GO_ODF_dic['Organ']['NumberOfRanks']).zfill(3)
-##                GO_rank_dic = self.GO_ODF_dic[GO_rank_uid] = {}
-##
-##                GO_rank_dic['Name'] = self.HW_ODF_get_attribute_value(HW_rank_dic, 'Name', True)
-##
-##                first_midi_note_nb = 999
-##                last_midi_note_nb = 0
-##                pipes_dic = {}  # dictionnary with as key the MIDI note number and as value the dictionary of the associated Pipe_SoundEngine01 object
-##
-##                for HW_pipe_dic in HW_pipes_dic_list:
-##                    # parse the Pipe_SoundEngine01 objects to get their MIDI note number and update the min / max note number
-##                    # and associate the MIDI note numbers to Pipe_SoundEngine01 objects
-##
-##                    # get the MIDI note number of the current HW Pipe_SoundEngine01 object
-##                    midi_note_nb = myint(self.HW_ODF_get_attribute_value(HW_pipe_dic, 'NormalMIDINoteNumber'))
-##                    if midi_note_nb == None: midi_note_nb = 60 # observed with Sound Paradisi sample sets, the MIDI note 60 is not defined
-##                    if midi_note_nb < first_midi_note_nb:
-##                        first_midi_note_nb = midi_note_nb
-##                    if midi_note_nb > last_midi_note_nb:
-##                        last_midi_note_nb = midi_note_nb
-##
-##                    # store the dictionary of the pipe associated with the MIDI note number
-##                    pipes_dic[midi_note_nb] = HW_pipe_dic
-##
-##                GO_rank_dic['NumberOfLogicalPipes'] = len(pipes_dic)
-##                GO_rank_dic['FirstMidiNoteNumber'] = first_midi_note_nb
-##                GO_rank_dic['Percussive'] = 'N'
-##                GO_rank_dic['AcceptsRetuning'] = 'N'
-##
-##                # use the HW source WindCompartment object of the first pipe as GO WindchestGroup of the whole GO Rank
-##                HW_wind_comp_dic = self.HW_ODF_get_object_dic_by_ref_id('WindCompartment', HW_pipes_dic_list[0], 'WindSupply_SourceWindCompartmentID')
-##                GO_windchest_uid = HW_wind_comp_dic['_GO_uid']
-##                GO_rank_dic['WindchestGroup'] = GO_windchest_uid[-3:]
-##
-##                nb_pipes = 0
-##                for midi_note_nb in range(first_midi_note_nb, last_midi_note_nb + 1):
-##                    # parse the HW Pipe_SoundEngine01_Layer objects by increasing MIDI note number
-##
-##                    if midi_note_nb in pipes_dic.keys():
-##                        HW_pipe_dic = pipes_dic[midi_note_nb]
-##
-##                        # get the dictionary of the first Pipe_SoundEngine01_Layer child object of the current Pipe_SoundEngine01_Layer object
-##                        # the other Pipe_SoundEngine01_Layer objects if any exist are ignored because no possibility to manage them in GO ODF
-##                        HW_pipe_layer_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_dic, 'Pipe_SoundEngine01_Layer', TO_CHILD)
-##                        HW_pipe_layer_dic = HW_pipe_layer_dic_list[0]
-##
-##                        # set the GO pipe ID
-##                        nb_pipes += 1
-##                        GO_pipe_uid = 'Pipe' + str(nb_pipes).zfill(3)
-##
-##                        # get the pipe gain if any
-##                        pipe_gain = myfloat(self.HW_ODF_get_attribute_value(HW_pipe_layer_dic, 'AmpLvl_LevelAdjustDecibels'))
-##                        if pipe_gain != None and pipe_gain != 0:
-##                            GO_rank_dic[GO_pipe_uid + 'Gain'] = pipe_gain
-##
-##                        # get the pipe harmonic number if any
-##                        pipe_harmonic_nb = myint(self.HW_ODF_get_attribute_value(HW_pipe_dic, 'Pitch_Tempered_RankBasePitch64ftHarmonicNum'))
-##                        if pipe_harmonic_nb != None and pipe_harmonic_nb != 0:
-##                            GO_rank_dic[GO_pipe_uid + 'HarmonicNumber'] = pipe_harmonic_nb
-##
-##                        GO_rank_dic[GO_pipe_uid + 'LoadRelease'] = 'N'
-##
-##                        # manage the attack sample
-##                        # get the dictionary of the first Pipe_SoundEngine01_AttackSample child object of the current Pipe_SoundEngine01_Layer object (the other are ignored)
-##                        HW_pipe_attack_sample_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_layer_dic, 'Pipe_SoundEngine01_AttackSample', TO_CHILD)
-##                        HW_pipe_attack_sample_dic = HW_pipe_attack_sample_dic_list[0]
-##                        # get the dictionary of the Sample child object of the current Pipe_SoundEngine01_AttackSample object
-##                        HW_sample_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_attack_sample_dic, 'Sample', TO_CHILD)
-##                        HW_sample_dic = HW_sample_dic_list[0]
-##
-##                        HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', True))
-##                        GO_rank_dic[GO_pipe_uid] = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', True), HW_install_package_id)
-##
-##                        # manage the release samples
-##                        # get the dictionaries list of the Pipe_SoundEngine01_ReleaseSample child objects of the current Pipe_SoundEngine01_Layer object
-##                        HW_pipe_release_sample_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_layer_dic, 'Pipe_SoundEngine01_ReleaseSample', TO_CHILD)
-##                        if len(HW_pipe_release_sample_dic_list) > 0:
-##                            # there are release samples
-##                            GO_rank_dic[GO_pipe_uid + 'ReleaseCount'] = len(HW_pipe_release_sample_dic_list)
-##                            release_count = 0
-##                            for HW_pipe_release_sample_dic in HW_pipe_release_sample_dic_list:
-##
-##                                # get the max key release time for the current release sample
-##                                HW_max_key_release_time_int = myint(self.HW_ODF_get_attribute_value(HW_pipe_release_sample_dic, 'ReleaseSelCriteria_LatestKeyReleaseTimeMs'))
-##
-##                                # get the dictionary of the Sample child object of the current Pipe_SoundEngine01_ReleaseSample object
-##                                HW_sample_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_release_sample_dic, 'Sample', TO_CHILD)
-##                                HW_sample_dic = HW_sample_dic_list[0]
-##                                release_count += 1
-##
-##                                HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', True))
-##                                GO_rank_dic[GO_pipe_uid + 'Release' + str(release_count).zfill(3)] = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', True), HW_install_package_id)
-##
-##                                if HW_max_key_release_time_int == None or HW_max_key_release_time_int == 99999 or HW_max_key_release_time_int == -1:
-##                                    GO_rank_dic[GO_pipe_uid + 'Release' + str(release_count).zfill(3) + 'MaxKeyPressTime'] = '-1'
-##                                else:
-##                                    GO_rank_dic[GO_pipe_uid + 'Release' + str(release_count).zfill(3) + 'MaxKeyPressTime'] = HW_max_key_release_time_int
-##
-##                # add in the HW Rank object the ID of the corresponding GO object
-##                HW_rank_dic['_GO_uid'] = GO_rank_uid
-##
-##        return self.GO_ODF_dic['Organ']['NumberOfRanks']
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Rank_data_in_stop(self, HW_pipe_dic, GO_stop_dic, attack_bool):
+        # build one pipe data (for noise effect) in the given GO Stop from the given HW Pipe_SoundEngine01, depending on the provided noise attack status
+
+        # used HW objects :
+        #   Pipe_SoundEngine01 C> Pipe_SoundEngine01_Layer C> Pipe_SoundEngine01_AttackSample C> Sample
+        #   Pipe_SoundEngine01 C> Pipe_SoundEngine01_Layer C> Pipe_SoundEngine01_ReleaseSample C> Sample
+
+        # get the source HW WindCompartment of the given HW Pipe
+        HW_wind_comp_dic = self.HW_ODF_get_object_dic_by_ref_id('WindCompartment', HW_pipe_dic, 'WindSupply_SourceWindCompartmentID')
+        # get the HW ScalingContinuousControlID of the current layer of the first pipe to use it as GO Enclosure of the whole GO Rank if any
+        HW_pipe_layer_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_dic, 'Pipe_SoundEngine01_Layer', TO_CHILD, FIRST_ONE)
+        HW_cont_ctrl_dic = self.HW_ODF_get_object_dic_by_ref_id('ContinuousControl', HW_pipe_layer_dic, 'AmpLvl_ScalingContinuousControlID')
+
+        GO_windchest_uid = self.GO_ODF_build_WindchestGroup_object(HW_wind_comp_dic, HW_cont_ctrl_dic, None)
+        GO_stop_dic['WindchestGroup'] = int(GO_windchest_uid[-3:])
+
+        GO_stop_dic['FirstAccessiblePipeLogicalKeyNumber'] = 1
+        GO_stop_dic['FirstAccessiblePipeLogicalPipeNumber'] = 1
+        GO_stop_dic['NumberOfAccessiblePipes'] = 1
+        GO_stop_dic['NumberOfLogicalPipes'] = 1
+        GO_stop_dic['Percussive'] = 'N'
+        GO_stop_dic['AcceptsRetuning'] = 'N'
+
+        # get the first HW Pipe_SoundEngine01_Layer linked to the given HW Pipe_SoundEngine01 (the others if any are ignored)
+        HW_pipe_layer_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_dic, 'Pipe_SoundEngine01_Layer', TO_CHILD, FIRST_ONE)
+
+        # get the pipe gain if any
+        pipe_gain = myfloat(self.HW_ODF_get_attribute_value(HW_pipe_layer_dic, 'AmpLvl_LevelAdjustDecibels'))
+        if pipe_gain != None and pipe_gain != 0:
+            GO_stop_dic['Pipe001Gain'] = pipe_gain
+
+        # get the pipe harmonic number if any
+        pipe_harmonic_nb = myint(self.HW_ODF_get_attribute_value(HW_pipe_dic, 'Pitch_Tempered_RankBasePitch64ftHarmonicNum'))
+        if pipe_harmonic_nb != None and pipe_harmonic_nb != 0:
+            GO_stop_dic['Pipe001HarmonicNumber'] = pipe_harmonic_nb
+
+        HW_pipe_attack_samples_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_layer_dic, 'Pipe_SoundEngine01_AttackSample', TO_CHILD)
+        HW_pipe_release_samples_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_layer_dic, 'Pipe_SoundEngine01_ReleaseSample', TO_CHILD)
+
+        if attack_bool == False and len(HW_pipe_release_samples_list) == 0:
+            # release noise but no HW release samples : use the attack samples as release samples
+            HW_pipe_release_samples_list = HW_pipe_attack_samples_list
+            HW_pipe_attack_samples_list = []
+            # use a silent loop sample as attack sample
+            GO_stop_dic['Pipe001'] = '..' + os.sep + 'SilentLoop.wav'
+            self.silent_loop_file_used = True
+
+        # define the attack pipes
+        attacks_number = 0
+        for HW_pipe_attack_sample_dic in HW_pipe_attack_samples_list:
+            # parse the HW Pipe_SoundEngine01_AttackSample child objects of the Pipe_SoundEngine01_Layer object
+            HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_attack_sample_dic, 'Sample', TO_CHILD, FIRST_ONE)
+            if HW_sample_dic != None:
+                attacks_number += 1
+                HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
+                sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
+                if sample_file_name != None:
+                    if attacks_number == 1:
+                        GO_stop_dic['Pipe001'] = sample_file_name
+                    else:
+                        GO_stop_dic['Pipe001AttackCount'] = attacks_number - 1
+                        GO_stop_dic['Pipe001Attack' + str(attacks_number - 1).zfill(3)] = sample_file_name
+
+        if len(HW_pipe_release_samples_list) > 0:
+            GO_stop_dic['Pipe001LoadRelease'] = 'N'
+        else:
+            GO_stop_dic['Pipe001LoadRelease'] = 'Y'
+
+        # define the release pipes
+        if len(HW_pipe_release_samples_list) > 0:
+            GO_stop_dic['Pipe001ReleaseCount'] = 0
+        for HW_pipe_release_sample_dic in HW_pipe_release_samples_list:
+            HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_release_sample_dic, 'Sample', TO_CHILD, FIRST_ONE)
+            if HW_sample_dic != None:
+                HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
+                sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
+                if sample_file_name != None:
+                    GO_stop_dic['Pipe001ReleaseCount'] += 1
+                    GO_stop_dic['Pipe001Release' + str(GO_stop_dic['Pipe001ReleaseCount']).zfill(3)] = sample_file_name
 
     #-------------------------------------------------------------------------------------------------
-    def GO_ODF_build_Rank_object(self, HW_rank_dic):
-        # build the GO Rank object from the given HW Rank object
+    def GO_ODF_build_Rank_data_out_stop(self, HW_stop_dic, GO_stop_dic, GO_manual_dic):
+        # build in the given GO Stop dictionary the data and links to GO Rank(s) for pipes sound generation from the given HW Stop object
+
+        # used HW objects :
+        #   Stop C> StopRank(s) (ActionTypeCode = 1, ActionEffectCode = 1) C> Rank C> Pipe_SoundEngine01 C> Pipe_SoundEngine01_Layer C> Pipe_SoundEngine01_AttackSample C> Sample
+        #   Stop C> StopRank(s) (ActionTypeCode = 1, ActionEffectCode = 1) C> Rank C> Pipe_SoundEngine01 C> Pipe_SoundEngine01_Layer C> Pipe_SoundEngine01_ReleaseSample C> Sample
+
+        # get some data about the GO manual to which is attached the GO Stop
+        manual_first_midi_note = GO_manual_dic['FirstAccessibleKeyMIDINoteNumber']
+        manual_nb_keys = GO_manual_dic['NumberOfLogicalKeys']
+
+        GO_stop_dic['NumberOfAccessiblePipes'] = 0
+        GO_stop_dic['FirstAccessiblePipeLogicalKeyNumber'] = 0
+        GO_stop_dic['NumberOfRanks'] = 0
+        GO_stop_nb_ranks = 0
+
+        # add inside the given GO Stop references to GO Ranks
+        for HW_stop_rank_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_stop_dic, 'StopRank', TO_CHILD):
+            # parse the HW StopRank objects which are children of the given HW Stop object
+
+            # get the HW Rank linked to the current HW StopRank
+            HW_rank_dic = self.HW_ODF_get_object_dic_by_ref_id('Rank', HW_stop_rank_dic, 'RankID')
+            # get the list of the HW Pipe_SoundEngine01 objects which are children of the current HW Rank object
+            HW_pipes_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD)
+            if (len(HW_pipes_dic_list) > 0 and
+                myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'ActionTypeCode')) == 1 and
+                myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'ActionEffectCode')) == 1):
+                # the current StopRank has normal action codes and is linked to a Rank having at least one pipe inside
+
+                # get the number of rank pipes layers defined inside the first pipe of the current HW rank
+                # we consider that all the pipes of the HW rank have the same number of layers as the first pipe
+                HW_pipe1_layers_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipes_dic_list[0], 'Pipe_SoundEngine01_Layer', TO_CHILD)
+                nb_pipe1_layers = len(HW_pipe1_layers_dic_list)
+
+                for pipes_layer_nb in range(0, nb_pipe1_layers):
+                    # parse the pipes layers of the current HW rank, to build one GO rank for each HW rank layer
+
+                    # get in the HW Pipe_SoundEngine01_Layer of the current layer of the first pipe the UID of the GO Rank associated to it
+                    GO_rank_uid = HW_pipe1_layers_dic_list[pipes_layer_nb]['_GO_uid']
+                    if GO_rank_uid == '':
+                        # there is not yet a GO Rank built for the current HW rank layer
+                        GO_rank_uid = self.GO_ODF_build_Rank_object(HW_rank_dic, pipes_layer_nb)
+                    GO_rank_dic = self.GO_ODF_dic[GO_rank_uid]
+
+                    HW_div_nb_mapped_inputs = myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'NumberOfMappedDivisionInputNodes'))
+                    if HW_div_nb_mapped_inputs == None: HW_div_nb_mapped_inputs = 61  # observed with HW Augustine Lorris sample set, this data is not defined for the Larigot stop
+
+                    HW_div_midi_note_first_mapped_input = myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'MIDINoteNumOfFirstMappedDivisionInputNode'))
+                    HW_div_midi_note_increment_to_rank = myint(self.HW_ODF_get_attribute_value(HW_stop_rank_dic, 'MIDINoteNumIncrementFromDivisionToRank'))
+
+                    # add the GO Rank to the GO Stop
+                    GO_stop_nb_ranks += 1
+                    GO_stop_dic['Rank' + str(GO_stop_nb_ranks).zfill(3)] = GO_rank_uid[-3:]
+
+                    # convert the current HW StopRank data into GO Stop data
+                    if HW_div_midi_note_increment_to_rank != None:
+                        # there is a note increment between the manual key number and the rank pipe number
+                        if HW_div_midi_note_first_mapped_input != None:
+                            GO_rank_first_access_key_nb = HW_div_midi_note_first_mapped_input - manual_first_midi_note + 1
+                            GO_stop_rank_first_pipe_nb = HW_div_midi_note_first_mapped_input + HW_div_midi_note_increment_to_rank - GO_rank_dic['FirstMidiNoteNumber'] + 1
+                        else:
+                            if HW_div_midi_note_increment_to_rank < 0:
+                                GO_rank_first_access_key_nb = 1 - HW_div_midi_note_increment_to_rank
+                            else:
+                                GO_rank_first_access_key_nb = 1
+                            GO_stop_rank_first_pipe_nb = GO_rank_first_access_key_nb + HW_div_midi_note_increment_to_rank
+                    elif HW_div_midi_note_first_mapped_input != None:
+                        # there is no note increment defined but there is a mapping defined for the first input of the division which can act on the rank
+                        GO_rank_first_access_key_nb = HW_div_midi_note_first_mapped_input - manual_first_midi_note + 1
+                        GO_stop_rank_first_pipe_nb = HW_div_midi_note_first_mapped_input - GO_rank_dic['FirstMidiNoteNumber'] + 1
+                    else:
+                        # no increment and no mapping defined, by default the first key of the keyboard acts on the first pipe of the rank for this stop
+                        GO_rank_first_access_key_nb = 1
+                        GO_stop_rank_first_pipe_nb = 1
+
+                    GO_stop_rank_pipe_count = HW_div_nb_mapped_inputs
+                    if GO_stop_rank_pipe_count > GO_rank_dic['NumberOfLogicalPipes']:
+                        # the stop is using more pipes than what is defined in the rank
+                        GO_stop_rank_pipe_count = GO_rank_dic['NumberOfLogicalPipes']
+                    if GO_rank_first_access_key_nb + GO_stop_rank_pipe_count - 1 > manual_nb_keys:
+                        # the rank range is going beyond the highest key of the manual (observed with a sample set) : reduce its number of accessible pipes
+                        GO_stop_rank_pipe_count = manual_nb_keys - GO_rank_first_access_key_nb + 1
+
+                    GO_stop_dic[f'Rank{str(GO_stop_nb_ranks).zfill(3)}PipeCount'] = GO_stop_rank_pipe_count
+                    GO_stop_dic[f'Rank{str(GO_stop_nb_ranks).zfill(3)}FirstAccessibleKeyNumber'] = GO_rank_first_access_key_nb
+                    GO_stop_dic[f'Rank{str(GO_stop_nb_ranks).zfill(3)}FirstPipeNumber'] = GO_stop_rank_first_pipe_nb
+
+                    # add in the HW StopRank object the UID of the corresponding GO object
+                    HW_stop_rank_dic['_GO_uid'] = GO_rank_uid
+
+        if GO_stop_nb_ranks > 0:
+            # based on the Rank999xxx attributes created just before in the GO Stop for each HW StopRank, compute remaining attributes of the GO Stop
+            # identify the first and last keys of the manual which can access to the ranks associated to the stop
+            GO_stop_first_access_key_nb = 999
+            GO_stop_last_access_key_nb = 0
+            for r in range(1, GO_stop_nb_ranks + 1):
+                rank_first_key = GO_stop_dic[f'Rank{str(r).zfill(3)}FirstAccessibleKeyNumber']
+                rank_last_key = rank_first_key + GO_stop_dic[f'Rank{str(r).zfill(3)}PipeCount'] - 1
+                if GO_stop_first_access_key_nb > rank_first_key:
+                    GO_stop_first_access_key_nb = rank_first_key
+                if GO_stop_last_access_key_nb < rank_last_key:
+                    GO_stop_last_access_key_nb = rank_last_key
+
+            GO_stop_dic['FirstAccessiblePipeLogicalKeyNumber'] = GO_stop_first_access_key_nb
+            GO_stop_dic['NumberOfAccessiblePipes'] = GO_stop_last_access_key_nb - GO_stop_first_access_key_nb + 1
+            GO_stop_dic['NumberOfRanks'] = GO_stop_nb_ranks
+
+            # adjust the Rank999FirstAccessibleKeyNumber attributes so that it is an offset value compated to FirstAccessiblePipeLogicalKeyNumber and no more an absolute value
+            for r in range(1, GO_stop_nb_ranks + 1):
+                GO_stop_dic[f'Rank{str(r).zfill(3)}FirstAccessibleKeyNumber'] -= (GO_stop_dic['FirstAccessiblePipeLogicalKeyNumber'] - 1)
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Rank_object(self, HW_rank_dic, pipes_layer_nb):
+        # build the GO Rank object from the given HW Rank object and its given layer number
+        # several GO Rank objects can be created if the given HW Rank has several pipes layers
         # return the dictionary of the build GO Rank or None if not created
 
-        # HW source objects used :
+        # used HW objects :
         #   WindCompartment C> Pipe_SoundEngine01
         #   Rank C> Pipe_SoundEngine01 C> Pipe_SoundEngine01_Layer C> Pipe_SoundEngine01_AttackSample C> Sample
         #   Rank C> Pipe_SoundEngine01 C> Pipe_SoundEngine01_Layer C> Pipe_SoundEngine01_ReleaseSample C> Sample
 
-        GO_rank_dic = None
+        GO_rank_uid = ''
 
-        # get the list of the HW Pipe_SoundEngine01 objects which are children of the current HW Rank object
+        # get the list of the HW Pipe_SoundEngine01 objects which are children of the given HW Rank
         HW_pipes_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_rank_dic, 'Pipe_SoundEngine01', TO_CHILD)
         if len(HW_pipes_dic_list) > 0:
             # the current HW rank has pipes defined inside
+
+            # get the number of rank pipes layers defined inside the first pipe of the given HW rank
+            # we consider that all the pipes of the HW rank have the same number of layers as the first pipe
+            HW_pipe1_layers_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipes_dic_list[0], 'Pipe_SoundEngine01_Layer', TO_CHILD)
+            nb_pipe1_layers = len(HW_pipe1_layers_dic_list)
+
+            # get the first and last MIDI note numbers defined in the HW Pipe_SoundEngine01 of the given HW Rank
+            first_midi_note_nb = 999
+            last_midi_note_nb = 0
+            pipes_dic = {}  # dictionnary with as key a MIDI note number and as value the dictionary of the associated Pipe_SoundEngine01 object
+
+            for HW_pipe_dic in HW_pipes_dic_list:
+                # parse the Pipe_SoundEngine01 objects of the current HW Rank
+
+                # get the MIDI note number of the current HW Pipe_SoundEngine01
+                midi_note_nb = myint(self.HW_ODF_get_attribute_value(HW_pipe_dic, 'NormalMIDINoteNumber'))
+                if midi_note_nb == None: midi_note_nb = 60 # observed with Sound Paradisi sample sets, the MIDI note 60 is not defined
+                # update the first/last MIDI note number data
+                if midi_note_nb < first_midi_note_nb:
+                    first_midi_note_nb = midi_note_nb
+                if midi_note_nb > last_midi_note_nb:
+                    last_midi_note_nb = midi_note_nb
+
+                # associate the dictionary of the current pipe to its MIDI note number
+                pipes_dic[midi_note_nb] = HW_pipe_dic
 
             # create a GO Rank999 object
             self.GO_ODF_dic['Organ']['NumberOfRanks'] += 1
             GO_rank_uid = 'Rank' + str(self.GO_ODF_dic['Organ']['NumberOfRanks']).zfill(3)
             GO_rank_dic = self.GO_ODF_dic[GO_rank_uid] = {}
 
-            GO_rank_dic['Name'] = self.HW_ODF_get_attribute_value(HW_rank_dic, 'Name', True)
-
-            first_midi_note_nb = 999
-            last_midi_note_nb = 0
-            pipes_dic = {}  # dictionnary with as key the MIDI note number and as value the dictionary of the associated Pipe_SoundEngine01 object
-
-            for HW_pipe_dic in HW_pipes_dic_list:
-                # parse the Pipe_SoundEngine01 objects to get their MIDI note number and update the min / max note number
-                # and associate the MIDI note numbers to Pipe_SoundEngine01 objects
-
-                # get the MIDI note number of the current HW Pipe_SoundEngine01 object
-                midi_note_nb = myint(self.HW_ODF_get_attribute_value(HW_pipe_dic, 'NormalMIDINoteNumber'))
-                if midi_note_nb == None: midi_note_nb = 60 # observed with Sound Paradisi sample sets, the MIDI note 60 is not defined
-                if midi_note_nb < first_midi_note_nb:
-                    first_midi_note_nb = midi_note_nb
-                if midi_note_nb > last_midi_note_nb:
-                    last_midi_note_nb = midi_note_nb
-
-                # store the dictionary of the pipe associated with the MIDI note number
-                pipes_dic[midi_note_nb] = HW_pipe_dic
+            if nb_pipe1_layers < 2:
+                GO_rank_dic['Name'] = self.HW_ODF_get_attribute_value(HW_rank_dic, 'Name')
+            else:
+                GO_rank_dic['Name'] = self.HW_ODF_get_attribute_value(HW_rank_dic, 'Name') + ' Layer' + str(pipes_layer_nb + 1)
 
             GO_rank_dic['NumberOfLogicalPipes'] = len(pipes_dic)
             GO_rank_dic['FirstMidiNoteNumber'] = first_midi_note_nb
             GO_rank_dic['Percussive'] = 'N'
             GO_rank_dic['AcceptsRetuning'] = 'N'
 
-            # use the HW source WindCompartment object of the first pipe as GO WindchestGroup of the whole GO Rank
+            # get the source HW WindCompartment of the first pipe to use it as GO WindchestGroup of the whole GO Rank
             HW_wind_comp_dic = self.HW_ODF_get_object_dic_by_ref_id('WindCompartment', HW_pipes_dic_list[0], 'WindSupply_SourceWindCompartmentID')
-            GO_windchest_uid = HW_wind_comp_dic['_GO_uid']
-            if GO_windchest_uid == '':
-                # the GO WindchestGroup object doesn't exist yet for the HW WindCompartment
-                self.GO_ODF_build_WindchestGroup_object(HW_wind_comp_dic)
-                GO_windchest_uid = HW_wind_comp_dic['_GO_uid']
-
+            # get the HW scaling ContinuousControl of the first pipe of the current layer to use it as GO Enclosure of the whole GO Rank if any
+            HW_pipe_layers_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipes_dic_list[0], 'Pipe_SoundEngine01_Layer', TO_CHILD)
+            HW_pipe_layer_dic = HW_pipe_layers_dic_list[pipes_layer_nb]
+            HW_cont_ctrl_dic = self.HW_ODF_get_object_dic_by_ref_id('ContinuousControl', HW_pipe_layer_dic, 'AmpLvl_ScalingContinuousControlID')
+            # get the HW Enclosure of the first pipe to use it as GO Enclosure of the whole GO Rank if any
+            HW_enclosure_pipe_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipes_dic_list[0], 'EnclosurePipe', TO_PARENT, FIRST_ONE)
+            HW_enclosure_dic = self.HW_ODF_get_object_dic_by_ref_id('Enclosure', HW_enclosure_pipe_dic, 'EnclosureID')
+            # create the GO WindchestGroup corresponding to the current HW WindCompartment + ContinuousControl + Enclosure
+            # if not already existing, else recover the UID of the existing associated GO WindchestGroup
+            GO_windchest_uid = self.GO_ODF_build_WindchestGroup_object(HW_wind_comp_dic, HW_cont_ctrl_dic, HW_enclosure_dic)
             GO_rank_dic['WindchestGroup'] = int(GO_windchest_uid[-3:])
 
             nb_pipes = 0
@@ -4909,9 +4822,13 @@ class C_HW2GO():
                 if midi_note_nb in pipes_dic.keys():
                     HW_pipe_dic = pipes_dic[midi_note_nb]
 
-                    # get the dictionary of the first Pipe_SoundEngine01_Layer child object of the current Pipe_SoundEngine01_Layer object
-                    # the other Pipe_SoundEngine01_Layer objects if any exist are ignored because no possibility to manage them in GO ODF
-                    HW_pipe_layer_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_dic, 'Pipe_SoundEngine01_Layer', TO_CHILD, True)
+                    # get the dictionary of the HW Pipe_SoundEngine01_Layer child of the current HW Pipe_SoundEngine01_Layer
+                    # and corresponding to the given pipes layer number
+                    HW_pipe_layers_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_dic, 'Pipe_SoundEngine01_Layer', TO_CHILD)
+                    HW_pipe_layer_dic = HW_pipe_layers_dic_list[pipes_layer_nb]
+
+                    # add in the HW Pipe_SoundEngine01_Layer the ID of the corresponding GO object
+                    HW_pipe_layer_dic['_GO_uid'] = GO_rank_uid
 
                     # set the GO pipe ID
                     nb_pipes += 1
@@ -4929,14 +4846,14 @@ class C_HW2GO():
 
                     GO_rank_dic[GO_pipe_uid + 'LoadRelease'] = 'N'
 
-                    # manage the attack sample
-                    # get the dictionary of the first Pipe_SoundEngine01_AttackSample child object of the current Pipe_SoundEngine01_Layer object (the other are ignored)
-                    HW_pipe_attack_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_layer_dic, 'Pipe_SoundEngine01_AttackSample', TO_CHILD, True)
-                    # get the dictionary of the first Sample child object of the current Pipe_SoundEngine01_AttackSample object
-                    HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_attack_sample_dic, 'Sample', TO_CHILD, True)
+                    # manage the attack samples
+                    for HW_pipe_attack_sample_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_layer_dic, 'Pipe_SoundEngine01_AttackSample', TO_CHILD):
+                        HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_attack_sample_dic, 'Sample', TO_CHILD, FIRST_ONE)
 
-                    HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', True))
-                    GO_rank_dic[GO_pipe_uid] = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', True), HW_install_package_id)
+                    HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
+                    sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
+                    if sample_file_name != None:
+                        GO_rank_dic[GO_pipe_uid] = sample_file_name
 
                     # manage the release samples
                     # get the dictionaries list of the Pipe_SoundEngine01_ReleaseSample child objects of the current Pipe_SoundEngine01_Layer object
@@ -4951,11 +4868,13 @@ class C_HW2GO():
                             HW_max_key_release_time_int = myint(self.HW_ODF_get_attribute_value(HW_pipe_release_sample_dic, 'ReleaseSelCriteria_LatestKeyReleaseTimeMs'))
 
                             # get the dictionary of the first Sample child object of the current Pipe_SoundEngine01_ReleaseSample object
-                            HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_release_sample_dic, 'Sample', TO_CHILD, True)
+                            HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_release_sample_dic, 'Sample', TO_CHILD, FIRST_ONE)
                             release_count += 1
 
-                            HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', True))
-                            GO_rank_dic[GO_pipe_uid + 'Release' + str(release_count).zfill(3)] = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', True), HW_install_package_id)
+                            HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
+                            sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
+                            if sample_file_name != None:
+                                GO_rank_dic[GO_pipe_uid + 'Release' + str(release_count).zfill(3)] = sample_file_name
 
                             if HW_max_key_release_time_int == None or HW_max_key_release_time_int == 99999 or HW_max_key_release_time_int == -1:
                                 GO_rank_dic[GO_pipe_uid + 'Release' + str(release_count).zfill(3) + 'MaxKeyPressTime'] = '-1'
@@ -4965,160 +4884,209 @@ class C_HW2GO():
             # add in the HW Rank object the ID of the corresponding GO object
             HW_rank_dic['_GO_uid'] = GO_rank_uid
 
-        return GO_rank_dic
+        return GO_rank_uid
 
     #-------------------------------------------------------------------------------------------------
-    def GO_ODF_build_Rank_data_in_stop(self, HW_pipe_dic, GO_stop_data_dic, is_release_action = False):
-        # build one pipe data (for noise effect) in the given GO Stop from the given HW Pipe_SoundEngine01
+    def GO_ODF_build_WindchestGroup_object(self, HW_wind_comp_dic, HW_cont_ctrl_dic, HW_enclosure_dic):
+        # build the GO WindchestGroup object corresponding to the given HW WindCompartment + ContinuousControl + Enclosure (two last parameters can be at None)
+        # a GO WindchestGroup corresponds to a HW WindCompartment + HW ContinuousControl (if not None) + HW Enclosure (if not None)
+        # return the UID of the GO WindchestGroup built or already existing
 
-        # HW source objects used :
-        #   Pipe_SoundEngine01 C> Pipe_SoundEngine01_Layer C> Pipe_SoundEngine01_AttackSample C> Sample
-        #   Pipe_SoundEngine01 C> Pipe_SoundEngine01_Layer C> Pipe_SoundEngine01_ReleaseSample C> Sample
+        # used HW objects :
+        #   WindCompartment
 
-        GO_rank_dic = None
+        # recover the HW ContinuousControl controlling the given HW Enclosure if any
+        HW_enc_cont_ctrl_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_enclosure_dic, 'ContinuousControl', TO_PARENT, FIRST_ONE)
 
-        # get the source HW WindCompartment object of the given HW Pipe
-        HW_wind_comp_dic = self.HW_ODF_get_object_dic_by_ref_id('WindCompartment', HW_pipe_dic, 'WindSupply_SourceWindCompartmentID')
-        GO_windchest_uid = HW_wind_comp_dic['_GO_uid']
-        if GO_windchest_uid == '':
-            # the GO WindchestGroup object doesn't exist yet for the HW WindCompartment
-            self.GO_ODF_build_WindchestGroup_object(HW_wind_comp_dic)
-            GO_windchest_uid = HW_wind_comp_dic['_GO_uid']
-        GO_stop_data_dic['WindchestGroup'] = int(GO_windchest_uid[-3:])
+        # recover the controlling HW ContinuousControl objects which have a graphical interface
+        HW_cont_ctrl_dic = self.HW_ODF_get_controlling_continuous_control(HW_cont_ctrl_dic)
+        HW_enc_cont_ctrl_dic = self.HW_ODF_get_controlling_continuous_control(HW_enc_cont_ctrl_dic)
 
-        GO_stop_data_dic['NumberOfLogicalPipes'] = 1
-        GO_stop_data_dic['Percussive'] = 'N'
-        GO_stop_data_dic['AcceptsRetuning'] = 'N'
+        # search if there is already a GO WindchestGroup linked to the given HW WindCompartment + Continuouscontrol + Enclosure ContinuousControl
+        for GO_object_uid, GO_object_dic in self.GO_ODF_dic.items():
+            # parse the defined GO objects
+            if GO_object_uid[0] == 'W':
+                # it is a WindchestGroup object
+                HW_wind_comp_uid = GO_object_dic['_HW_wc_uid']
+                HW_cont_ctrl_uid = GO_object_dic['_HW_cc_uid']
+                HW_enc_cont_ctrl_uid = GO_object_dic['_HW_enc_cc_uid']
+                if (HW_wind_comp_dic == self.HW_ODF_get_object_dic(HW_wind_comp_uid) and
+                    ((HW_cont_ctrl_dic == None and HW_cont_ctrl_uid == '') or
+                     (HW_cont_ctrl_dic != None and HW_cont_ctrl_dic == self.HW_ODF_get_object_dic(HW_cont_ctrl_uid))) and
+                    ((HW_enc_cont_ctrl_dic == None and HW_enc_cont_ctrl_uid == '') or
+                     (HW_enc_cont_ctrl_dic != None and HW_enc_cont_ctrl_dic == self.HW_ODF_get_object_dic(HW_enc_cont_ctrl_uid)))):
+                    # the current GO WindchesGroup matches with the given parameters : no need to create a new GO WindchestGroup
+                    return GO_object_dic['_GO_uid']
 
-        # get the first HW Pipe_SoundEngine01_Layer linked to the given HW Pipe_SoundEngine01
-        HW_pipe_layer_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_dic, 'Pipe_SoundEngine01_Layer', TO_CHILD, True)
-
-        # get the pipe gain if any
-        pipe_gain = myfloat(self.HW_ODF_get_attribute_value(HW_pipe_layer_dic, 'AmpLvl_LevelAdjustDecibels'))
-        if pipe_gain != None and pipe_gain != 0:
-            GO_stop_data_dic['Pipe001Gain'] = pipe_gain
-
-        # get the pipe harmonic number if any
-        pipe_harmonic_nb = myint(self.HW_ODF_get_attribute_value(HW_pipe_dic, 'Pitch_Tempered_RankBasePitch64ftHarmonicNum'))
-        if pipe_harmonic_nb != None and pipe_harmonic_nb != 0:
-            GO_stop_data_dic['Pipe001HarmonicNumber'] = pipe_harmonic_nb
-
-        GO_stop_data_dic['Pipe001LoadRelease'] = 'Y'
-
-        # manage the release sample
-        HW_sample_dic = None
-        if is_release_action:
-            # get the the first Pipe_SoundEngine01_ReleaseSample child object of the Pipe_SoundEngine01_Layer object
-            HW_pipe_release_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_layer_dic, 'Pipe_SoundEngine01_ReleaseSample', TO_CHILD, True)
-            if HW_pipe_release_sample_dic != None:
-                # there is a release sample
-                # get the first Sample child object of the current Pipe_SoundEngine01_ReleaseSample object
-                HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_release_sample_dic, 'Sample', TO_CHILD, True)
-            else:
-                # get the first Pipe_SoundEngine01_AttackSample child object of the current Pipe_SoundEngine01_Layer object
-                HW_pipe_attack_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_layer_dic, 'Pipe_SoundEngine01_AttackSample', TO_CHILD, True)
-                if HW_pipe_attack_sample_dic != None:
-                    # there is a release sample
-                    # get the first Sample child object of the current Pipe_SoundEngine01_ReleaseSample object
-                    HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_attack_sample_dic, 'Sample', TO_CHILD, True)
-
-            if HW_sample_dic != None:
-                GO_stop_data_dic['Pipe001'] = '..' + os.sep + 'SilentLoop.wav'
-                GO_stop_data_dic['Pipe001Gain'] = 0
-                GO_stop_data_dic['Pipe001LoadRelease'] = 'N'
-                GO_stop_data_dic['Pipe001ReleaseCount'] = 1
-                self.silent_loop_file_used = True
-
-                HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', True))
-                GO_stop_data_dic['Pipe001Release001'] = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', True), HW_install_package_id)
-        else:
-            # get the first Pipe_SoundEngine01_AttackSample child object of the current Pipe_SoundEngine01_Layer object
-            attacks_number = 0
-            for HW_pipe_attack_sample_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_layer_dic, 'Pipe_SoundEngine01_AttackSample', TO_CHILD):
-                # parse the HW Pipe_SoundEngine01_AttackSample child objects of the Pipe_SoundEngine01_Layer object
-                attacks_number += 1
-                HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_attack_sample_dic, 'Sample', TO_CHILD, True)
-                if HW_sample_dic != None:
-                    HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', True))
-                    if attacks_number == 1:
-                        GO_stop_data_dic['Pipe001'] = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', True), HW_install_package_id)
-                    else:
-                        GO_stop_data_dic['Pipe001AttackCount'] = attacks_number - 1
-                        GO_stop_data_dic['Pipe001Attack' + str(attacks_number - 1).zfill(3)] = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', True), HW_install_package_id)
-
-    #-------------------------------------------------------------------------------------------------
-    def GO_ODF_build_WindchestGroup_objects(self):
-        # build the WindchestGroups999 objects of the GrandOrgue ODF dictionary from the Hauptwerk ODF dictionary
-        # return the number of created GO WindchestGroup object
-
-        # HW source objects used : WindCompartment C> Pipe_SoundEngine01
-
-        for HW_wind_comp_id in sorted(self.HW_ODF_dic['WindCompartment'].keys()):
-            # parse the defined HW WindCompartment objects by increasing ID order
-            HW_wind_comp_dic = self.HW_ODF_dic['WindCompartment'][HW_wind_comp_id]
-            if self.HW_ODF_get_linked_objects_dic_by_type(HW_wind_comp_dic, 'Pipe_SoundEngine01', TO_CHILD, True) != None:
-                # the current HW WindCompartment has at least one Pipe_SoundEngine01 child object, a corresponding GO WindchestGroup can be created
-                self.GO_ODF_dic['Organ']['NumberOfWindchestGroups'] += 1
-                GO_windchest_uid = 'WindchestGroup' + str(self.GO_ODF_dic['Organ']['NumberOfWindchestGroups']).zfill(3)
-                GO_windchest_dic = self.GO_ODF_dic[GO_windchest_uid] = {}
-
-                GO_windchest_dic['Name'] = self.HW_ODF_get_attribute_value(HW_wind_comp_dic, 'Name', True)
-                GO_windchest_dic['NumberOfEnclosures'] = 0
-                GO_windchest_dic['NumberOfTremulants'] = 0
-
-                # add in the HW WindCompartment object the ID of the corresponding GO object
-                HW_wind_comp_dic['_GO_uid'] = GO_windchest_uid
-
-        return self.GO_ODF_dic['Organ']['NumberOfWindchestGroups']
-
-    #-------------------------------------------------------------------------------------------------
-    def GO_ODF_build_WindchestGroup_object(self, HW_wind_comp_dic):
-        # build the GO WindchestGroup999 object corresponding to the given HW WindCompartment object
-
-        # HW source objects used : WindCompartment
-
+        # create a new GO WindchestGroup
         self.GO_ODF_dic['Organ']['NumberOfWindchestGroups'] += 1
         GO_windchest_uid = 'WindchestGroup' + str(self.GO_ODF_dic['Organ']['NumberOfWindchestGroups']).zfill(3)
         GO_windchest_dic = self.GO_ODF_dic[GO_windchest_uid] = {}
+        GO_windchest_dic['_GO_uid'] = GO_windchest_uid
 
-        GO_windchest_dic['Name'] = self.HW_ODF_get_attribute_value(HW_wind_comp_dic, 'Name', True)
+        GO_windchest_dic['Name'] = self.HW_ODF_get_attribute_value(HW_wind_comp_dic, 'Name')
         GO_windchest_dic['NumberOfEnclosures'] = 0
         GO_windchest_dic['NumberOfTremulants'] = 0
 
-        # add in the HW WindCompartment object the ID of the corresponding GO object
+        # add in the HW WindCompartment the UID of the corresponding GO object
         HW_wind_comp_dic['_GO_uid'] = GO_windchest_uid
+        # add in the GO WindchestGroup the UID of the corresponding HW WindCompartment
+        GO_windchest_dic['_HW_wc_uid'] =  HW_wind_comp_dic['_HW_uid']
 
-        return GO_windchest_dic
+        # build a GO Enclosure if needed based on the given HW ContinuousControl
+        GO_windchest_dic['_HW_cc_uid'] =  ''
+        if HW_cont_ctrl_dic != None:
+            GO_enclosure_uid = self.GO_ODF_build_Enclosure_object(HW_cont_ctrl_dic)
+            if GO_enclosure_uid != '':
+                GO_windchest_dic['_HW_cc_uid'] =  HW_cont_ctrl_dic['_HW_uid']
+                GO_windchest_dic['NumberOfEnclosures'] = 1
+                GO_windchest_dic['Enclosure001'] = GO_enclosure_uid[-3:]
+                GO_windchest_dic['Name'] += '+' + self.GO_ODF_dic[GO_enclosure_uid]['Name']
+                HW_cont_ctrl_dic['_GO_uid'] = GO_enclosure_uid
+
+        # build a GO Enclosure if needed based on the given HW Enclosure
+        GO_windchest_dic['_HW_enc_cc_uid'] =  ''
+        if HW_enc_cont_ctrl_dic != None:
+            GO_enclosure_uid = self.GO_ODF_build_Enclosure_object(HW_enclosure_dic)
+            if GO_enclosure_uid != '':
+                GO_windchest_dic['_HW_enc_cc_uid'] =  HW_enc_cont_ctrl_dic['_HW_uid']
+                GO_windchest_dic['NumberOfEnclosures'] += 1
+                GO_windchest_dic['Enclosure' + str(GO_windchest_dic['NumberOfEnclosures']).zfill(3)] = GO_enclosure_uid[-3:]
+                GO_windchest_dic['Name'] += '+' + self.GO_ODF_dic[GO_enclosure_uid]['Name']
+                HW_enc_cont_ctrl_dic['_GO_uid'] = GO_enclosure_uid
+
+
+        return GO_windchest_uid
+
+    #-------------------------------------------------------------------------------------------------
+    def GO_ODF_build_Enclosure_object(self, HW_object_dic):
+        # build the GO Enclosure object corresponding to the given HW object (ContinuousControl or Enclosure)
+
+        # used HW objects :
+        #   ContinuousControl C> ImageSetInstance C> ImageSet C> ImageSetElement
+        #                                                     C> ContinuousControlImageSetStage
+
+        HW_object_type = HW_object_dic['_HW_uid'][:-6]
+        if HW_object_type == 'ContinuousControl':
+            HW_cont_ctrl_dic = HW_object_dic
+        elif HW_object_type == 'Enclosure':
+            HW_cont_ctrl_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'ContinuousControl', TO_PARENT, FIRST_ONE)
+        else:
+            return ''
+
+        if HW_cont_ctrl_dic['_GO_uid'] != '':
+            # there is already a GO Enclosure linked to the given HW Continuouscontrol
+            return HW_cont_ctrl_dic['_GO_uid']
+
+        # recover the HW ContinuousControl which has a graphical interface and is controlling the given HW ContinuousControl
+        HW_cont_ctrl_dic = self.HW_ODF_get_controlling_continuous_control(HW_cont_ctrl_dic)
+        if HW_cont_ctrl_dic == None:
+            # there is no graphical control
+            return ''
+
+        self.GO_ODF_dic['Organ']['NumberOfEnclosures'] += 1
+        GO_enclosure_uid = 'Enclosure' + str(self.GO_ODF_dic['Organ']['NumberOfEnclosures']).zfill(3)
+        GO_enclosure_dic = self.GO_ODF_dic[GO_enclosure_uid] = {}
+
+        GO_enclosure_dic['Name'] = self.HW_ODF_get_attribute_value(HW_object_dic, 'Name')
+        GO_enclosure_dic['AmpMinimumLevel'] = 1  # if set at 0, when the enclosure is set at its minimum, there is no sound when the enclosure position is increased
+
+        # add the graphical attributes of the enclosure
+        # get the HW ImageSetInstance object associated to the given HW ContinuousControl
+        HW_img_set_inst_dic = self.HW_ODF_get_object_dic_by_ref_id('ImageSetInstance', HW_cont_ctrl_dic, 'ImageSetInstanceID')
+        HW_display_page_id = myint(self.HW_ODF_get_attribute_value(HW_img_set_inst_dic, 'DisplayPageID', MANDATORY))
+        HW_display_page_dic = self.HW_ODF_get_object_dic('DisplayPage', HW_display_page_id)
+        if HW_display_page_id == self.HW_default_display_page_id:
+            # the ContinuousControl is displayed in the default display page / panel
+            GO_enclosure_dic['Displayed'] = 'Y'
+            GO_disp_enclosure_dic = GO_enclosure_dic
+        else:
+            GO_enclosure_dic['Displayed'] = 'N'
+            # create a GO Panel999Element999 enclosure object to display the enclosure in the non default panel
+            GO_panel_uid = HW_display_page_dic['_GO_uid']
+            self.GO_ODF_dic[GO_panel_uid]['NumberOfGUIElements'] += 1
+            GO_panel_element_uid = GO_panel_uid + 'Element' + str(self.GO_ODF_dic[GO_panel_uid]['NumberOfGUIElements']).zfill(3)
+            GO_panel_element_dic = self.GO_ODF_dic[GO_panel_element_uid] = {}
+
+            GO_panel_element_dic['Type'] = 'Enclosure'
+            GO_panel_element_dic['Enclosure'] = int(GO_enclosure_uid[-3:])
+
+            GO_disp_enclosure_dic = GO_panel_element_dic
+
+        GO_disp_enclosure_dic['DispLabelText'] = ''
+
+        # get the image attributes of the first image index to set the attributes of the GO enclosure
+        image_attr_dic = {}
+        self.HW_ODF_get_image_attributes(HW_img_set_inst_dic, image_attr_dic, 1)
+        GO_disp_enclosure_dic['PositionX'] = image_attr_dic['LeftXPosPixels']
+        GO_disp_enclosure_dic['PositionY'] = image_attr_dic['TopYPosPixels']
+        if image_attr_dic['ImageWidthPixels'] != None:
+            GO_disp_enclosure_dic['Width'] = image_attr_dic['ImageWidthPixels']
+        if image_attr_dic['ImageHeightPixels'] != None:
+            GO_disp_enclosure_dic['Height'] = image_attr_dic['ImageHeightPixels']
+
+        # set the mouse clickable area
+        if image_attr_dic['ClickableAreaLeftRelativeXPosPixels'] != None:
+            GO_disp_enclosure_dic['MouseRectLeft'] = image_attr_dic['ClickableAreaLeftRelativeXPosPixels']
+        if image_attr_dic['ClickableAreaTopRelativeYPosPixels'] != None:
+            GO_disp_enclosure_dic['MouseRectTop'] = image_attr_dic['ClickableAreaTopRelativeYPosPixels']
+        else:
+            GO_disp_enclosure_dic['MouseRectTop'] = 0  # to avoid GO to set it at 13 by default
+        if image_attr_dic['ClickableAreaRightRelativeXPosPixels'] != None:
+            GO_disp_enclosure_dic['MouseRectWidth'] = image_attr_dic['ClickableAreaRightRelativeXPosPixels']
+        if image_attr_dic['ClickableAreaBottomRelativeYPosPixels'] != None:
+            GO_disp_enclosure_dic['MouseRectHeight'] = image_attr_dic['ClickableAreaBottomRelativeYPosPixels'] - 3  # to not have error in sample set loading in GrandOrgue
+
+        # get the number of bitmaps of the HW ContinuousControl
+        HW_img_set_dic = self.HW_ODF_get_object_dic_by_ref_id('ImageSet', HW_img_set_inst_dic, 'ImageSetID')
+        HW_img_elems_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_img_set_dic, 'ImageSetElement', TO_CHILD)
+        bitmap_count = len(HW_img_elems_list)
+        if bitmap_count > 128: bitmap_count = 128  # GO supports up to 128 bitmaps
+        GO_disp_enclosure_dic['BitmapCount'] = bitmap_count
+
+        # add the enclosure bitmaps
+        for i in range(1, bitmap_count + 1):
+            image_attr_dic = {}
+            self.HW_ODF_get_image_attributes(HW_img_set_inst_dic, image_attr_dic, i)
+            if image_attr_dic['BitmapFilename'] != None:
+                GO_disp_enclosure_dic['Bitmap' + str(i).zfill(3)] = image_attr_dic['BitmapFilename']
+            if image_attr_dic['TransparencyMaskBitmapFilename'] != None:
+                GO_disp_enclosure_dic['Mask' + str(i).zfill(3)] = image_attr_dic['TransparencyMaskBitmapFilename']
+
+        # add in the HW ContinuousControl object the ID of the corresponding GO object
+        HW_cont_ctrl_dic['_GO_uid'] = GO_enclosure_uid
+
+        return GO_enclosure_uid
 
     #-------------------------------------------------------------------------------------------------
     def convert_HW2GO_file_name(self, HW_file_name_str, HW_install_package_id_int):
         # return the given file path/name (for images or sounds or info files) converted from HW to GO format
         # in HW format the files path starts from the root package folder (named with 6 digits) and the folders separator is either / or \
         # in GO format the files path starts from the ODF location (in the HW folder OrganDefinitions) and the folders separator is \
-        # return None if the given package ID is not present in the sample set of the loaded HW ODF or if the given file name is not found
 
-        if HW_install_package_id_int in self.available_HW_packages_id_list:
-            # the given installation package ID is present in the sample set files
-            if os.sep == '/':
-                os_file_name_str = HW_file_name_str.replace('\\', os.sep)
-            else:
-                os_file_name_str = HW_file_name_str.replace('/', os.sep)
-            if os_file_name_str[0] == os.sep:
-                # the HW file name must not start by a path separator (seen on some sample sets)
-                os_file_name_str = os_file_name_str[1:]
-
-            os_file_name_str = os.path.join(self.HW_sample_set_path_str, 'OrganInstallationPackages', str(HW_install_package_id_int).zfill(6), os_file_name_str)
-            actual_file_name_str = get_actual_file_name(os_file_name_str)
-
-            # return the GO file path/name (relative to the folder where is located the ODF and with the \ folders separator
-            if actual_file_name_str != None:
-                return '..' + actual_file_name_str[len(self.HW_sample_set_path_str):].replace(os.sep,'\\')
-            else:
-                # file not found in the sample set files, by default return the given file name (which comes from the HW ODF)
-                return '..' + os_file_name_str[len(self.HW_sample_set_path_str):].replace(os.sep,'\\')
+        if os.sep == '/':
+            os_file_name_str = HW_file_name_str.replace('\\', os.sep)
         else:
-            # unavailable package
-            return None
+            os_file_name_str = HW_file_name_str.replace('/', os.sep)
+
+        if os_file_name_str[0] == os.sep:
+            # the HW file name must not start by a path separator (seen on some sample sets)
+            os_file_name_str = os_file_name_str[1:]
+
+        os_file_name_str = os.path.join(self.HW_sample_set_path_str, 'OrganInstallationPackages', str(HW_install_package_id_int).zfill(6), os_file_name_str)
+        actual_file_name_str = get_actual_file_name(os_file_name_str)
+
+        # return the GO file path/name relative to the folder where is located the ODF and with the \ folders separator
+        if actual_file_name_str != None:
+            return '..' + actual_file_name_str[len(self.HW_sample_set_path_str):].replace(os.sep,'\\')
+        else:
+            # file not found in the sample set files
+            if DEV_MODE:
+                # return the given file name (which comes from the HW ODF)
+                # permits to test HW ODF conversion without having all the files of the sample set on the computer
+                return '..' + os_file_name_str[len(self.HW_sample_set_path_str):].replace(os.sep,'\\')
+            else:
+                return None
 
     #-------------------------------------------------------------------------------------------------
     def events_log_add(self, log_string):
@@ -5141,10 +5109,11 @@ class C_GUI():
     selected_object_UID = ''     # ID of the object currently selected in the objects list or tree widgets
     selected_object_type = ''   # type of the object currently selected : 'GO' or 'HW'
     data_changed = False        # flag indicating that data have been changed in the odf_data and not saved in an ODF
-    object_edited = False       # flag indicating that the data of an object have been edited (and not yet applied in odf_data)s
+    object_edited = False       # flag indicating that the data of an object have been edited (and not yet applied in odf_data)
     gui_events_blocked = False  # flag indicating that the GUI events are currently blocked
     text_in_search = ''         # text which is currently in search in the help
     search_index = ''           # last search result position in the help
+    hw2go_warning_displayed = False  # flag indicating that the HW to GO conversion warning has been displayed one time
 
     tag_field = "tag_field"     # tag to identify the syntax color for the fields
     tag_comment = "tag_comment" # tag to identify the syntax color for the comments
@@ -5154,7 +5123,7 @@ class C_GUI():
 
     #-------------------------------------------------------------------------------------------------
     def wnd_main_build(self):
-        #--- build the main window of the application with all his GUI widgets
+        #--- build the main window of the application with all its GUI widgets
 
         #--- create an instance of the C_ODF class
         self.odf_data = C_ODF()
@@ -5165,8 +5134,7 @@ class C_GUI():
         #--- create the main window
         self.wnd_main = Tk(className='OdfEdit')
         self.wnd_main.title(MAIN_WINDOW_TITLE)
-        self.wnd_main.geometry('1600x800')
-        self.wnd_main.bind('<Configure>', self.wnd_main_configure) # to adjust the widgets size on main windows resizing
+        self.wnd_main.geometry('1600x800+50+50')
         self.wnd_main.protocol("WM_DELETE_WINDOW", self.wnd_main_quit) # to ask the user to save his changed before to close the main window
         # assign an image to the main window icon
         icon = PhotoImage(file = os.path.dirname(__file__) + os.sep + 'OdfEdit.png')
@@ -5181,93 +5149,102 @@ class C_GUI():
 
         #--- create the various widgets inside the main window
 
+        #-- top buttons bar
+
+        # top frame to host the buttons
+        self.frm_top = Frame(self.wnd_main)
+        self.frm_top.pack(side='top', fill='x')
+
         # button "New"
-        self.btn_odf_new = Button(self.wnd_main, text="New", fg="black", command=self.file_new)
-        self.btn_odf_new.place(x=10, y=10, width=70, height=20)
+        self.btn_odf_new = Button(self.frm_top, text="New", fg="black", width=7, command=self.file_new)
+        self.btn_odf_new.pack(side='left', padx=5, pady=5)
 
         # button "Open"
-        self.btn_odf_file_open = Button(self.wnd_main, text="Open", fg="black", command=self.file_open)
-        self.btn_odf_file_open.place(x=90, y=10, width=70, height=20)
-        CreateToolTip(self.btn_odf_file_open, "To open a GrandOrgue ODF (extension .organ) or a Hauptwerk ODF (extension .Organ_Hauptwerk_xml).")
+        self.btn_odf_file_open = Button(self.frm_top, text="Open", fg="black", width=7, command=self.file_open)
+        self.btn_odf_file_open.pack(side='left', padx=5, pady=5)
+        CreateToolTip(self.btn_odf_file_open, "To open a GrandOrgue ODF (extension .organ) or a Hauptwerk ODF (extension .Organ_Hauptwerk_xml or .xml).")
 
         # button "Save"
-        self.btn_odf_file_save = Button(self.wnd_main, text="Save", fg="black", state=DISABLED, command=self.file_save)
-        self.btn_odf_file_save.place(x=170, y=10, width=80, height=20)
+        self.btn_odf_file_save = Button(self.frm_top, text="Save", fg="black", width=7, state=DISABLED, command=self.file_save)
+        self.btn_odf_file_save.pack(side='left', padx=5, pady=5)
 
         # button "Save as..."
-        self.btn_odf_file_saveas = Button(self.wnd_main, text="Save as...", fg="black", state=DISABLED, command=self.file_saveas)
-        self.btn_odf_file_saveas.place(x=260, y=10, width=80, height=20)
+        self.btn_odf_file_saveas = Button(self.frm_top, text="Save as...", fg="black", width=10, state=DISABLED, command=self.file_saveas)
+        self.btn_odf_file_saveas.pack(side='left', padx=5, pady=5)
 
-        # button "Quit"
-        self.btn_quit_appli = Button(self.wnd_main, text="Quit", fg="black", command=self.wnd_main_quit)
-        self.btn_quit_appli.place(x=960, y=10, width=70, height=20)
-
-        # button "Apply changes"
-        self.btn_object_apply_chg = Button(self.wnd_main, text="Apply changes", fg="black", state=DISABLED, command=self.object_text_apply_chg)
-        self.btn_object_apply_chg.place(x=530, y=45, width=100, height=20)
-        CreateToolTip(self.btn_object_apply_chg, "Apply the changes dones in the text box below in the selected object or create a new object if the object ID is different.")
-
-        # button "Delete"
-        self.btn_object_delete = Button(self.wnd_main, text="Delete", fg="black", state=DISABLED, command=self.object_text_delete)
-        self.btn_object_delete.place(x=640, y=45, width=100, height=20)
-        CreateToolTip(self.btn_object_delete, "Delete the selected object.")
-
-        # button "Do checks"
-        self.btn_data_check = Button(self.wnd_main, text="Do checks", fg="black", state=DISABLED, command=self.check_odf_lines)
-        self.btn_data_check.place(x=790, y=45, width=100, height=20)
+        # button "Check ODF data"
+        self.btn_data_check = Button(self.frm_top, text="Check ODF data", fg="black", width=15, state=DISABLED, command=self.check_odf_lines)
+        self.btn_data_check.pack(side='left', padx=5, pady=5)
         CreateToolTip(self.btn_data_check, "Execute checks in the loaded ODF data (syntax, compliance with the specification).")
 
-        # button "Show in help"
-        self.btn_show_help = Button(self.wnd_main, text="Show in help", fg="black", state=DISABLED, command=self.help_selected_object)
-        self.btn_show_help.place(x=930, y=45, width=100, height=20)
-        CreateToolTip(self.btn_show_help, "Show in the help tab the part describing the selected object.")
-
-        # button "Collapse all" for the objects tree
-        self.btn_collapse_all = Button(self.wnd_main, text="Collapse all", fg="black", state=DISABLED, command=self.objects_tree_collapse_all)
-        self.btn_collapse_all.place(x=310, y=45, width=80, height=20)
-
-        # button "Expand all" for the objects tree
-        self.btn_expand_all = Button(self.wnd_main, text="Expand all", fg="black", state=DISABLED, command=self.objects_tree_expand_all)
-        self.btn_expand_all.place(x=400, y=45, width=80, height=20)
+        # button "Quit"
+        self.btn_quit_appli = Button(self.frm_top, text="Quit", fg="black", width=7, relief='groove', command=self.wnd_main_quit)
+        self.btn_quit_appli.pack(side='left', padx=10, pady=10)
 
         # label with loaded ODF file name
-        self.lab_odf_file_name = Label(self.wnd_main, text="", fg="black", borderwidth=1, relief="solid", anchor=E)
-        self.lab_odf_file_name.place(x=350, y=10, width=600, height=20)
+        self.lab_odf_file_name = Label(self.frm_top, text="", fg="black", borderwidth=1, relief="solid", anchor='w', height=1)
+        self.lab_odf_file_name.pack(side='left', padx=5, pady=5, ipady=3, expand=1, fill='x')
+
+        #-- bottom area with panned window
+
+        # panned window
+        self.panned_wnd = PanedWindow(orient ='horizontal', relief = 'sunken', sashrelief = 'raised', sashwidth = 10) #, opaqueresize=False)
+        self.panned_wnd.pack(side='bottom', padx=5, pady=5, expand=1, fill='both')
+
+        #-- panned window 1 (objects list)
+
+        # frame for the first panned window
+        self.frm_panned_wnd_1 = Frame(self.wnd_main)
+        self.panned_wnd.add(self.frm_panned_wnd_1, minsize=200, width=250)
 
         # label with the number of objects in the objects list
-        self.lab_objects_nb = Label(self.wnd_main, text="", fg="black", borderwidth=0, relief="solid", anchor=CENTER)
-        self.lab_objects_nb.place(x=10, y=50, width=250, height=20)
-
-        # label with the number and list of parents of the selected object ID
-        self.lab_parents_list = Label(self.wnd_main, text="", fg="black", borderwidth=0, relief="solid", anchor=NW, wraplength=500)
-        self.lab_parents_list.place(x=530, y=70, width=500, height=30)
+        self.lab_objects_nb = Label(self.frm_panned_wnd_1, text="", fg="black", borderwidth=0, relief="solid", anchor=CENTER)
+        self.lab_objects_nb.pack(side = 'top', pady=10, fill='x')
 
         # list box with objects IDs and names, with horizontal and vertical scroll bars
         # a frame is used to encapsulate the list box and scroll bars to facilitate their resizing
-        self.frm_object_list = Frame(self.wnd_main)
-        self.frm_object_list.place(x=10, y=70, width=250, height=520)
+        self.frm_object_list = Frame(self.frm_panned_wnd_1)
+        self.frm_object_list.pack(side = 'bottom', fill='both', expand=1)
         scrollbarv = ttk.Scrollbar(self.frm_object_list, orient='vertical')
         scrollbarv.pack(side=RIGHT, fill=Y)
         scrollbarh = ttk.Scrollbar(self.frm_object_list, orient='horizontal')
         scrollbarh.pack(side=BOTTOM, fill=X)
         self.lst_objects_list = Listbox(self.frm_object_list, bg='white', font='Calibri 11', fg="black", exportselection=0, selectmode='single', activestyle='none')
-        self.lst_objects_list.pack(side=LEFT, fill=BOTH, expand=True)
+        self.lst_objects_list.pack(side=LEFT, fill=BOTH, expand=1)
         self.lst_objects_list.bind('<<ListboxSelect>>', self.objects_list_selected)
         self.lst_objects_list.config(yscrollcommand=scrollbarv.set)
         self.lst_objects_list.config(xscrollcommand=scrollbarh.set)
         scrollbarv.config(command=self.lst_objects_list.yview)
         scrollbarh.config(command=self.lst_objects_list.xview)
 
+        #-- panned window 2 (objects tree)
+
+        # frame for the second panned window
+        self.frm_panned_wnd_2 = Frame(self.wnd_main)
+        self.panned_wnd.add(self.frm_panned_wnd_2, minsize=200, width=250)
+
+        # top frame for the second panned window
+        self.frm_top_panned_wnd_2 = Frame(self.frm_panned_wnd_2)
+        self.frm_top_panned_wnd_2.pack(side='top', fill='x')
+
+        # button "Collapse all" for the objects tree
+        self.btn_collapse_all = Button(self.frm_top_panned_wnd_2, text="Collapse all", fg="black", state=DISABLED, command=self.objects_tree_collapse_all)
+        self.btn_collapse_all.pack(side='left', padx=5, pady=5, fill='x', expand=1)
+
+        # button "Expand all" for the objects tree
+        self.btn_expand_all = Button(self.frm_top_panned_wnd_2, text="Expand all", fg="black", state=DISABLED, command=self.objects_tree_expand_all)
+        self.btn_expand_all.pack(side='left', padx=5, pady=5, fill='x', expand=1)
+
         # treeview to display the objects hierarchy, with horizontal and vertical scroll bars
         # a frame is used to encapsulate the tree box and scroll bar to facilitate their resizing
-        self.frm_object_tree = Frame(self.wnd_main)
-        self.frm_object_tree.place(x=270, y=70, width=250, height=520)
+        self.frm_object_tree = Frame(self.frm_panned_wnd_2)
+        self.frm_object_tree.pack(side = 'bottom', fill='both', expand=1)
         scrollbarv = ttk.Scrollbar(self.frm_object_tree, orient='vertical')
         scrollbarv.pack(side=RIGHT, fill=Y)
         scrollbarh = ttk.Scrollbar(self.frm_object_tree, orient='horizontal')
         scrollbarh.pack(side=BOTTOM, fill=X)
         self.trv_objects_tree = ttk.Treeview(self.frm_object_tree, show="tree", selectmode='browse') #, style="myTVstyle.Treeview")
-        self.trv_objects_tree.pack(side=LEFT, fill=BOTH, expand=True)
+        self.trv_objects_tree.pack(side=LEFT, fill=BOTH, expand=1)
         self.trv_objects_tree.column('#0', width=500)
         self.trv_objects_tree.bind('<<TreeviewSelect>>', self.objects_tree_selected)
         self.trv_objects_tree.config(yscrollcommand=scrollbarv.set)
@@ -5275,16 +5252,45 @@ class C_GUI():
         scrollbarv.config(command=self.trv_objects_tree.yview)
         scrollbarh.config(command=self.trv_objects_tree.xview)
 
+        #-- panned window 3 (attributes editor)
+
+        # frame for the third panned window
+        self.frm_panned_wnd_3 = Frame(self.wnd_main)
+        self.panned_wnd.add(self.frm_panned_wnd_3, minsize=200, width=500)
+
+        # top frame for the second panned window
+        self.frm_top_panned_wnd_3 = Frame(self.frm_panned_wnd_3)
+        self.frm_top_panned_wnd_3.pack(side='top', fill='x')
+
+        # button "Apply changes"
+        self.btn_object_apply_chg = Button(self.frm_top_panned_wnd_3, text="Apply changes", fg="black", state=DISABLED, command=self.object_text_apply_chg)
+        self.btn_object_apply_chg.pack(side='left', padx=5, pady=5, fill='x', expand=1)
+        CreateToolTip(self.btn_object_apply_chg, "Apply the changes dones in the text box below in the selected object or create a new object if the object ID is different.")
+
+        # button "Delete"
+        self.btn_object_delete = Button(self.frm_top_panned_wnd_3, text="Delete", fg="black", state=DISABLED, command=self.object_text_delete)
+        self.btn_object_delete.pack(side='left', padx=5, pady=5, fill='x', expand=1)
+        CreateToolTip(self.btn_object_delete, "Delete the selected object.")
+
+        # button "Show in help"
+        self.btn_show_help = Button(self.frm_top_panned_wnd_3, text="Show help for this object", fg="black", state=DISABLED, command=self.help_selected_object)
+        self.btn_show_help.pack(side='left', padx=5, pady=5, fill='x', expand=1)
+        CreateToolTip(self.btn_show_help, "Show in the help tab the part describing the selected object.")
+
+        # label with the number and list of parents of the selected object ID
+        self.lab_parents_list = Text(self.frm_panned_wnd_3, fg="black", bg='gray98', relief="sunken", font="Calibri 11", height=2, state='disabled', takefocus=0, wrap='word')
+        self.lab_parents_list.pack(side='top', padx=5, pady=5, fill='x')
+
         # text box to edit the data of an object, with vertical and horizontal scroll bars
         # a frame is used to encapsulate the text box and scroll bars
-        self.frm_object_text = Frame(self.wnd_main)
-        self.frm_object_text.place(x=530, y=100, width=500, height=490)
+        self.frm_object_text = Frame(self.frm_panned_wnd_3)
+        self.frm_object_text.pack(side = 'bottom', fill='both', expand=1)
         scrollbarv = ttk.Scrollbar(self.frm_object_text, orient='vertical')
         scrollbarh = ttk.Scrollbar(self.frm_object_text, orient='horizontal')
-        scrollbarv.pack(side=RIGHT, fill=Y)
-        scrollbarh.pack(side=BOTTOM, fill=X)
+        scrollbarv.pack(side='right', fill=Y)
+        scrollbarh.pack(side='bottom', fill=X)
         self.txt_object_text = Text(self.frm_object_text, fg="black", bg='white', bd=3, wrap="none", font="Calibri 11", selectbackground="snow3", undo=True)
-        self.txt_object_text.pack(side=LEFT, fill=BOTH, expand=True)
+        self.txt_object_text.pack(side=LEFT, fill=BOTH, expand=1)
         self.txt_object_text.bind('<<Modified>>', self.object_text_changed)
         self.txt_object_text.bind('<KeyRelease>', self.object_text_key_pressed)
         self.txt_object_text.config(xscrollcommand=scrollbarh.set, yscrollcommand=scrollbarv.set)
@@ -5299,20 +5305,26 @@ class C_GUI():
         self.txt_object_text.tag_config(self.tag_comment, foreground='chartreuse4')
         self.txt_object_text.tag_config(self.tag_obj_UID, foreground='blue2', font='Calibri 11 bold')
 
+        #-- panned window 4 (notebook with several tabs)
+
+        # frame for the third panned window
+        self.frm_panned_wnd_4 = Frame(self.wnd_main)
+        self.panned_wnd.add(self.frm_panned_wnd_4, minsize=400, width=400)
+
         # notebook to display the events logs or the help
-        self.notebook = ttk.Notebook(self.wnd_main)
-        self.notebook.place(x=1040, y=10, width=550, height=580)
+        self.notebook = ttk.Notebook(self.frm_panned_wnd_4)
+        self.notebook.pack(side='top', fill='both', expand=1)
 
         # text box to display the application events logs in the notebook, with horizontal/vertical scroll bars
         # a frame is used to encapsulate the text box and scroll bars
         self.frm_logs = Frame(self.notebook)
-        self.frm_logs.pack(fill=BOTH, expand=True)
+        self.frm_logs.pack(fill='both', expand=1)
         scrollbarv = ttk.Scrollbar(self.frm_logs, orient='vertical')
         scrollbarh = ttk.Scrollbar(self.frm_logs, orient='horizontal')
-        scrollbarv.pack(side=RIGHT, fill=Y)
-        scrollbarh.pack(side=BOTTOM, fill=X)
+        scrollbarv.pack(side='right', fill=Y)
+        scrollbarh.pack(side='bottom', fill=X)
         self.txt_events_log = Text(self.frm_logs, fg="black", bg='ivory2', bd=3, wrap="none", font='Calibri 11', selectbackground="grey")
-        self.txt_events_log.pack(side=LEFT, fill=BOTH, expand=True)
+        self.txt_events_log.pack(side=LEFT, fill='both', expand=1)
         self.txt_events_log.config(xscrollcommand=scrollbarh.set, yscrollcommand=scrollbarv.set)
         scrollbarv.config(command=self.txt_events_log.yview)
         scrollbarh.config(command=self.txt_events_log.xview)
@@ -5324,31 +5336,31 @@ class C_GUI():
         # text box to display the help in the notebook, with vertical scroll bar and search widgets
         # a main frame is used to encapsulate two other frames, one for the search widgets, one for the text box and his scroll bar
         self.frm_help = Frame(self.notebook)
-        self.frm_help.pack(fill=BOTH, expand=True)
+        self.frm_help.pack(fill='both', expand=1)
         # widgets to search a text
-        self.frm_help_search = Frame(self.frm_help)
-        self.frm_help_search.place(x=0, y=0, height=30, relwidth=1.0)
-        self.lab_search = Label(self.frm_help_search, text="Search :", fg="black", borderwidth=0, relief="solid", anchor=E)
-        self.lab_search.place(x=10, y=5, width=60, height=20)
-        self.cmb_search_text = ttk.Combobox(self.frm_help_search, height=24, values=['[Organ]', '[Button]', '[Coupler999]', '[Divisional999]', '[DivisionalCoupler999]', '[DrawStop]', '[Enclosure999]', '[General999]', '[Image999]', '[Label999]', '[Manual999]', '[Panel999]', '[Panel999Element999]', '[Panel999Image999]', '[Panel999xxxxx999]', '[Piston]', '[PushButton]', '[Rank999]', '[ReversiblePiston999]', '[SetterElement999]', '[Stop999]', '[Switch999]', '[Tremulant999]', '[WindchestGroup999]'])
-        self.cmb_search_text.place(x=80, y=5, width=170, height=20)
+        self.frm_help_top = Frame(self.frm_help)
+        self.frm_help_top.pack(side='top', fill='x')
+        self.lab_search = Label(self.frm_help_top, text="Search :", fg="black", borderwidth=0, relief="solid", anchor=E)
+        self.lab_search.pack(side='left', padx=5, pady=5, fill='x')
+        self.cmb_search_text = ttk.Combobox(self.frm_help_top, height=24, values=['[Organ]', '[Button]', '[Coupler999]', '[Divisional999]', '[DivisionalCoupler999]', '[DrawStop]', '[Enclosure999]', '[General999]', '[Image999]', '[Label999]', '[Manual999]', '[Panel999]', '[Panel999Element999]', '[Panel999Image999]', '[Panel999xxxxx999]', '[Piston]', '[PushButton]', '[Rank999]', '[ReversiblePiston999]', '[SetterElement999]', '[Stop999]', '[Switch999]', '[Tremulant999]', '[WindchestGroup999]'])
+        self.cmb_search_text.pack(side='left', padx=5, pady=5, fill='x')
         self.cmb_search_text.bind('<KeyRelease>', self.help_search_text_key_pressed)
         self.cmb_search_text.bind('<<ComboboxSelected>>', self.help_search_text_key_pressed)
-        self.btn_search_prev = Button(self.frm_help_search, text="<", fg="black", state=NORMAL, command=self.help_search_previous)
-        self.btn_search_prev.place(x=260, y=5, width=40, height=20)
-        self.btn_search_next = Button(self.frm_help_search, text=">", fg="black", state=NORMAL, command=self.help_search_next)
-        self.btn_search_next.place(x=310, y=5, width=40, height=20)
-        self.btn_search_clear = Button(self.frm_help_search, text="Clear", fg="black", state=NORMAL, command=self.help_search_clear)
-        self.btn_search_clear.place(x=360, y=5, width=80, height=20)
-        self.lab_search_occur_nb = Label(self.frm_help_search, text="", fg="black", borderwidth=0, relief="solid", anchor=W)
-        self.lab_search_occur_nb.place(x=450, y=5, width=100, height=20)
+        self.btn_search_prev = Button(self.frm_help_top, text="<", fg="black", width=5, state=NORMAL, command=self.help_search_previous)
+        self.btn_search_prev.pack(side='left', padx=5, pady=5, fill='x')
+        self.btn_search_next = Button(self.frm_help_top, text=">", fg="black", width=5, state=NORMAL, command=self.help_search_next)
+        self.btn_search_next.pack(side='left', padx=5, pady=5, fill='x')
+        self.btn_search_clear = Button(self.frm_help_top, text="Clear", fg="black", width=10, state=NORMAL, command=self.help_search_clear)
+        self.btn_search_clear.pack(side='left', padx=5, pady=5, fill='x')
+        self.lab_search_occur_nb = Label(self.frm_help_top, text="", fg="black", borderwidth=0, relief="solid", anchor=W)
+        self.lab_search_occur_nb.pack(side='left', padx=5, pady=5, fill='x')
         # help text box
-        self.frm_help_text = Frame(self.frm_help)
-        self.frm_help_text.place(x=0, y=30, height=300, relwidth=1.0)
-        scrollbarv = ttk.Scrollbar(self.frm_help_text, orient='vertical')
-        scrollbarv.pack(side=RIGHT, fill=Y)
-        self.txt_help = Text(self.frm_help_text, fg="black", bg='azure', bd=3, wrap="word", font='Calibri 11', selectbackground="grey")
-        self.txt_help.pack(side=BOTTOM, fill=BOTH, expand=True)
+        self.frm_help_bottom = Frame(self.frm_help)
+        self.frm_help_bottom.pack(side = 'bottom', fill='both', expand=1)
+        scrollbarv = ttk.Scrollbar(self.frm_help_bottom, orient='vertical')
+        scrollbarv.pack(side='right', fill=Y)
+        self.txt_help = Text(self.frm_help_bottom, fg="black", bg='azure', bd=3, wrap="word", font='Calibri 11', selectbackground="grey")
+        self.txt_help.pack(side='bottom', fill='both', expand=1)
         self.txt_help.config(yscrollcommand=scrollbarv.set)
         scrollbarv.config(command=self.txt_help.yview)
         # define the tags for the syntax highlighting
@@ -5360,21 +5372,21 @@ class C_GUI():
         # list to search in the GrandOrgue ODF and display the search results, with vertical scroll bar
         # a main frame is used to encapsulate two other frames, one for the search widgets, one for the list box and his vertical scroll bar
         self.frm_search = Frame(self.notebook)
-        self.frm_search.pack(fill=BOTH, expand=True)
+        self.frm_search.pack(fill='both', expand=1)
         # widgets to search a text
-        self.frm_odf_search = Frame(self.frm_search)
-        self.frm_odf_search.place(x=0, y=0, height=30, relwidth=1.0)
-        self.ent_odf_search_text = Entry(self.frm_odf_search)
-        self.ent_odf_search_text.place(x=20, y=5, width=170, height=20)
-        self.btn_odf_search = Button(self.frm_odf_search, text="Search", fg="black", state=NORMAL, command=self.odf_do_search)
-        self.btn_odf_search.place(x=200, y=5, width=80, height=20)
+        self.frm_search_top = Frame(self.frm_search)
+        self.frm_search_top.pack(side='top', fill='x')
+        self.ent_odf_search_text = Entry(self.frm_search_top, width=35)
+        self.ent_odf_search_text.pack(side='left', padx=5, pady=5, fill='x')
+        self.btn_odf_search = Button(self.frm_search_top, text="Search", fg="black", state=NORMAL, command=self.odf_do_search)
+        self.btn_odf_search.pack(side='left', padx=5, pady=5, fill='x')
         # search results list box
-        self.frm_odf_sresults = Frame(self.frm_search)
-        self.frm_odf_sresults.place(x=0, y=30, height=300, relwidth=1.0)
-        scrollbarv = ttk.Scrollbar(self.frm_odf_sresults, orient='vertical')
+        self.frm_search_bottom = Frame(self.frm_search)
+        self.frm_search_bottom.pack(side = 'bottom', fill='both', expand=1)
+        scrollbarv = ttk.Scrollbar(self.frm_search_bottom, orient='vertical')
         scrollbarv.pack(side=RIGHT, fill=Y)
-        self.lst_odf_sresults = Listbox(self.frm_odf_sresults, bg='light yellow', font='Calibri 11', fg="black", exportselection=0, selectmode='single', activestyle='none')
-        self.lst_odf_sresults.pack(side=LEFT, fill=BOTH, expand=True)
+        self.lst_odf_sresults = Listbox(self.frm_search_bottom, bg='light yellow', font='Calibri 11', fg="black", exportselection=0, selectmode='single', activestyle='none')
+        self.lst_odf_sresults.pack(side=LEFT, fill='both', expand=True)
         self.lst_odf_sresults.bind('<Double-1>', self.odf_search_results_list_selected)
         self.lst_odf_sresults.config(yscrollcommand=scrollbarv.set)
         scrollbarv.config(command=self.lst_odf_sresults.yview)
@@ -5382,21 +5394,21 @@ class C_GUI():
         # list to navigate inside the Hauptwerk objects in the ODF, with vertical scroll bar
         # a main frame is used to encapsulate two other frames, one for the search widgets, one for the list box and his vertical scroll bar
         self.frm_hw_browser = Frame(self.notebook)
-        self.frm_hw_browser.pack(fill=BOTH, expand=True)
+        self.frm_hw_browser.pack(fill='both', expand=True)
         # widgets to search an object UID
-        self.frm_hw_uid_search = Frame(self.frm_hw_browser)
-        self.frm_hw_uid_search.place(x=0, y=0, height=30, relwidth=1.0)
-        self.ent_hw_uid_search_text = Entry(self.frm_hw_uid_search, text='HW UID to search')
-        self.ent_hw_uid_search_text.place(x=20, y=5, width=170, height=20)
-        self.btn_hw_uid_search = Button(self.frm_hw_uid_search, text="Search", fg="black", state=NORMAL, command=self.odf_do_search_hw)
-        self.btn_hw_uid_search.place(x=200, y=5, width=80, height=20)
+        self.frm_hw_browser_top = Frame(self.frm_hw_browser)
+        self.frm_hw_browser_top.pack(side='top', fill='x')
+        self.ent_hw_uid_search_text = Entry(self.frm_hw_browser_top, width=40)
+        self.ent_hw_uid_search_text.pack(side='left', padx=5, pady=5, fill='x')
+        self.btn_hw_uid_search = Button(self.frm_hw_browser_top, text="Search", fg="black", state=NORMAL, command=self.odf_do_search_hw)
+        self.btn_hw_uid_search.pack(side='left', padx=5, pady=5, fill='x')
         # browser list box
-        self.frm_hw_browser_list = Frame(self.frm_hw_browser)
-        self.frm_hw_browser_list.place(x=0, y=30, height=300, relwidth=1.0)
-        scrollbarv = ttk.Scrollbar(self.frm_hw_browser_list, orient='vertical')
+        self.frm_hw_browser_bottom = Frame(self.frm_hw_browser)
+        self.frm_hw_browser_bottom.pack(side = 'bottom', fill='both', expand=1)
+        scrollbarv = ttk.Scrollbar(self.frm_hw_browser_bottom, orient='vertical')
         scrollbarv.pack(side=RIGHT, fill=Y)
-        self.lst_hw_browser = Listbox(self.frm_hw_browser_list, bg='alice blue', font='Calibri 11', fg="black", exportselection=0, selectmode='single', activestyle='none')
-        self.lst_hw_browser.pack(side=LEFT, fill=BOTH, expand=True)
+        self.lst_hw_browser = Listbox(self.frm_hw_browser_bottom, bg='alice blue', font='Calibri 11', fg="black", exportselection=0, selectmode='single', activestyle='none')
+        self.lst_hw_browser.pack(side=LEFT, fill='both', expand=True)
         self.lst_hw_browser.bind('<<ListboxSelect>>', self.objects_list_selected_hw)
         self.lst_hw_browser.bind('<Double-1>', self.objects_list_do_update_hw)
         self.lst_hw_browser.config(yscrollcommand=scrollbarv.set)
@@ -5409,28 +5421,12 @@ class C_GUI():
         self.notebook.add(self.frm_hw_browser, text="    Hauptwerk objects    ")
         self.notebook.hide(self.frm_hw_browser)  # will be visible only if a Hauptwerk ODF is opened
 
-        self.wnd_main.geometry('1600x800+50+50') # to trigger the call to wnd_main_configure to resize the widgets
         self.gui_status_do_update()
 
         # launch a timer to execute 200ms after the application init some time consuming activities
         self.wnd_main.after(200, self.do_boot_loadings)
 
         return self.wnd_main
-
-    #-------------------------------------------------------------------------------------------------
-    def wnd_main_configure(self, event):
-        #--- (GUI event callback) the main window configuration has changed
-
-        if str(event.widget) == '.':
-            # configure event of the main window
-            # resize some widgets so that they fit the size of the main window
-            self.frm_object_list.place(height=int(event.height) - self.frm_object_list.winfo_y() - 10)
-            self.frm_object_tree.place(height=int(event.height) - self.frm_object_tree.winfo_y() - 10)
-            self.frm_object_text.place(height=int(event.height) - self.frm_object_text.winfo_y() - 10)
-            self.notebook.place(width=int(event.width) - self.notebook.winfo_x() - 10, height=int(event.height) - self.notebook.winfo_y() - 10)
-            self.frm_help_text.place(height=int(event.height) - self.frm_help_text.winfo_y() - 50)
-            self.frm_odf_sresults.place(height=int(event.height) - self.frm_odf_sresults.winfo_y() - 50)
-            self.frm_hw_browser_list.place(height=int(event.height) - self.frm_hw_browser_list.winfo_y() - 50)
 
     #-------------------------------------------------------------------------------------------------
     def wnd_main_quit(self):
@@ -5444,19 +5440,6 @@ class C_GUI():
     def do_boot_loadings(self):
         #--- function to execute CPU time consuming loading operations just after the boot of the application
         #--- in order to not slowdown the application GUI appearance time
-
-        # load an ODF (for debug only)
-##        file_name_str = "D:/fichiers/Python/OdfEdit/ODF_examples/demo.organ"
-##        file_name_str = "D:\\fichiers\\Python\\OdfEdit\\ODF_examples\\Giubiasco.organ"
-##        file_name_str = "D:/GrandOrgue/SampleSet Demo/demo.organ"
-##        if self.odf_data.odf_lines_load(file_name_str):
-##            # the file has been loaded properly
-##            # update the objects list and tree
-##            self.selected_object_UID = ''
-##            self.selected_object_type = ''
-##            self.objects_list_tree_do_update()
-##            self.gui_status_do_update()
-##        self.events_log_text_display()
 
         # load the help text
         self.help_text_load()
@@ -5499,7 +5482,7 @@ class C_GUI():
             # the user has saved his modifications if he wanted and has not canceled the operation
 
             # let the user select the ODF file to open
-            file_name_str = fd.askopenfilename(title='Open an Organ Definition File (ODF)', filetypes=[('All supported ODF', '*.organ *.Organ_Hauptwerk_xml'), ('GrandOrgue ODF', '*.organ'), ('Hauptwerk ODF', '*.Organ_Hauptwerk_xml')])
+            file_name_str = fd.askopenfilename(title='Open an Organ Definition File (ODF)', filetypes=[('All supported ODF', '*.organ *.xml *.Organ_Hauptwerk_xml'), ('GrandOrgue ODF', '*.organ'), ('Hauptwerk ODF', '*.xml *.Organ_Hauptwerk_xml')])
             if file_name_str != '':
                 # a file has been selected by the user
                 filename_str, file_extension_str = os.path.splitext(file_name_str)
@@ -5511,28 +5494,36 @@ class C_GUI():
                 self.file_new()
                 self.notebook.hide(self.frm_hw_browser)
 
-                if file_extension_str == '.Organ_Hauptwerk_xml':
+                if file_extension_str in ('.xml', '.Organ_Hauptwerk_xml'):
                     # Hauptwerk ODF selected : build a GrandOrgue ODF which uses the Hauptwerk sample set
 
                     HW_ODF_file_name_str = file_name_str
-                    file_name_str = ''
                     # define the name of the built GO ODF according to the name of the HW ODF : same path and file name, only the extension is changed
-                    GO_ODF_file_name = HW_ODF_file_name_str.replace('.Organ_Hauptwerk_xml', '.organ')
+                    if file_extension_str == '.xml':
+                        if '.Organ.Hauptwerk.xml' in HW_ODF_file_name_str:
+                            GO_ODF_file_name = HW_ODF_file_name_str.replace('.Organ.Hauptwerk.xml', '.organ')
+                        else:
+                            GO_ODF_file_name = HW_ODF_file_name_str.replace('.xml', '.organ')
+                    else:
+                        GO_ODF_file_name = HW_ODF_file_name_str.replace('.Organ_Hauptwerk_xml', '.organ')
 
                     # legal message displayed to the user before to start the ODF building
-##                    confirm = messagebox.askokcancel(title="Hauptwerk ODF conversion to GrandOrgue format", message=HW_CONV_MSG)
-                    confirm = True
-                    if confirm:  # answer is yes
+                    if not self.hw2go_warning_displayed and not DEV_MODE:
+                        self.hw2go_warning_displayed = True
+                        confirm = messagebox.askokcancel(title="Hauptwerk ODF conversion to GrandOrgue format", message=HW_CONV_MSG)
+                    else:
+                        confirm = True
+                    if confirm:
                         if self.odf_conv.GO_ODF_build_from_HW_ODF(HW_ODF_file_name_str, GO_ODF_file_name, self.progress_status_update):
                             # the GO ODF building has succeeded
-                            if DISP_HW_OBJECTS_TREE:
-                                # display the HW objects notebook tab and list inside this tab
-                                self.notebook.add(self.frm_hw_browser)
-                                self.objects_list_do_update_hw()
+                            # display the HW objects notebook tab and list inside this tab
+                            self.notebook.add(self.frm_hw_browser)
+                            self.objects_list_do_update_hw()
                             # the built GO ODF will be then loaded
                             file_name_str = GO_ODF_file_name
                         else:
                             self.odf_conv.events_log_add('ERROR : something went wrong while converting the Hauptwerk ODF in a GrandOrgue ODF')
+                            file_name_str = ''
                         self.events_log_text_display()
 
                 if file_name_str != '':
@@ -5787,8 +5778,16 @@ class C_GUI():
 
         # update the objects list widgets
         self.lst_objects_list.delete(0, END)
+        organ_name = None
         for dict_key, dict_value in self.odf_data.odf_objects_dic.items():
-            self.lst_objects_list.insert(END, dict_key + " (" + dict_value[IDX_OBJ_NAME] + ")")
+            if not dict_key == 'Organ':
+                self.lst_objects_list.insert(END, dict_key + " (" + dict_value[IDX_OBJ_NAME] + ")")
+            else:
+                organ_name = dict_value[IDX_OBJ_NAME]
+
+        # place the Organ object in first position of the list
+        if organ_name != None:
+            self.lst_objects_list.insert(0, 'Organ' + " (" + organ_name + ")")
 
     #-------------------------------------------------------------------------------------------------
     def objects_list_do_update_hw(self, event=0):
@@ -6048,24 +6047,31 @@ class C_GUI():
     def object_text_do_parents_update(self):
         #--- update the parents list label
 
+        self.lab_parents_list.configure(state='normal')
+        self.lab_parents_list.delete(1.0, "end")
+
         self.lab_parents_list['foreground'] = 'black'
         if self.selected_object_UID in ('', 'Header') or self.selected_object_type == 'HW':
             # no object ID selected or header selected : none parent to display
-            self.lab_parents_list.config(text='')
+            pass
         else:
             try:
                 # recover the number of parents for the selected object ID
                 nb_parents = len(self.odf_data.odf_objects_dic[self.selected_object_UID][IDX_OBJ_PAR])
             except:
                 # object not found in the dictionnary
-                self.lab_parents_list.config(text="Undefined object")
+                self.lab_parents_list.insert(1.0, "Undefined object")
             else:
                 if nb_parents == 0:
-                    self.lab_parents_list.config(text="")
+                    pass
                 elif nb_parents == 1:
-                    self.lab_parents_list.config(text=f"{self.selected_object_UID} has 1 parent object : {' '.join(self.odf_data.odf_objects_dic[self.selected_object_UID][IDX_OBJ_PAR])}")
+                    self.lab_parents_list.insert(1.0, f"1 parent : {' '.join(self.odf_data.odf_objects_dic[self.selected_object_UID][IDX_OBJ_PAR])}")
+##                    self.lab_parents_list.insert(1.0, f"{self.selected_object_UID} has 1 parent object : {' '.join(self.odf_data.odf_objects_dic[self.selected_object_UID][IDX_OBJ_PAR])}")
                 elif nb_parents >= 1:
-                    self.lab_parents_list.config(text=f"{self.selected_object_UID} has {nb_parents} parent objects : {' '.join(self.odf_data.odf_objects_dic[self.selected_object_UID][IDX_OBJ_PAR])}")
+                    self.lab_parents_list.insert(1.0, f"{nb_parents} parents : {' '.join(self.odf_data.odf_objects_dic[self.selected_object_UID][IDX_OBJ_PAR])}")
+##                    self.lab_parents_list.insert(1.0, f"{self.selected_object_UID} has {nb_parents} parent objects : {' '.join(self.odf_data.odf_objects_dic[self.selected_object_UID][IDX_OBJ_PAR])}")
+
+        self.lab_parents_list.configure(state='disabled')
 
     #-------------------------------------------------------------------------------------------------
     def object_text_changed(self, event):
@@ -6295,13 +6301,6 @@ class C_GUI():
 
         return False
 
-##        # copy in the widget the help text
-##        self.txt_help.insert(1.0, HELP_TEXT)
-##        # apply the ODF syntax highlighting
-##        self.odf_syntax_highlight(self.txt_help)
-##        # disable the text box to not permit its editing
-##        self.txt_help.configure(state='disabled')
-
     #-------------------------------------------------------------------------------------------------
     def help_selected_object(self):
         #--- (GUI event callback) the user has clicked on the button "Show in help"
@@ -6501,10 +6500,13 @@ class C_GUI():
         #--- callback function called by the C_ODF.check_odf_lines or C_HW2GO.GO_ODF_build_from_HW_ODF function
         #--- to display in the parents label widget a progress status message
 
-        self.lab_parents_list.config(text=message)
+        self.lab_parents_list.configure(state='normal')
+        self.lab_parents_list.delete(1.0, "end")
+        self.lab_parents_list.insert(1.0, message)
         self.lab_parents_list['foreground'] = 'red3'
+        self.lab_parents_list.configure(state='disabled')
         self.lab_parents_list.update()
-##        self.lab_parents_list.update_idletasks()
+        self.lab_parents_list.update_idletasks()
 
 #-------------------------------------------------------------------------------------------------
 class CreateToolTip(object):
