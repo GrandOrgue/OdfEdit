@@ -4,6 +4,7 @@ It can be run either directly with the Python file (OdfEdit.py and other files o
 
 Way to run directly the script file :
 - install Python 3.x on your computer
+- install the Python libraries pillow and lxml
 - copy the content of the src folder in a local folder of your computer
 - in the local src folder run the command : python3 OdfEdit.py
 
