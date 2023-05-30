@@ -19,7 +19,8 @@
  "d":"CapturedSwitchID",
  "e":"InitialStoredStateIsEngaged",
  "f":"InvertStoredStateWhenActivating",
- "g":"MemorySwitchID",
+ "g":"GenerateMemorySwitch",
+ "h":"MemorySwitchID",
  },
 "ContinuousControl":
  {
@@ -575,13 +576,17 @@
  "d":"PitchAndFundamentalWaveformSampleID",
  "e":"ThirdHarmonicWaveformSampleID",
  "f":"LoopCrossfadeLengthInSrcSampleMs",
- "g":"PitchOutputContinuousControlID",
+ "g":"SendPitchOutputToAContinuousControl",
+ "h":"PitchOutputContinuousControlID",
  },
 "TremulantWaveformPipe":
  {
  "IDattr":"",
- "a":"Index",
- "b":"PipeID",
+ "a":"PipeID",
+ "b":"TremulantWaveformID", 
+ "c":"AmplitudeModDepthAdjustDecibels",
+ "d":"PitchModDepthAdjustPercent",
+ "e":"HarmonicShapingFilterModDepthAdjustDecibelsAtThirdHarmonic"
  },
 "WindCompartment":
  {

@@ -1,25 +1,33 @@
 >> General information
 This tool is intended to help in editing and checking a GrandOrgue organ definition file (ODF, extension .organ) in plain text mode, with the help of objects browsers (sorted list or tree).
 To completely check the goodness of an ODF, loading it in GrandOrgue will detect deeply all the remaining errors if any.
-Right-click on the object edition text or logs text areas to open a contextual menu permitting to clear all the text in the area.
+Double clicking on a parent or child object name in the list located above the center object edition area will select this object in the objects list and tree on the left side.
 The help below is largely inspired and copy/pasted from the GrandOrgue help.
 
-An ODF is a text file in ISO-8859-1 encoding. The standard extension is .organ. As an alternative, the file might be encoded in UTF-8 if it starts with the appropriate byte order marker.
+Details about the menu items :
+- Save ODF in ISO-8859-1 format (else UTF-8) : if checked, the ODF saving is made with ISO-8859-1 encoding, else with UTF-8-COM.
+- Auto expand objects tree on object selection : if checked, when an object is selected, the objects tree is automatically expanded to make visible all the occurrences of this object.
+- HW to GO : convert wave based tremulants : if checked, the wave based tremulants of the HW ODF are converted in the GO ODF. When unchecked, it permits to avoid RAM consumption increase by GrandOrgue to load the ranks containing the tremulant samples.
+- HW to GO : convert unused ranks : if checked, the ranks of the HW ODF which are not used by the stops of the built GO ODF are converted all the same in the GO ODF (can be then linked manually to stops).
+
+An ODF is a text file in ISO-8859-1 encoding. The standard extension is .organ. As an alternative, the file can be encoded in UTF-8 if it starts with the appropriate byte order marker.
 It is composed of several object sections, each one being organized like this :
-[Object ID]
-; comment line anywhere
-attribute1=value1
+[Object ID]  ; comment
+; comment line anywhere in the section
+attribute1=value1  ; comment
 attribute2=value2
 
-Comment lines are started with ; in the first column.
 Empty lines are ignored.
 The text is case sensitive for object ID and attributes.
 Each object ID (also called section name) must occur once in the ODF.
 Each attribute (also called setting) must occur once in his object section.
 
+>> IT IS HIGHLY RECOMMANDED TO MAKE CHANGES IN A COPY OF THE ORIGINAL ODF.
+
 >> Hauptwerk sample sets
-This tool permits as well to open the ODF of a Hauptwerk sample set (not encrypted, not dongle protected, located in the folder OrganDefinitions of the sample set package, extension .Organ_Hauptwerk_xml or .xml) and generate from it a GrandOrgue ODF permitting to play this sample set with GrandOrgue (GO ODF located in the same folder as the HW ODF). None file of the Hauptwerk sample set is modified.
-A Hauptwerk ODF having more numerous and complex settings than a GrandOrgue ODF, the organ played with GrandOrgue will not have necessarily the same sound quality and control possibilities as it has with Hauptwerk.
+This tool permits as well to open the ODF of a Hauptwerk sample set (not encrypted, not dongle protected, located in the folder OrganDefinitions of the sample set package, extension .Organ_Hauptwerk_xml or .xml) and to generate from it a GrandOrgue ODF permitting to play this sample set with GrandOrgue (GO ODF located in the same folder as the HW ODF). None file of the Hauptwerk sample set is modified.
+A Hauptwerk ODF having more numerous and complex settings than a GrandOrgue ODF, the organ played with GrandOrgue will not have necessarily the same sound quality and control possibilities as it can have with Hauptwerk.
+The generated GO ODF does not permit to apply a different temperament than the native one of the organ.
 
 Please do this operation only with a free Hauptwerk sample set or a not-free sample set that you have duly paid for, and if the editor of this sample set does not preclude its use outside Hauptwerk.
 
@@ -179,13 +187,13 @@ ChurchAddress=(string, required) informational text displayed in the property di
 HasPedals=(boolean, required) Determines if the pedal, which is defined as section Manual000, is present.
 
 NumberOfDivisionalCouplers=(integer 0-8, required) number of divisional couplers. The details are in a section called DivisionalCoupler999.
-NumberOfEnclosures=(integer 0-50, required) number of enclosures. The details of each enclosure are contained in a section called Enclosure999.
+NumberOfEnclosures=(integer 0-999, required) number of enclosures. The details of each enclosure are contained in a section called Enclosure999.
 NumberOfGenerals=(integer 0-99, required) number of generals. The details are in a section called General999.
-NumberOfManuals=(integer 1-16, required) number of manuals. It does not include the pedal keyboard. The manual information for each manual is available in sections called Manual999. 999 is a number defining each manual, starting with 001.
+NumberOfManuals=(integer 1-99, required) number of manuals. It does not include the pedal keyboard. The manual information for each manual is available in sections called Manual999. 999 is a number defining each manual, starting with 001.
 NumberOfPanels=(integer 0-100, required) number of panels in addition to the  main panel. The details are in a section called Panel999.
 NumberOfReversiblePistons=(integer 0-32, required) number of reversible pistons. The details of each reversible piston are in a section called ReversiblePiston999.
 NumberOfTremulants=(integer 0-10, required) number of tremulants. The details of each tremulant are contained in a section called Tremulant999.
-NumberOfWindchestGroups=(integer 1-50, required) number of windchests. The details of each windchest are in a section called WindchestGroup999.
+NumberOfWindchestGroups=(integer 1-999, required) number of windchests. The details of each windchest are in a section called WindchestGroup999.
 
 DivisionalsStoreIntermanualCouplers=(boolean, required) determines if divisionals store/change the state of associated intermanual couplers.
 DivisionalsStoreIntramanualCouplers=(boolean, required) determines if divisionals store/change the state of associated intramanual couplers.
@@ -437,7 +445,7 @@ DispSpanDrawstopColToRight=(boolean, required if FreeXPlacement is false) If tru
 DispLabelColour=(color, default: black) Color for the label text.
 DispLabelFontSize=(font size, default: normal) Size of the label font.
 DispLabelFontName=(string, default: empty) Font for the text. Empty means use the group label font of the panel.
-DispImageNum=(integer 1-12, default: 1) Builtin bitmap set to use (see image below).
+DispImageNum=(integer 0-12, default: 1) Builtin bitmap set to use (see image below). 0 means no background image.
 §§ImageNumLabel.png
 
 Image=(string, default: use internal bitmap according to DispImageNum) Specify the file name of an image to use as bitmap. If the bitmap contains a mask for transparency, it will be used.
@@ -499,7 +507,7 @@ MaskOn_KEYTYPE=(string, default: empty string) Mask for the corresponding On bit
 MaskOff_KEYTYPE=(string, default: corresponding on mask) Mask for the corresponding Off bitmap. If empty, no external mask is loaded.
 Width_KEYTYPE=(integer 0 - 500, default: implementation dependent) This value is added to the x position of the current key to determine the position of the next key.
 Offset_KEYTYPE=(integer -500 - 500, default: implementation dependent) This value can be used to adjust the display of the current key, eg. to place a sharp key overlapped with the previous key.
-YOffset_KEYTYPE=(integer 0 - 500, default: 0) This value can be used to adjust the Y coordinate of the current key.
+YOffset_KEYTYPE=(integer -500 - 500, default: 0) This value can be used to adjust the Y coordinate of the current key.
 
 Key999ImageOn=(string, default: corresponding ImageOn_KEYTYPE) Allows to set the on bitmap for the 999 key.
 Key999ImageOff=(string, default: corresponding ImageOff_KEYTYPE) Allows to set the off bitmap for the 999 key.
@@ -507,7 +515,7 @@ Key999MaskOn=(string, default: corresponding MaskOn_KEYTYPE) Allows to set the o
 Key999MaskOff=(string, default: corresponding MaskOff_KEYTYPE) Allows to set the off mask for the 999 key.
 Key999Width=(integer 0 - 500, default: corresponding Width_KEYTYPE) Allows to set the width of the 999 key.
 Key999Offset=(integer -500 - 500, default: corresponding Offset_KEYTYPE) This value is can be used to adjust the display of the 999 key, eg. to place a sharp key overlapped with the previous 999 key.
-Key999YOffset=(integer 0 - 500, default: corresponding YOffset_KEYTYPE) This value is can be used to adjust the Y coordinate of the 999 key.
+Key999YOffset=(integer -500 - 500, default: corresponding YOffset_KEYTYPE) This value is can be used to adjust the Y coordinate of the 999 key.
 Key999MouseRectLeft=(integer 0 - key bitmap width - 1 , default: 0) relative X of left border of the mouse rectangle.
 Key999MouseRectTop=(integer 0 - key bitmap height - 1, default: 0) relative Y of top border of the mouse rectangle.
 Key999MouseRectWidth=(integer 0 - key bitmap width, default: key bitmap width) width of the mouse rectangle.
@@ -515,6 +523,7 @@ Key999MouseRectHeight=(integer 0 - key bitmap height, default: key bitmap height
 
 DispKeyColourInverted=(boolean, default: false) True means, the black keys are drawn in a light color while the white keys are drawn in a dark color.
 DispKeyColourWooden=(boolean, default: false) True means, that a wood background is used for the keys.
+DispImageNum=(integer 1 - 2, default: 1) determines which set of builtin bitmaps is used for displaying the keys.  
 DisplayFirstNote=(integer 0 - 127, default: FirstAccessibleKeyMIDINoteNumber) Display the first key as the following note.
 
 DisplayKeys=(integer 1 - NumberOfAccessibleKeys, default: NumberOfAccessibleKeys) number of keys to display.
