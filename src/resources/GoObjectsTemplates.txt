@@ -300,8 +300,6 @@
    (
     "Name=WindchestGroup template",
     "NumberOfEnclosures=0",
-    "Enclosure001=",
     "NumberOfTremulants=0",
-    "Tremulant001=",
    ),
 }
