@@ -90,25 +90,26 @@
                           HW2GO : unused HW noise ranks are converted to GO ranks if the convertion option is enabled in the menu
                           HW2GO : add in a switch or setter the text of a label which is overlapping it
                           HW2GO : rework of the way to calculate the rank related attributes in the Stop object (pipes stop)
-                          HX2GO : update the organ / pipes pitch tuning calculation
+                          HW2GO : update the organ / pipes pitch tuning calculation
                           HW2GO : manage the case where there are more than 99 stops in a manual
                           HW2GO : manage the case where one enclosure is controlled from several panel element objects
                           HW2GO : add the Loop/ReleaseCrossfadeLength attributes conversion in the ranks (clipped to GO max values waiting for GO 3.13.0)
                           HW2GO : use TextBreakWidth=0 instead of DispLabelText= to have no text displayed in a button or enclosure
                           several minor improvements and bugs fixing
+   v2.6 - 13 Oct. 2023  - added a Viewer tab to view or play the selected file in the editor
+                          HW2GO : Loop/ReleaseCrossfadeLength maximum value set at 3000 (needs GO 3.13.0-1)
 
-Changes TO DO :
+TO DO :
     add a manual compass extension feature
-    add a tab "viewer" to display the image or play the wav file of the line where is placed the cursor in the object attributes editor
-    add in manual sections the reference to the associated switches which have to be stored in the divisionals
-    HW2GO : manage the keyboard noises conversion
-    drag&drop of a stop over another stop of the same manual to sort the stops manually
-
+    HW2GO : add in manual sections the reference to the associated switches which have to be stored in the divisionals (see https://github.com/GrandOrgue/OdfEdit/issues/30)
+    HW2GO : manage the keyboard noises conversion (see https://github.com/GrandOrgue/ODFEdit/discussions/23#discussioncomment-6133018)
+    HW2GO : place the wav tremmed samples in the same rank as the not tremmed samples (see https://github.com/GrandOrgue/OdfEdit/issues/33)
+    drag&drop of a stop over another stop of the same manual to sort the stops manually (see https://github.com/GrandOrgue/OdfEdit/issues/28)
 -------------------------------------------------------------------------------
 """
 
-APP_VERSION = 'v2.5'
-RELEASE_DATE = 'August 26th 2023'
+APP_VERSION = 'v2.6'
+RELEASE_DATE = 'October 13th 2023'
 
 DEV_MODE = False
 LOG_HW2GO_drawstop = False
@@ -117,6 +118,7 @@ LOG_HW2GO_tremulant = False
 LOG_HW2GO_ctrl_switch = False
 LOG_HW2GO_stop_rank = False
 LOG_HW2GO_windchest = False
+LOG_wav_decode = False
 
 MAIN_WINDOW_TITLE = 'OdfEdit - ' + APP_VERSION + (' - DEV MODE' if DEV_MODE else '')
 
@@ -124,6 +126,7 @@ import os
 import re
 import shutil
 import math
+import struct
 import inspect
 
 from tkinter import *
@@ -132,8 +135,9 @@ from tkinter import simpledialog as sd
 from tkinter import messagebox, ttk
 import tkinter.font as tkf
 
-from PIL import Image   # install with : pip install pillow
-from lxml import etree  # install with : pip install lxml
+from audioplayer import AudioPlayer        # install with : pip install audioplayer
+from PIL import Image, ImageOps, ImageTk   # install with : pip install pillow (+ sudo apt-get install python3-pil python3-pil.imagetk)
+from lxml import etree                     # install with : pip install lxml
 
 
 # warning message displayed before to start a HW to GO ODF conversion
@@ -379,7 +383,7 @@ class C_ODF_DATA_CHECK:
 
         error_msg = attr_name = attr_value = comment = None
 
-        if len(line) > 0: # not an empty line
+        if line != None and len(line) > 0: # not an empty line
             if line[0] == "[":
                 # line with an object UID inside normally
                 pos = line.find(']', 1)
@@ -1535,8 +1539,8 @@ class C_ODF_DATA_CHECK:
                         self.check_attribute_value(object_uid, lines_list, f'Pipe{str(idx).zfill(3)}Release{str(idx1).zfill(3)}CuePoint', ATTR_TYPE_INTEGER, False, -1, 158760000)
                         self.check_attribute_value(object_uid, lines_list, f'Pipe{str(idx).zfill(3)}Release{str(idx1).zfill(3)}ReleaseEnd', ATTR_TYPE_INTEGER, False, -1, 158760000)
 
-                self.check_attribute_value(object_uid, lines_list, f'Pipe{str(idx).zfill(3)}LoopCrossfadeLength', ATTR_TYPE_INTEGER, False, 0, 120)
-                self.check_attribute_value(object_uid, lines_list, f'Pipe{str(idx).zfill(3)}ReleaseCrossfadeLength', ATTR_TYPE_INTEGER, False, 0, 200)
+                self.check_attribute_value(object_uid, lines_list, f'Pipe{str(idx).zfill(3)}LoopCrossfadeLength', ATTR_TYPE_INTEGER, False, 0, 3000)
+                self.check_attribute_value(object_uid, lines_list, f'Pipe{str(idx).zfill(3)}ReleaseCrossfadeLength', ATTR_TYPE_INTEGER, False, 0, 3000)
 
     #-------------------------------------------------------------------------------------------------
     def check_object_ReversiblePiston(self, object_uid, lines_list):
@@ -3494,7 +3498,7 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
                         if object_type == 'General':
                             if ref_object_type[-6:] == 'Number'  : ref_object_type = ref_object_type[:-6]  # remove the string 'Number'
                             elif ref_object_type[-6:] == 'Manual': ref_object_type = None
-                        if ref_object_type not in ('MIDIKey', 'DisplayKey'):
+                        if ref_object_type not in (None, 'MIDIKey', 'DisplayKey'):
                             ref_object_uid = ref_object_type + str(abs(int(attr_value))).zfill(3)
                             self.object_kinship_list_add(object_uid, ref_object_uid, TO_CHILD)
 
@@ -7347,7 +7351,7 @@ class C_ODF_HW2GO():
                             # write the loop cross fade length a single time for the current pipe
                             pipe_loop_cross_fade_length = myint(self.HW_ODF_get_attribute_value(HW_pipe_attack_sample_dic, 'LoopCrossfadeLengthInSrcSampleMs'))
                             if pipe_loop_cross_fade_length not in (None, 0):
-                                pipe_loop_cross_fade_length = min(pipe_loop_cross_fade_length, 120)
+                                pipe_loop_cross_fade_length = min(pipe_loop_cross_fade_length, 3000)
                                 GO_rank_dic[GO_pipe_id + 'LoopCrossfadeLength'] = pipe_loop_cross_fade_length
 
                         # get the dictionary of the first Sample child object of the current Pipe_SoundEngine01_AttackSample object
@@ -7382,7 +7386,7 @@ class C_ODF_HW2GO():
                                 # write the release cross fade length a single time for the current pipe
                                 pipe_release_cross_fade_length = myint(self.HW_ODF_get_attribute_value(HW_pipe_release_sample_dic, 'ReleaseCrossfadeLengthMs'))
                                 if pipe_release_cross_fade_length not in (None, 0):
-                                    pipe_release_cross_fade_length = min(pipe_release_cross_fade_length, 200)
+                                    pipe_release_cross_fade_length = min(pipe_release_cross_fade_length, 3000)
                                     GO_rank_dic[GO_pipe_id + 'ReleaseCrossfadeLength'] = pipe_release_cross_fade_length
 
                             # get the dictionary of the first Sample child object of the current Pipe_SoundEngine01_ReleaseSample object
@@ -7676,6 +7680,14 @@ class C_ODF_HW2GO():
 class C_GUI_NOTEBOOK():
     # class to manage the graphical user interface of the application for the notebook area
 
+
+    # variables used for the file viewer tab
+    viewer_file_name = None
+    viewer_curr_image = None
+    viewer_orig_image = None
+    viewer_zoom_factor = 1
+    viewer_audio_player = None
+
     #-----------------------------------------------------------------------------------------------
     def wnd_notebook_build(self, wnd_parent):
         # build the notebook and its internal GUI widgets inside the given parent widget
@@ -7791,6 +7803,20 @@ class C_GUI_NOTEBOOK():
         self.lst_odf_sresults.config(yscrollcommand=scrollbarv.set)
         scrollbarv.config(command=self.lst_odf_sresults.yview)
 
+        # viewer to show image or play wav file or show panel content
+        self.frm_viewer = Frame(self.notebook)
+        self.frm_viewer.pack(fill='both', expand=True)
+        self.view_label = Text(self.frm_viewer, fg="black", bd=0, wrap=WORD, font='Calibri 11', selectbackground="grey", state='disabled')
+
+        self.view_label.pack(side='top', padx=5, pady=5, fill='x')
+        self.view_canvas = Canvas(self.frm_viewer)
+        self.view_canvas.pack(side='top', fill='both', expand=True)
+        self.view_canvas.bind("<MouseWheel>", self.viewer_image_update)  # for Windows
+        self.view_canvas.bind("<Button-4>", self.viewer_image_update)    # MouseWheel up in Linux
+        self.view_canvas.bind("<Button-5>", self.viewer_image_update)    # MouseWheel down in Linux
+        self.view_canvas.bind('<ButtonPress-1>', lambda event: self.view_canvas.scan_mark(event.x, event.y))
+        self.view_canvas.bind("<B1-Motion>", lambda event: self.view_canvas.scan_dragto(event.x, event.y, gain=1))
+
         # list to navigate inside the Hauptwerk objects in the ODF, with vertical scroll bar
         # a main frame is used to encapsulate two other frames, one for the search widgets, one for the list box and his vertical scroll bar
         self.frm_hw_browser = Frame(self.notebook)
@@ -7818,8 +7844,12 @@ class C_GUI_NOTEBOOK():
         self.notebook.add(self.frm_logs, text="    Logs    ")
         self.notebook.add(self.frm_help, text="    Help    ")
         self.notebook.add(self.frm_search, text="    Search/replace    ")
+        self.notebook.add(self.frm_viewer, text="    Viewer    ")
         self.notebook.add(self.frm_hw_browser, text="    HW objects    ")
-        self.notebook.hide(self.frm_hw_browser)  # will be visible only if a Hauptwerk ODF is opened
+        self.notebook.hide(self.frm_hw_browser)  # will be visible only if a Hauptwerk ODF is loaded
+
+        # to initialize the content of the viewer
+        self.viewer_file_show(None)
 
     #-------------------------------------------------------------------------------------------------
     def gui_status_update_notebook(self):
@@ -8205,7 +8235,7 @@ class C_GUI_NOTEBOOK():
         # get the selected indice
         selected_indice = self.lst_odf_sresults.curselection()
 
-        if self.can_i_make_change(object_change_bool=True) and not self.lst_odf_sresults.get(selected_indice[0]).startswith('Nothing'):
+        if self.can_i_make_change(object_change_bool=True) and selected_indice != None and not self.lst_odf_sresults.get(selected_indice[0]).startswith('Nothing'):
             # the user has saved his modifications if he wanted and has not canceled the operation
             self.selected_object_uid = self.lst_odf_sresults.get(selected_indice[0]).split(' ')[0]
             self.selected_linked_uid = None
@@ -8236,6 +8266,149 @@ class C_GUI_NOTEBOOK():
             # update the status of GUI widgets
             self.gui_status_update_buttons()
             self.gui_status_update_lists()
+
+    #-------------------------------------------------------------------------------------------------
+    def viewer_file_show(self, line):
+        # shows in the viewer tab the file defined in the given object line if any and if valid
+
+        label_text = 'Click in the text editor on a line where is defined a bitmap or wav sample file'
+        file_type = None
+        file_name = None
+
+        if line != None:
+            # recover the content of the given line
+            (error_msg, attr_name, attr_value, comment) = self.odf_data.object_line_split(line)
+            if error_msg == None and attr_value != None and len(attr_value) > 0:
+                # the line has been split with success
+                if ('Image' in attr_name or 'Mask' in attr_name or 'Bitmap' in attr_name) and attr_value.upper()[-4:] in ('.BMP', '.GIF', '.JPG', '.ICO', '.PNG'):
+                    file_type = 'image'
+                    file_name = attr_value
+                elif 'Pipe' in attr_name and attr_value.upper()[-4:] == '.WAV':
+                    file_type = 'sample'
+                    file_name = attr_value
+
+            if file_name != None:
+                # a file name with expected extension has been extracted from the given line
+                file_full_path = os.path.dirname(self.odf_data.odf_file_name) + os.sep + path2ospath(file_name)
+                if not os.path.isfile(file_full_path):
+                    # the file does not actually exist
+                    label_text = f'The file {file_full_path} does not exist'
+                    file_type = None
+                    file_name = None
+
+        if file_type == 'image':
+            if self.viewer_file_name != file_name:
+                # open the new image
+                self.viewer_orig_image = Image.open(file_full_path)
+                self.viewer_file_name = file_name
+                # reset the canvas view position
+                self.view_canvas.xview(MOVETO, 0)
+                self.view_canvas.yview(MOVETO, 0)
+                # display the image (and the label text)
+                self.viewer_image_update()
+            label_text = None
+        else:
+            # clear the canvas content
+            self.view_canvas.delete('all')
+            self.viewer_orig_image = None
+
+        if file_type == 'sample':
+            if self.viewer_file_name == file_name:
+                # same sample file as currently in the viewer, stop its playback
+                self.viewer_audio_player.stop()
+            else:
+                self.viewer_file_name = attr_value
+                # start the playback of the sample
+                self.viewer_audio_player = AudioPlayer(file_full_path)
+                self.viewer_audio_player.play(block=False)
+            # display information about the wave file
+            metadata_dic = wav_metadata_get(file_full_path)
+            label_text = self.viewer_file_name + '\n'
+            if metadata_dic['error_msg'] != '':
+                label_text += f"ERROR : {metadata_dic['error_msg']}"
+            else:
+                label_text += "Mono" if metadata_dic['nb_of_channels'] == 1 else "Stereo"
+                label_text += f", sampling {metadata_dic['sampling_rate']/1000 :0.1f}kHz"
+                label_text += f", resolution {metadata_dic['bits_per_sample']} bits"
+                label_text += f", duration {metadata_dic['audio_duration']} sec ({metadata_dic['nb_of_samples']} samples)"
+                label_text += '\n'
+                if 'midi_note' in metadata_dic.keys():
+                    label_text += f"MIDI note {metadata_dic['midi_note']}"
+                    label_text += f", pitch {metadata_dic['midi_pitch']}"
+                    label_text += '\n'
+                if 'info' in metadata_dic.keys():
+                    for key, value in metadata_dic['info'].items():
+                        if key == 'IART':
+                            label_text += f"Artist : {value}\n"
+                        elif key == 'ICOP':
+                            label_text += f"Copyright : {value}\n"
+                        elif key == 'ISFT':
+                            label_text += f"Software used : {value}\n"
+                        elif key == 'ICMT':
+                            label_text += f"Comments : {value}\n"
+                        elif key == 'ICRD':
+                            label_text += f"Date : {value}\n"
+                        else:
+                            label_text += f"{key} - {value}\n"
+                if 'loops_nb' in metadata_dic.keys():
+                    for l in range(1, metadata_dic['loops_nb']+1):
+                        label_text += f"Loop {l} : start sample {metadata_dic['loop'+str(l)+'_start_sample']} ({metadata_dic['loop'+str(l)+'_start_seconds']} sec), end sample {metadata_dic['loop'+str(l)+'_end_sample']} ({metadata_dic['loop'+str(l)+'_end_seconds']} sec)\n"
+                if 'cue_points_nb' in metadata_dic.keys():
+                    for l in range(1, metadata_dic['cue_points_nb']+1):
+                        label_text += f"Cue point {l} : ID {metadata_dic['cue'+str(l)+'_id']}, located in a {metadata_dic['cue'+str(l)+'_chunk_id']} chunk, data chunk start {metadata_dic['cue'+str(l)+'_chunk_start']}, block start at {metadata_dic['cue'+str(l)+'_block_start']} bytes, sample start at {metadata_dic['cue'+str(l)+'_sample_start']} bytes\n"
+        else:
+            # if a sample playback is in progress, force it to stop
+            if self.viewer_audio_player != None:
+                self.viewer_audio_player.stop()
+
+        if file_name == None:
+            self.viewer_file_name = None
+
+        if label_text != None:
+            # update the label text
+            self.view_label.configure(state='normal')
+            self.view_label.delete(1.0, "end")
+            self.view_label.insert(1.0, label_text)
+            self.view_label.config(height=label_text.count('\n') + 1)
+            self.view_label.configure(state='disabled')
+
+    #-------------------------------------------------------------------------------------------------
+    def viewer_image_update(self, event=None):
+        # (GUI event callback) the user has turned the mouse wheel inside the viewer canvas or the image has to be displayed/updated
+
+        if self.viewer_orig_image == None:
+            return
+
+        # update the viewer zoom factor according to the direction of the wheel movement
+        if event != None:
+            if event.num == 4 or event.delta > 0:
+                # mouse wheel rotation up in Linux or Windows
+                self.viewer_zoom_factor = min(6, self.viewer_zoom_factor + 0.1)
+            else:
+                self.viewer_zoom_factor = max(0.2, self.viewer_zoom_factor - 0.1)
+
+        # scale the image
+        self.viewer_curr_image = ImageTk.PhotoImage(ImageOps.scale(self.viewer_orig_image, self.viewer_zoom_factor))
+
+        # update the canvas
+        self.view_canvas.delete('all')
+        self.view_canvas.create_image(10, 10, anchor=NW, image=self.viewer_curr_image)
+
+        # update the label text with the image name / size / zoom
+        label_text = f'{self.viewer_file_name}\nImage size {self.viewer_orig_image.size[0]} x {self.viewer_orig_image.size[1]},  zoom x{self.viewer_zoom_factor:0.1f}  (use mouse drag/wheel to move/zoom image)'
+        self.view_label.configure(state='normal')
+        self.view_label.delete(1.0, "end")
+        self.view_label.insert(1.0, label_text)
+        self.view_label.config(height=label_text.count('\n') + 1)
+        self.view_label.configure(state='disabled')
+
+    #-------------------------------------------------------------------------------------------------
+    def viewer_sample_stop(self):
+        # stop the sample file playback in progress
+
+        if self.viewer_audio_player != None:
+            self.viewer_audio_player.stop()
+            self.viewer_audio_player.close()
 
     #-------------------------------------------------------------------------------------------------
     def objects_list_update_hw(self, event=0):
@@ -8755,6 +8928,9 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.app_data_save()
             # destroy the main window
             self.wnd_main.destroy()
+
+        # stop an eventual audio sample playback in progress in the viewer
+        self.viewer_sample_stop()
 
     #-------------------------------------------------------------------------------------------------
     def wnd_main_key_ctrl_s(self, event):
@@ -9709,8 +9885,9 @@ class C_GUI(C_GUI_NOTEBOOK):
         # to block the GUI events triggered by the text box content change
         self.gui_events_block()
 
-        # erase the content of the text box
+        # erase the content of the text box and the viewer
         self.txt_object_text.delete(1.0, "end")
+        self.viewer_file_show(None)
 
         # choose which object lines to display in the text box
         object_lines_list = []
@@ -9753,6 +9930,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         cursor_pos = self.txt_object_text.index('insert')
 
         line = self.txt_object_text.get(cursor_pos + ' linestart', cursor_pos + ' lineend')
+        self.viewer_file_show(line)
 
 ##        print(cursor_pos + '  ' + line)
 
@@ -10185,7 +10363,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.logs_display()
 
     #-------------------------------------------------------------------------------------------------
-    images_ref=[]  # list needed to keep in memory the reference to the images opened by PhotoImage and added in the text box, else they are not displayed (Python bug ?)
+    images_ref=[]  # list needed to keep in memory the reference to the images opened by PhotoImage and added in the text box (to prevent them being garbage collected)
 
     def odf_syntax_highlight(self, txt_widget):
         # apply syntax highlighting to the content of the given object text box widget
@@ -10350,6 +10528,287 @@ def frequency_to_midi_number(frequency: float, a4_frequency: float) -> int:
 def delta_freq_to_cent(frequency1: float, frequency2: float) -> int:
     # return the number of cents (integer) between the two given frequencies (f1 compared to f2)
     return int(1200.0 * math.log2(frequency1 / frequency2))
+
+#-------------------------------------------------------------------------------------------------
+wavpack_sample_rates = (6000, 8000, 9600, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000, 64000, 88200, 96000, 192000)
+
+def wav_metadata_get(file_name):
+    # return in a dictionary the metadata of the given .wav file (wav or wavpack format)
+    # the provided keys are :
+    #   file_format : "wave" or "wavepack" or None if error
+    #   error_msg   : message describing an error occured during the file processing, empty string if no error
+    #   compression_code : 1='Microsoft PCM', 3='Microsoft IEEE float', several other...
+    #   nb_of_channels   : 1=mono, 2=stereo
+    #   sampling_rate    : for example 44100 (Hz)
+    #   bits_per_sample  : for example 16 (bits)
+    #   nb_of_samples    : number of audio samples
+    #   audio_data_size  : size in bytes of the audio sampled data
+    #   audio_duration   : the duration in seconds (with two decimals) of the sampled data
+    # keys present only if a sample chunk is defined in the file
+    #   midi_note        : MIDI note of the sample, between 0 and 127
+    #   midi_pitch       : integer value between 0 and 100
+    #   loops_nb                : number of defined loops
+    #   loop<n>_id              : ID of the loop n
+    #   loop<n>_type            : type of the loop n (0=normal forward looping, 1=alternating forward and backward, 2=backward looping)
+    #   loop<n>_start_sample    : number of the starting sample of the loop n
+    #   loop<n>_start_seconds   : seconds of the starting sample of the loop n (with two decimals)
+    #   loop<n>_end_sample      : number of the ending sample of the loop n
+    #   loop<n>_end_seconds     : seconds of the ending sample of the loop n (with two decimals)
+    #   loop<n>_replay_times_nb : number of times the loop has to be played (0=infinite)
+    # keys present only if a cue chunk is defined in the file
+    #   cue_points_nb           : number of defined cue points
+    #   cue<n>_id               : ID of the cue point n
+    #   cue<n>__chunk_id        : 'data' or 'slnt' whether the cue point is in a data or silent chunk
+    #   cue<n>_chunk_start      : position of the start of the data chunk that contains the cue point
+    #   cue<n>_block_start      : byte position of the cue in the "data" or "slnt" chunk
+    #   cue<n>_sample_start     : position of the cue in number of bytes from the start of the block
+    # keys present only if a LIST chunk is defined in the file
+    #   info                    : a dictionary containing as keys the info ID and as value the corresponding info text
+
+
+    file_format = None
+    metadata_dic = {}
+    metadata_dic['error_msg'] = ''
+
+    if not os.path.isfile(file_name):
+        # the provided file doesn't exist
+        metadata_dic['error_msg'] = f'The file "{file_name}" does not exist.'
+        return metadata_dic
+
+    # open the given file
+    file_obj = open(file_name, 'rb')
+
+    is_chunck_in_sub_block = False  # flag indicating if we are currently decoding wave chunks inside a wavepack sub-block
+
+    while file_obj.read(1) and metadata_dic['error_msg'] == '':
+        # scan the file while the end of file is not reached and no error has occured
+        file_obj.seek(-1, 1)   # move the file pointer one byte back to compensate the read(1) of the while instruction
+
+        # identification of the file format
+        if file_format == None:
+            # if the file format is unknown, get it from the ID in first 4 bytes of the file
+            file_type_str = file_obj.read(4)
+            file_obj.seek(-4, 1)
+            if file_type_str == b'wvpk':
+                file_format = 'wavepack'
+                if LOG_wav_decode: print(f'WavePack file')
+            elif file_type_str == b'RIFF':
+                file_format = 'wave'
+                if LOG_wav_decode: print(f'Wave file')
+            else:
+                metadata_dic['error_msg'] = f'Unsupported file format'
+
+
+        # firstly : identification of the block or chunk start on which is the file pointer, and get its size
+
+        if file_format == 'wavepack' and not is_chunck_in_sub_block:
+            # a WavePack block header or sub-block is supposed to start here
+
+            if file_obj.read(4) == b'wvpk':
+                # start of a WavePack block header
+                # get the block size (in bytes)
+                wvpk_block_size = int.from_bytes(file_obj.read(4), byteorder='little')
+                wvpk_sub_block_id = None  # it is a block header, not a sub-block
+                if LOG_wav_decode: print(f'"wvpk" block, size {wvpk_block_size} bytes')
+            else:
+                # it is not a block header, it should be a sub-block
+                file_obj.seek(-4, 1)
+                # reads the sub-block ID
+                wvpk_sub_block_id = int.from_bytes(file_obj.read(1), byteorder='little')
+                # read the size of the sub-block (in bytes)
+                if wvpk_sub_block_id & 0x80:
+                    # it is a large block, its size is encoded on 3 bytes
+                    wvpk_sub_block_size = int.from_bytes(file_obj.read(3), byteorder='little') * 2  # x2 to convert the size from words to bytes
+                else:
+                    wvpk_sub_block_size = int.from_bytes(file_obj.read(1), byteorder='little') * 2
+                if LOG_wav_decode: print(f'  "wvpk" sub-block ID {hex(wvpk_sub_block_id)}, size {wvpk_sub_block_size} bytes')
+
+                if wvpk_sub_block_id == 0x21:
+                    # a RIFF chunk is present in the data of this sub-block
+                    if LOG_wav_decode: print('     WavePack sub-block with RIFF chunk inside')
+                    is_chunck_in_sub_block = True
+                else:
+                    is_chunck_in_sub_block = False
+
+        if file_format == 'wave' or is_chunck_in_sub_block:
+            # a Wave chunk or sub-chunk is supposed to start here
+            # get the chunk or sub-chunk ID (a string of 4 characters)
+            chunk_id = file_obj.read(4).decode()
+            # read the size of the chunk or sub-chunk (in bytes)
+            wave_chunk_size = int.from_bytes(file_obj.read(4), byteorder='little')
+
+            if wave_chunk_size % 2:
+                # the chunk size has an odd number of bytes, a word padding byte is written after
+                # increment the chunk size by 1 to cover this padding byte
+                wave_chunk_size += 1
+
+            if LOG_wav_decode: print(f'  "{chunk_id}" chunk, size {wave_chunk_size} bytes')
+
+            if is_chunck_in_sub_block:
+                # the chunck is inside a WavePack sub-block
+                # reduce the remaining sub-block size by the size of the chunk
+                if chunk_id == 'RIFF':
+                    wvpk_sub_block_size -= 12 # the RIFF chunk has 12 bytes
+                elif chunk_id == 'data':
+                    wvpk_sub_block_size -= 8  # the data chunk has 8 bytes (ID and size fields, without data) when inside a wavpack sub-block
+                else:
+                    wvpk_sub_block_size -= (wave_chunk_size + 8)  # size of the sub-chunk + ID and size fields
+
+
+        # secondly : read the data in the current block / sub-block or chunk / sub-chunk
+
+        if file_format == 'wavepack' and wvpk_sub_block_id == None:
+            # WavePack block header
+            # get some data from the block header
+            file_obj.read(2)     # skip the version
+            block_index_u8 = int.from_bytes(file_obj.read(1), byteorder='little')    # upper 8 bits  of 40-bit block index
+            total_samples_u8 = int.from_bytes(file_obj.read(1), byteorder='little')  # upper 8 bits  of 40-bit total samples
+            total_samples_l32 = int.from_bytes(file_obj.read(4), byteorder='little') # lower 32 bits of 40-bit total samples
+            block_index_l32 = int.from_bytes(file_obj.read(4), byteorder='little')   # lower 32 bits of 40-bit block index
+            file_obj.read(4)     # skip the number of samples in this block
+            flags  = int.from_bytes(file_obj.read(4), byteorder='little')            # flags for id and decoding
+            file_obj.read(4)     # skip the CRC for actual decoded data
+
+            # compose the block index
+            block_index = (block_index_u8 << 32) + block_index_l32
+            if LOG_wav_decode: print(f'              first sample index is {block_index}')
+
+            # for the first block, get data from some flags
+            if block_index == 0:
+                # compose the total number of samples
+                metadata_dic['nb_of_samples'] = (total_samples_u8 << 32) + total_samples_l32
+
+                metadata_dic['bits_per_sample'] = ((flags & 0b11) + 1) * 8
+
+                if ((flags >> 2) & 0b1) == 0:
+                    metadata_dic['nb_of_channels'] = 2
+                else:
+                    metadata_dic['nb_of_channels'] = 1
+
+                metadata_dic['sampling_rate'] = wavpack_sample_rates[(flags >> 23) & 0b1111]
+                metadata_dic['compression_code'] = (flags >> 3) & 0b1  # 0 = losslessaudio, 1 = hybrid mode
+                metadata_dic['audio_data_size'] = metadata_dic['nb_of_samples'] * metadata_dic['nb_of_channels'] * (metadata_dic['bits_per_sample'] / 8)
+
+        if file_format == 'wavepack' and wvpk_sub_block_id != None and not is_chunck_in_sub_block:
+            # WavePack sub-block which does not contain Wave chunks
+            # skip this sub-block in the file
+            file_obj.seek(wvpk_sub_block_size, 1)
+            if LOG_wav_decode: print(f'     Skipped WavePack sub-block')
+
+        if file_format == 'wave' or is_chunck_in_sub_block:
+            # wave chunck or sub-chunck
+            if chunk_id == 'RIFF':
+                # RIFF chunk
+                if file_obj.read(4) == b'WAVE':
+                    # the RIFF type ID is WAVE, it is a valid .wav file
+                    if LOG_wav_decode: print(f'      RIFF type ID is Wave as expected')
+                else:
+                    metadata_dic['error_msg'] = f'RIFF chunk has not the "WAVE" format, unsuported file format'
+                wave_chunk_size = 0  # no remaining data to read in this chunk
+
+            elif chunk_id == 'fmt ':
+                # format chunk
+                metadata_dic['compression_code'] = int.from_bytes(file_obj.read(2), byteorder='little')
+                metadata_dic['nb_of_channels'] = int.from_bytes(file_obj.read(2), byteorder='little')
+                metadata_dic['sampling_rate'] = int.from_bytes(file_obj.read(4), byteorder='little')
+                file_obj.read(4) # skip the bytes per second
+                file_obj.read(2) # skip the block align
+                metadata_dic['bits_per_sample'] = int.from_bytes(file_obj.read(2), byteorder='little')
+                wave_chunk_size -= 16   # 16 bytes already read in this chunk
+                if LOG_wav_decode: print(f'      fmt data recovered')
+
+            elif chunk_id == 'smpl':
+                # sample chunk
+                file_obj.read(4) # skip the manufacturer ID
+                file_obj.read(4) # skip the product ID
+                file_obj.read(4) # skip the sample period
+                metadata_dic['midi_note'] = int.from_bytes(file_obj.read(4), byteorder='little')
+                metadata_dic['midi_pitch'] = int(int.from_bytes(file_obj.read(4), byteorder='little')  * 100 / 0xFFFFFFFF)
+
+                file_obj.read(4) # skip the SMPTE format
+                file_obj.read(4) # skip the SMPTE offset
+                metadata_dic['loops_nb'] = loops_nb = int.from_bytes(file_obj.read(4), byteorder='little')
+                file_obj.read(4) # skip the sampler data bytes number
+                wave_chunk_size -= 36   # 36 bytes already read in this chunk
+
+                for l in range(1, loops_nb+1):
+                    metadata_dic[f'loop{l}_id'] = int.from_bytes(file_obj.read(4), byteorder='little')
+                    metadata_dic[f'loop{l}_type'] = int.from_bytes(file_obj.read(4), byteorder='little')
+                    metadata_dic[f'loop{l}_start_sample'] = int.from_bytes(file_obj.read(4), byteorder='little')
+                    metadata_dic[f'loop{l}_start_seconds'] = int(metadata_dic[f'loop{l}_start_sample'] *100 / metadata_dic['sampling_rate']) / 100
+                    metadata_dic[f'loop{l}_end_sample'] = int.from_bytes(file_obj.read(4), byteorder='little')
+                    metadata_dic[f'loop{l}_end_seconds'] = int(metadata_dic[f'loop{l}_end_sample'] *100 / metadata_dic['sampling_rate']) / 100
+                    file_obj.read(4) # skip the loop fraction
+                    metadata_dic[f'loop{l}_replay_times_nb'] = int.from_bytes(file_obj.read(4), byteorder='little')
+                    wave_chunk_size -= 24   # 24 bytes already read in this chunk
+                if LOG_wav_decode: print(f'      smpl data recovered')
+
+            elif chunk_id == 'cue ':
+                # cue chunk
+                metadata_dic['cue_points_nb'] = cue_points_nb = int.from_bytes(file_obj.read(4), byteorder='little')
+                wave_chunk_size -= 4   # 4 bytes already read in this chunk
+
+                for c in range(1, cue_points_nb+1):
+                    metadata_dic[f'cue{c}_id'] = int.from_bytes(file_obj.read(4), byteorder='little')
+                    file_obj.read(4) # skip the cue position
+                    if file_obj.read(4) == b'data':
+                        metadata_dic[f'cue{c}_chunk_id'] = 'data'
+                    else:
+                        metadata_dic[f'cue{c}_chunk_id'] = 'silent'
+                    metadata_dic[f'cue{c}_chunk_start'] = int.from_bytes(file_obj.read(4), byteorder='little')
+                    metadata_dic[f'cue{c}_block_start'] = int.from_bytes(file_obj.read(4), byteorder='little')
+                    metadata_dic[f'cue{c}_sample_start'] = int.from_bytes(file_obj.read(4), byteorder='little')
+                    wave_chunk_size -= 24   # 24 bytes already read in this chunk
+                if LOG_wav_decode: print(f'      cue data recovered')
+
+            elif chunk_id == 'LIST':
+                # list chunk
+                # get the list type
+                list_type_id = file_obj.read(4).decode()
+                wave_chunk_size -= 4   # 4 bytes already read in this chunk
+
+                if list_type_id == 'INFO':
+                    # get the data of the INFO type list
+                    metadata_dic['info'] = {}
+                    while wave_chunk_size > 0:  # loop until the end of the chunk
+                        info_id = file_obj.read(4).decode()
+                        text_size = int.from_bytes(file_obj.read(4), byteorder='little')
+                        text_content = file_obj.read(text_size).decode()
+                        while text_content[-1:] == '\x00':  # remove the trailing 0x00 characters
+                            text_content = text_content[:-1]
+                        metadata_dic['info'][info_id] = text_content
+                        wave_chunk_size -= 8 + text_size   # 8 + text size bytes already read in this chunk
+                    if LOG_wav_decode: print(f'      LIST INFO data recovered')
+
+            elif chunk_id == 'data':
+                # data chunk
+                metadata_dic['audio_data_size'] = wave_chunk_size # size in bytes of the audio sampled data
+                metadata_dic['nb_of_samples'] = int(wave_chunk_size / (metadata_dic['nb_of_channels'] * metadata_dic['bits_per_sample'] / 8))
+                if is_chunck_in_sub_block:
+                    wave_chunk_size = 0  # inside a WavePack sub-block, the data sub-chunk has no data, erase the chunk size value
+
+            # move the file pointer at the end of the chunk
+            file_obj.seek(wave_chunk_size, 1)
+
+            if is_chunck_in_sub_block and wvpk_sub_block_size <= 0:
+                # the end of the WavePack RIFF sub-bloc is reached
+                is_chunck_in_sub_block = False
+                if LOG_wav_decode: print('   End of Wave chunk in WavePack sub-block is reached')
+
+    # close the given file
+    file_obj.close()
+
+    if file_format != None:
+        if 'audio_data_size' not in metadata_dic.keys():
+            # wav file without data chunk inside
+            metadata_dic['error_msg'] = f'The file "{file_name}" has not audio samples inside.'
+        else:
+            # compute the duration of the audio samples in seconds (float with 2 decimals)
+            metadata_dic['audio_duration'] = int(metadata_dic['audio_data_size'] * 100 / (metadata_dic['sampling_rate'] * metadata_dic['nb_of_channels'] * metadata_dic['bits_per_sample'] / 8)) / 100
+
+    metadata_dic['file_format'] = file_format
+
+    return metadata_dic
 
 #-------------------------------------------------------------------------------------------------
 def myint(data, default_val=None):
