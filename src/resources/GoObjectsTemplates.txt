@@ -177,6 +177,8 @@
 "Panel":
    (
     "Name=Panel template",
+    "NumberOfImages=0",
+    "NumberOfGUIElements=0",
     "HasPedals=",
     "DispScreenSizeHoriz=",
     "DispScreenSizeVert=",
@@ -204,8 +206,6 @@
     "DispTrimBelowManuals=N",
     "DispTrimAboveExtraRows=N",
     "DispExtraDrawstopRowsAboveExtraButtonRows=N",
-    "NumberOfImages=0",
-    "NumberOfGUIElements=0",
    ),
 
 "PanelElement":

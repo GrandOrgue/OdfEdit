@@ -3,18 +3,23 @@
 >> General information
 This tool is intended to help in editing and checking a GrandOrgue organ definition file (ODF, extension .organ) in plain text mode, with the help of sections/objects browsers (sorted list or tree).
 To completely check the goodness of an ODF, loading it in GrandOrgue will detect deeply all the remaining errors if any.
-Double clicking on a parent or child section name in the list located above the section edition area will select this section in the section list and tree on the left side.
+Double clicking a section name in the sections list will expand the sections tree so that all the occurrences of the selected section are visible in the tree.
+Double clicking on a parent or child section name in the parents/children list will make this section the selected one in the sections list and tree.
 The help below is largely inspired and copy/pasted from the GrandOrgue help.
 
-Details about the menu items :
-- Save ODF in ISO-8859-1 format (else UTF-8) : if checked, the ODF saving is made with ISO-8859-1 encoding, else with UTF-8-COM.
-- Auto expand sections tree on section selection : if checked, when a section is selected, the sections tree is automatically expanded to make visible all the occurrences of this section in the tree.
-- HW to GO : convert tremmed samples : if checked, the tremmed samples of the HW ODF are converted in the GO ODF. When unchecked, it permits to avoid RAM consumption increase by GrandOrgue to load the ranks containing the tremmed samples.
-- HW to GO : integrate tremmed samples in main ranks : if checked, the tremmed samples are integrated in the corresponding un-tremmed ranks. If unchecked, they are placed in separate ranks. This option is significant only if the previous option is enabled.
-- HW to GO : convert unused ranks : if checked, the ranks of the HW ODF which are not used by the stops of the built GO ODF are converted all the same in the GO ODF (can be then linked manually to stops).
+Menu items
+------------------
+> Save ODF in ISO-8859-1 format (else UTF-8) : if checked, the ODF saving is made with ISO-8859-1 encoding, else with UTF-8-COM.
+> HW to GO - convert tremmed samples : if checked, the tremmed samples of the HW sample set are converted in the GO ODF. When unchecked, it permits to avoid RAM consumption increase by GrandOrgue to load the ranks containing the tremmed samples.
+> HW to GO - place tremmed samples in separate ranks : if checked, tremmed samples are placed in separate ranks instead of being placed in ranks of the corresponding un-tremmed samples. This option is significant only if tremmed samples conversion is enabled.
+> HW to GO - convert alternate panels layouts : if checked, the alternate panels layouts of the HW sample set (portrait mode panels for example) are converted in GO panels.
+> HW to GO - convert unused ranks : if checked, the ranks of the HW sample set which are not used by the stops of the built GO ODF are converted all the same in the GO ODF (can be then linked manually to stops).
 
-Drag & drop :
-A section name can be dragged from the sections list or tree and dropped over another section name in these list or tree to become a child of the target section. If the Ctrl key is pressed at the same time, the dragged section is copied instead of moved.
+Drag & drop
+------------------
+A section name can be dragged from the sections list or tree and dropped onto another section name of the sections list or tree. The mouse cursor indicates dynamically if the drop is possible or not.
+If a section name is dropped onto a same type section name it is moved before it (if it has a higher section number) or after it (if it has a lower section number).
+If a section name is dropped onto a section which can be its parent section, it is moved as child of this parent section. If the Control key is pressed at the same time, the dragged section is copied under the parent section instead of moved. This is possible only with the following section types : Coupler, Enclosure, PanelElement, PanelImage, Rank, Stop, Switch, Tremulant.
 
 An ODF is a text file in ISO-8859-1 encoding. The standard extension is .organ. As an alternative, the file can be encoded in UTF-8 if it starts with the appropriate byte order marker.
 It is composed of several sections, each one being organized like this :
@@ -26,7 +31,7 @@ attribute2=value2
 Empty lines are ignored.
 The text is case sensitive for sections name and attributes.
 Each section name must be defined only once in the whole ODF.
-Each attribute (also called setting) must be defined only once in his section.
+Each attribute must be defined only once in his section.
 
 >> Hauptwerk sample sets
 This tool permits as well to open the ODF of a Hauptwerk sample set (not encrypted, not dongle protected, located in the folder OrganDefinitions of the sample set package, extension .Organ_Hauptwerk_xml or .xml) and to generate from it a GrandOrgue ODF permitting to play this sample set with GrandOrgue (GO ODF located in the same folder as the HW ODF). None file of the Hauptwerk sample set is modified.
@@ -395,7 +400,7 @@ TextBreakWidth=(integer 0 - text rectangle width, default: TextWidth) If 0, no t
 
 
 [General999]
-General is a push button with the following additional combination data store attributes (used to store one combination).
+General is a push button with the following additional combination data store attributes (used to store one preset general combination).
 
 REQUIRED ATTRIBUTES :
 NumberOfCouplers=(integer 0 - number of coupler defined in the ODF, required) Number of coupler states stored in this combination. The entries are called CouplerNumber999 and CouplerManual999.
