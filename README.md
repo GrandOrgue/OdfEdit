@@ -13,7 +13,7 @@ The Linux binary has been tested in Ubuntu 22.04.2 LTS in Oracle VM VirtualBox
 
 From version 2.0, Hauptwerk sample sets can be loaded by OdfEdit which generates a GrandOrgue ODF permitting to use this sample set in GrandOrgue (with some limitations compared to what is possible in Hauptwerk).
 Here are elements which can be converter by OdfEdit v2.9 from Hauptwerk to GrandOrgue ODF :
-- general organ informations : church name/address, builder, build date, pitch tuning, gain
+- general organ informations (church name/address, builder, build date, pitch tuning, gain)
 - panels
 - images, labels
 - manuals
@@ -22,5 +22,5 @@ Here are elements which can be converter by OdfEdit v2.9 from Hauptwerk to Grand
 - tremulants (wave based or synthesized)
 - enclosures (including volume tuning sliders)
 - windchests (with associated ranks/tremulants/enclosures)
-- ranks :(multiple attack/release samples, gain, harmonic number, pitch tuning, loop crossfade length, release crossfade length)
+- ranks (attack/release samples, gain, harmonic number, pitch tuning, loop crossfade length, release crossfade length)
 - noises (blower, manuals keys press/release, drawstops engage/disengage)
