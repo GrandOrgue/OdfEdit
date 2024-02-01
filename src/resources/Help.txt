@@ -176,7 +176,7 @@ Panel size : SMALL, MEDIUM, MEDIUM LARGE, LARGE or an integer number between 100
 
 Image format : bmp, gif, jpg, ico, png
 
-Floating point numbers : -?[0-9]+(.[0-9]*)? means optional minus sign, followed by at least one digit. The decimal separator is a point.
+floating point numbers : -?[0-9]+(.[0-9]*)? means optional minus sign, followed by at least one digit. The decimal separator is a point.
 
 "samples" counts : number of samples from the start of the WAV file. One sample includes the values of all channels, eg: for a stereo WAV file at 44.1 kHz, 1 second is equivalent to 44100 samples.
 
@@ -223,9 +223,9 @@ NumberOfSetterElements=(integer 0-999, default: 0) Number of setter elements on 
 NumberOfSwitches=(integer 0-999, default: 0) number of switches. The details are in a section called Switch999.
 
 CombinationsStoreNonDisplayedDrawstops=(boolean, default: true) determines, if the state of invisible objects (on the main panel) is stored in divisionals, generals and the setter.
-AmplitudeLevel=(ﬂoat 0-1000, default: 100) Linear amplitude scale factor applied to the whole organ. 100 means no change.
-Gain=(ﬂoat -120 - 40, default: 0) Amplitude scale factor in dB applied to the whole organ. 0 means no change.
-PitchTuning=(ﬂoat -1200-1200, default: 0) Retune the whole organ the specified number of cents.
+AmplitudeLevel=(float 0-1000, default: 100) Linear amplitude scale factor applied to the whole organ. 100 means no change.
+Gain=(float -120 - 40, default: 0) Amplitude scale factor in dB applied to the whole organ. 0 means no change.
+PitchTuning=(float -1200-1200, default: 0) Retune the whole organ the specified number of cents.
 TrackerDelay=(integer 0 - 10000, default: 0) Delay introduced by the tracker applied to the whole organ.
 
 + display metrics attributes of a panel if old panel format, see [ Panel999 ]
@@ -289,7 +289,7 @@ Inside the button, the on/off bitmap (depending on the button state) is tiled. I
 Coupler is a drawstop object with the following additional attributes. It forwards key presses from one manual to other manuals/keys.
 
 REQUIRED ATTRIBUTES :
-UnisonOff=(boolean, required) If true, this coupler decouples the manual from the stops (turn it into a ﬂoating manual).
+UnisonOff=(boolean, required) If true, this coupler decouples the manual from the stops (turn it into a floating manual).
 DestinationManual=(integer manual number, required if not a unison off coupler) manual to forward key presses to.
 DestinationKeyshift=(integer -24 - 24, required if not a unison off coupler) specifies the keyboard shift between source and destination manual in terms of absolute MIDI note numbers
 
@@ -746,64 +746,68 @@ NumberOfLogicalPipes=(integer 1-192, required) Number of pipes in this rank.
 Pipe999=(string, required) Relative path to the sample WAV file of the first attack. It may be listed as REF:aa:bb:cc too. In that case, it means that this pipe is borrowed from manual aa, first rank of stop bb, the pipe cc. It may contain DUMMY, which defines a non-sounding placeholder.
 
 OPTIONAL ATTRIBUTES :
-AmplitudeLevel=(ﬂoat 0-1000, default: 100) Linear amplitude scale factor applied to the whole rank. 100 means no change.
-Gain=(ﬂoat -120 - 40, default: 0) Amplitude scale factor in dB applied to the whole rank. 0 means no change.
-PitchTuning=(ﬂoat -1200-1200, default: 0) Retune the rank by the specified number of cents.
+AmplitudeLevel=(float 0-1000, default: 100) Linear amplitude scale factor applied to the whole rank. 100 means no change.
+Gain=(float -120 - 40, default: 0) Amplitude scale factor in dB applied to the whole rank. 0 means no change.
+PitchTuning=(float -1200-1200, default: 0) Retune the rank by the specified number of cents.
 TrackerDelay=(integer 0 - 10000, default: 0) Delay introduced by the tracker for that rank.
-HarmonicNumber=(ﬂoat 1-1024, default: 8) Harmonic number (= 64 / rank size), eg. 2 2/3 => 64 / (2 2/3) = 24. The harmonic number is used determining alternative tunings.
-PitchCorrection=(ﬂoat -1200-1200, default: 0) Correction factor in cent for the pitch specified in the sample. This setting is used for retuning to other temperaments.
-MinVelocityVolume=(ﬂoat 0-1000, default: 100) Linear amplitude scale factor at low velocity applied to the whole rank. 100 means no change.
-MaxVelocityVolume=(ﬂoat 0-1000, default: 100) Linear amplitude scale factor at high velocity applied to the whole rank. 100 means no change.
+HarmonicNumber=(float 1-1024, default: 8) Harmonic number (= 64 / rank size), eg. 2 2/3 => 64 / (2 2/3) = 24. The harmonic number is used determining alternative tunings.
+PitchCorrection=(float -1200-1200, default: 0) Correction factor in cent for the pitch specified in the sample. This setting is used for retuning to other temperaments.
+MinVelocityVolume=(float 0-1000, default: 100) Linear amplitude scale factor at low velocity applied to the whole rank. 100 means no change.
+MaxVelocityVolume=(float 0-1000, default: 100) Linear amplitude scale factor at high velocity applied to the whole rank. 100 means no change.
 AcceptsRetuning=(boolean, default: true) Determines if the rank will be retuned according to the current temperament. Retuning should be only disabled for sound effects.
 
 Pipe999Percussive=(boolean, default: rank percussive setting) If false, the samples are played as is (without any loop/release handling).
-Pipe999AmplitudeLevel=(ﬂoat 0-1000, default: 100) Linear amplitude scale factor applied to the pipe (in addition to the organ/rank factor). 100 means no change.
-Pipe999Gain=(ﬂoat -120 - 40, default: 0) Amplitude scale factor in dB applied to the pipe (in addition to the organ/rank factor). 0 means no change.
-Pipe999PitchTuning=(ﬂoat -1200-1200, default: 0) Retune this pipe the specified number of cents (in addition to the organ/rank factor).
+Pipe999AmplitudeLevel=(float 0-1000, default: 100) Linear amplitude scale factor applied to the pipe (in addition to the organ/rank factor). 100 means no change.
+Pipe999Gain=(float -120 - 40, default: 0) Amplitude scale factor in dB applied to the pipe (in addition to the organ/rank factor). 0 means no change.
+Pipe999PitchTuning=(float -1200-1200, default: 0) Retune this pipe the specified number of cents (in addition to the organ/rank factor).
 Pipe999TrackerDelay=(integer 0 - 10000, default: 0) Delay introduced by the tracker for that pipe.
 Pipe999LoadRelease=(boolean, default: reverse of percussive setting) If true, the release part is loaded from the first attack sample.
-Pipe999AttackVelocity=(int 0 - 127, default: 0) minimum velocity to use this attack sample.
-Pipe999MaxTimeSinceLastRelease=(int -1 - 100000, default: -1) maximum time since the last release of the key to be able to use that attack. -1 means infinite.
-Pipe999IsTremulant=(int -1 - 1, default: -1) 1 means, that it is played, if the associated wave-based tremulant is on. 0 means, that it is played, if the associated wave-based tremulant is off. -1 means, that it is not affected by a wave-based tremulant.
-Pipe999MaxKeyPressTime=(int -1 - 100000, default: -1) Up to this time value in ms, the release sample is chosen. -1 means infinite.
-Pipe999AttackStart=(int 0 - 158760000, default: 0) Allows to override the start of the sample. This option is specified in samples.
-Pipe999CuePoint=(int -1 - 158760000, default: -1) Allows to override the cue point for the release. -1 means use from the wave file. This option is specified in samples.
-Pipe999ReleaseEnd=(int -1 - 158760000, default: -1) Allows to override the end of the release. -1 means play till the end of the wav. This option is specified in samples.
-Pipe999HarmonicNumber=(ﬂoat 1-1024, default: rank harmonic number) Harmonic number (= 64 / rank size), eg. 2 2/3 => 64 / (2 2/3) = 24.
+Pipe999AttackVelocity=(integer 0 - 127, default: 0) minimum velocity to use this attack sample.
+Pipe999MaxTimeSinceLastRelease=(integer -1 - 100000, default: -1) maximum time since the last release of the key to be able to use that attack. -1 means infinite.
+Pipe999IsTremulant=(integer -1 - 1, default: -1) 1 means, that it is played, if the associated wave-based tremulant is on. 0 means, that it is played, if the associated wave-based tremulant is off. -1 means, that it is not affected by a wave-based tremulant.
+Pipe999MaxKeyPressTime=(integer -1 - 100000, default: -1) Up to this time value in ms, the release sample is chosen. -1 means infinite.
+Pipe999AttackStart=(integer 0 - 158760000, default: 0) Allows to override the start of the sample. This option is specified in samples.
+Pipe999CuePoint=(integer -1 - 158760000, default: -1) Allows to override the cue point for the release. -1 means use from the wave file. This option is specified in samples.
+Pipe999ReleaseEnd=(integer -1 - 158760000, default: -1) Allows to override the end of the release. -1 means play till the end of the wav. This option is specified in samples.
+Pipe999HarmonicNumber=(float 1-1024, default: rank harmonic number) Harmonic number (= 64 / rank size), eg. 2 2/3 => 64 / (2 2/3) = 24.
 Pipe999MIDIKeyNumber=(integer -1 - 127, default: -1) If -1, use pitch information from the Pipe999 sample, else override the information in the sample with this midi note number (Pipe999PitchCorrection is used for specifing the fraction). Specifying the midi note number also reset the pitch fraction in the sample to 0.
-Pipe999PitchCorrection=(ﬂoat -1200-1200, default: rank pitch correction) Correction factor in cent for the pitch specified in the sample. This setting is used for retuning to other temperaments.
+Pipe999PitchCorrection=(float -1200-1200, default: rank pitch correction) Correction factor in cent for the pitch specified in the sample. This setting is used for retuning to other temperaments.
 Pipe999AcceptsRetuning=(boolean, default: rank setting) Determines if the pipe will be retuned according to the current temperament. Retuning should be only disabled for sound effects.
 Pipe999WindchestGroup=(interger 1 - number of windchests, default: rank windchest) specify the windchest, on which this pipe is placed.
-Pipe999MinVelocityVolume=(ﬂoat 0-1000, default: corresponding rank setting) Linear amplitude scale factor at low velocity applied to the pipe. 100 means no change.
-Pipe999MaxVelocityVolume=(ﬂoat 0-1000, default: corresponding rank setting) Linear amplitude scale factor at high velocity applied to the pipe. 100 means no change.
+Pipe999MinVelocityVolume=(float 0-1000, default: corresponding rank setting) Linear amplitude scale factor at low velocity applied to the pipe. 100 means no change.
+Pipe999MaxVelocityVolume=(float 0-1000, default: corresponding rank setting) Linear amplitude scale factor at high velocity applied to the pipe. 100 means no change.
 
-Pipe999LoopCount=(int 0 - 100, default: 0) Allows to override the loops in the WAV file. 0 means use loops from the wave file.
-Pipe999Loop999Start=(int 0 - 158760000, default: 0) Start sample of the loop. The value must be within the WAV file. This option is specified in samples.
-Pipe999Loop999End=(int Pipe999Loop999Start + 1 - 158760000, required if Pipe999LoopCount is not zero) End sample of the loop. The value must be within the WAV file. This option is specified in samples.
+Pipe999LoopCount=(integer 0 - 100, default: 0) Allows to override the loops in the WAV file. 0 means use loops from the wave file.
+Pipe999Loop999Start=(integer 0 - 158760000, default: 0) Start sample of the loop. The value must be within the WAV file. This option is specified in samples.
+Pipe999Loop999End=(integer Pipe999Loop999Start + 1 - 158760000, required if Pipe999LoopCount is not zero) End sample of the loop. The value must be within the WAV file. This option is specified in samples.
 
-Pipe999AttackCount=(int 0 - 100, default: 0) Number of additional attack samples.
+Pipe999AttackCount=(integer 0 - 100, default: 0) Number of additional attack samples.
 Pipe999Attack999=(string, required) Relative path to the sample WAV file.
 Pipe999Attack999LoadRelease=(boolean, default: reverse of percussive setting) If true, the release part is loaded.
-Pipe999Attack999AttackVelocity=(int 0 - 127, default: 0) minimum velocity to use this attack sample.
-Pipe999Attack999MaxTimeSinceLastRelease=(int -1 - 100000, default: -1) maximum time since the last release of the key to be able to use that attack. -1 means infinite.
-Pipe999Attack999IsTremulant=(int -1 - 1, default: -1) 1 means, that it is played, if the associated wave-based tremulant is on. 0 means, that it is played, if the associated wave-based tremulant is off. -1 means, that it not affected by a wave-based tremulant.
-Pipe999Attack999MaxKeyPressTime=(int -1 - 100000, default: -1) Up to this time value in ms, the release sample is choosen. -1 means infinite.
-Pipe999Attack999AttackStart=(int 0 - 158760000, default: 0) Allows to override the start of the sample. This option is specified in samples.
-Pipe999Attack999CuePoint=(int -1 - 158760000, default: -1) Allows to override the cue point for the release. -1 means use from the wave file. This option is specified in samples.
-Pipe999Attack999ReleaseEnd=(int -1 - 158760000, default: -1) Allows to override the end of the release. -1 means play till the end of the wav. This option is specified in samples.
-Pipe999Attack999LoopCount=(int 0 - 100, default: 0) Allows to override the loops in the WAV file. 0 means use loops from the wave file.
-Pipe999Attack999Loop999Start=(int 0 - 158760000, default: 0) Start sample of the loop. The value must be within the WAV file. This option is specified in samples.
-Pipe999Attack999Loop999End=(int Pipe999Attack999Loop999Start + 1 - 158760000, required if Pipe999LoopCount is not zero) End sample of the loop. The value must be within the WAV file. This option is specified in samples.
+Pipe999Attack999AttackVelocity=(integer 0 - 127, default: 0) minimum velocity to use this attack sample.
+Pipe999Attack999MaxTimeSinceLastRelease=(integer -1 - 100000, default: -1) maximum time since the last release of the key to be able to use that attack. -1 means infinite.
+Pipe999Attack999IsTremulant=(integer -1 - 1, default: -1) 1 means, that it is played, if the associated wave-based tremulant is on. 0 means, that it is played, if the associated wave-based tremulant is off. -1 means, that it not affected by a wave-based tremulant.
+Pipe999Attack999MaxKeyPressTime=(integer -1 - 100000, default: -1) Up to this time value in ms, the release sample is choosen. -1 means infinite.
+Pipe999Attack999AttackStart=(integer 0 - 158760000, default: 0) Allows to override the start of the sample. This option is specified in samples.
+Pipe999Attack999CuePoint=(integer -1 - 158760000, default: -1) Allows to override the cue point for the release. -1 means use from the wave file. This option is specified in samples.
+Pipe999Attack999ReleaseEnd=(integer -1 - 158760000, default: -1) Allows to override the end of the release. -1 means play till the end of the wav. This option is specified in samples.
+Pipe999Attack999LoopCount=(integer 0 - 100, default: 0) Allows to override the loops in the WAV file. 0 means use loops from the wave file.
+Pipe999Attack999Loop999Start=(integer 0 - 158760000, default: 0) Start sample of the loop. The value must be within the WAV file. This option is specified in samples.
+Pipe999Attack999Loop999End=(integer Pipe999Attack999Loop999Start + 1 - 158760000, required if Pipe999LoopCount is not zero) End sample of the loop. The value must be within the WAV file. This option is specified in samples.
 
-Pipe999ReleaseCount=(int 0 - 100, default: 0) Number of additional release samples.
+Pipe999ReleaseCount=(integer 0 - 100, default: 0) Number of additional release samples.
 Pipe999Release999=(string, required) Relative path to the sample WAV file.
-Pipe999Release999IsTremulant=(int -1 - 1, default: -1) 1 means, that it is played, if the associated wave-based tremulant is on. 0 means, that it is played, if the associated wave-based tremulant is off. -1 means, that it not affected by a wave-based tremulant.
-Pipe999Release999MaxKeyPressTime=(int -1 - 100000, default: -1) Up to this time value in ms, the release sample is choosen. -1 means infinite.
-Pipe999Release999CuePoint=(int -1 - 158760000, default: -1) Allows to override the cue point for the release. -1 means use from the wave file.
-Pipe999Release999ReleaseEnd=(int -1 - 158760000, default: -1) Allows to override the end of the release. -1 means play till the end of the wav. This option is specified in samples.
+Pipe999Release999IsTremulant=(integer -1 - 1, default: -1) 1 means, that it is played, if the associated wave-based tremulant is on. 0 means, that it is played, if the associated wave-based tremulant is off. -1 means, that it not affected by a wave-based tremulant.
+Pipe999Release999MaxKeyPressTime=(integer -1 - 100000, default: -1) Up to this time value in ms, the release sample is choosen. -1 means infinite.
+Pipe999Release999CuePoint=(integer -1 - 158760000, default: -1) Allows to override the cue point for the release. -1 means use from the wave file.
+Pipe999Release999ReleaseEnd=(integer -1 - 158760000, default: -1) Allows to override the end of the release. -1 means play till the end of the wav. This option is specified in samples.
 
-Pipe999LoopCrossfadeLength=(int 0 - 3000, default: 0) Crossfade length in ms between loop start and loop end. A cross fade requires enough samples before the start of the loop.
-Pipe999ReleaseCrossfadeLength=(int 0 - 3000, default: 0) Crossfade length in ms between loop and the release (or other attacks). 0 means automatic selection.
+Pipe999LoopCrossfadeLength=(integer 0 - 3000, default: 0) Crossfade length in ms between loop end and loop start for all loops loaded from the file specified in the Pipe999 parameter. A cross fade requires enough samples before the start of the loop. This parameter is not inherited by loops loaded from additional attack files specified in the Pipe999Attack999 parameters.
+Pipe999Attack999LoopCrossfadeLength=(integer 0 - 3000, default: 0) Crossfade length in ms between loop end and loop start for all loops loaded from the file Pipe999Attack999. A cross fade requires enough samples before the start of the loop. 
+
+Pipe999ReleaseCrossfadeLength=(integer 0 - 3000, default: 0) Crossfade length in ms between loop and the release (or other attacks). 0 means automatic selection. This parameter is inherited by all releases loaded from additional attack and release files specified in the Pipe999Attack999 and Pipe999Release999 parameters and may be redefined with the Pipe999Attack999ReleaseCrossfadeLength and Pipe999Release999ReleaseCrossfadeLength parameters.
+Pipe999Attack999ReleaseCrossfadeLength=(integer 0 - 3000, default: Pipe999ReleaseCrossfadeLength) Crossfade length in ms between loop and the release loaded from the file specified in the Pipe999Attack999 parameter.
+ipe999Release999ReleaseCrossfadeLength=(integer 0 - 3000, default: Pipe999ReleaseCrossfadeLength) Crossfade length in ms between loop and the release loaded from the file specified in the Pipe999Release999 parameter.
 
 
 [ReversiblePiston999]
