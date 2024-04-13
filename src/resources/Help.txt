@@ -10,12 +10,14 @@ The help below is largely inspired and copy/pasted from the GrandOrgue help.
 Menu items
 ------------------
 Save ODF in ISO-8859-1 format (else UTF-8) => if checked, the ODF saving is made with ISO-8859-1 encoding, else it is with UTF-8-COM.
+Sort references in selected section... => after confirming, it permits to sort in the selected section the references to other sections. It works for sections of types : Coupler, Divisional, General, Manual, Stop, Switch, Tremulant, WindchestGroup.
+HW to GO - do not convert keys noises => if checked, the manuals keys noises are not converted in the GO ODF.
+HW to GO - convert alternate panels layouts => if checked, the alternate panels layouts of the HW sample set (portrait mode panels for example) are converted in GO panels.
 HW to GO - convert tremmed samples => if checked, the tremmed samples of the HW sample set are converted in the GO ODF. The usage of tremmed samples can increase a lot the RAM consumed by GrandOrgue to load the sample sets.
 HW to GO - place tremmed samples in separate ranks => if checked, tremmed samples are placed in separate ranks instead of being placed in ranks of the corresponding un-tremmed samples. This option is significant only if tremmed samples conversion is enabled.
+HW to GO - convert unused ranks => if checked, the ranks of the HW sample set which are not used by the stops of the built GO ODF are converted all the same in the GO ODF (can be then linked manually to stops).
 HW to GO - correct pipes pitch from samples metadata => if checked, the MIDI note number in samples metadata is used to apply if necessary a pitch tuning correction to some pipes. It increases the time of the HW to GO conversion. It can be necessary when some pipes are played at a wrong pitch. The corrected pipes are listed in the logs window at the end of the conversion.
 HW to GO - correct pipes pitch from samples file name => if checked, the MIDI note number in samples file name is used to apply if necessary a pitch tuning correction to some pipes. It can be necessary when some pipes are played at a wrong pitch, especially for manual keys extension. The corrected pipes are listed in the logs window at the end of the conversion.
-HW to GO - convert alternate panels layouts => if checked, the alternate panels layouts of the HW sample set (portrait mode panels for example) are converted in GO panels.
-HW to GO - convert unused ranks => if checked, the ranks of the HW sample set which are not used by the stops of the built GO ODF are converted all the same in the GO ODF (can be then linked manually to stops).
 
 Drag & drop
 ------------------
@@ -174,7 +176,7 @@ Color : BLACK, BLUE, DARK BLUE, GREEN, DARK GREEN, CYAN, DARK CYAN, RED, DARK RE
 
 Font size : SMALL, NORMAL, LARGE or an integer number between 1 and 50
 
-Panel size : SMALL, MEDIUM, MEDIUM LARGE, LARGE or an integer number between 100 and 4000
+Panel size : SMALL, MEDIUM, MEDIUM LARGE, LARGE or an integer number between 100 and 32000
 
 Image format : bmp, gif, jpg, ico, png
 
@@ -203,7 +205,7 @@ NumberOfGenerals=(integer 0-99, required) number of generals. The details are in
 NumberOfManuals=(integer 1-99, required) number of manuals. It does not include the pedal keyboard. The manual information for each manual is available in sections called Manual999. 999 is a number defining each manual, starting with 001.
 NumberOfPanels=(integer 0-100, required) number of panels in addition to the  main panel. The details are in a section called Panel999.
 NumberOfReversiblePistons=(integer 0-32, required) number of reversible pistons. The details of each reversible piston are in a section called ReversiblePiston999.
-NumberOfTremulants=(integer 0-10, required) number of tremulants. The details of each tremulant are contained in a section called Tremulant999.
+NumberOfTremulants=(integer 0-999, required) number of tremulants. The details of each tremulant are contained in a section called Tremulant999.
 NumberOfWindchestGroups=(integer 1-999, required) number of windchests. The details of each windchest are in a section called WindchestGroup999.
 
 DivisionalsStoreIntermanualCouplers=(boolean, required) determines if divisionals store/change the state of associated intermanual couplers.
@@ -224,11 +226,15 @@ NumberOfRanks=(integer 0-999, default: 0) number of ranks. The details are in a 
 NumberOfSetterElements=(integer 0-999, default: 0) Number of setter elements on the panel. The section of the GUI definitions are called SetterElement999. This setting is NOT supported for the new panel format.
 NumberOfSwitches=(integer 0-999, default: 0) number of switches. The details are in a section called Switch999.
 
-CombinationsStoreNonDisplayedDrawstops=(boolean, default: true) determines, if the state of invisible objects (on the main panel) is stored in divisionals, generals and the setter.
+CombinationsStoreNonDisplayedDrawstops=(boolean, default: false) determines, if the state of read-only objects (that is calculated based on the state of another objects) is stored in divisionals, generals and the setter.
+
 AmplitudeLevel=(float 0-1000, default: 100) Linear amplitude scale factor applied to the whole organ. 100 means no change.
 Gain=(float -120 - 40, default: 0) Amplitude scale factor in dB applied to the whole organ. 0 means no change.
 PitchTuning=(float -1800-1800, default: 0) Retune the whole organ the specified number of cents.
+PitchCorrection=(float -1800 - 1800, default: 0) Correction factor in cent for the pitch of the whole organ. This setting is used for retuning to other temperaments.
 TrackerDelay=(integer 0 - 10000, default: 0) Delay introduced by the tracker applied to the whole organ.
+Percussive=(boolean, default: false) If true, the samples are played as is (without any loop/release handling).
+HasIndependentRelease=(boolean, default false). If true, releases are played independently of the attacks. If HasIndependentRelease is true then Percussive must also be set to true.
 
 + display metrics attributes of a panel if old panel format, see [ Panel999 ]
 
@@ -348,9 +354,9 @@ REQUIRED ATTRIBUTES :
 Switch999=(integer 1 - switch count, required) Lists the input switches of the logical function of the drawstop. If the drawstop is a switch, it can only reference switches with a lower number. The number of this settings depends on the function.
 
 OPTIONAL ATTRIBUTES :
+DefaultToEngaged=(boolean, default: false) State of the button after loading.
 Function=(enumeration, default: Input) Logical function of the drawstop. If the value is Input, it is a normal user controllable drawstop and has no input switches. Not has one only input and negates the state of the input switch. And, Xor, Nand, Nor as well as Or has a variable number of inputs.
-SwitchCount=(integer 1 - switch count, default: 0) Contains the number of input ports, if the logical function allows a variable number number of input. Switch999 contains the referenced switches.
-DefaultToEngaged=(boolean, default: False) State of the button after loading.
+SwitchCount=(integer 1 - switch count, required if the logical function allows a variable number number of inputs) Contains the number of input ports. Switch999 contains the referenced switches.
 GCState=(integer -1 - 1, default: implementation defined) State of the button after pressing GC. -1 means no change, 0 off and 1 on.
 StoreInDivisional=(boolean, default: dependent on various settings) Determines, if the button should be stored in divisionals without FULL.
 StoreInGeneral=(boolean, default: dependent on various settings) Determines, if the button should be stored in generals without FULL.
@@ -740,16 +746,17 @@ A rank section contains the attributes of each of its pipes too. The attributes 
 
 REQUIRED ATTRIBUTES :
 Name=(string, required) Name of the rank. The name may be presented to the user in lists too, therefore it should be descriptive.
-FirstMidiNoteNumber=(integer 0-256, if the rank is part of a stop section, the default value is derived from the associated manuals. Otherwise required) Midi note number of the first pipe.
 WindchestGroup=(integer 1 - number of windchests, required) specify the windchest on which the pipes of the rank are placed.
-Percussive=(boolean, required) If false, the samples are played as is (without any loop/release handling).
 
 NumberOfLogicalPipes=(integer 1-192, required) Number of pipes in this rank.
 Pipe999=(string, required) Relative path to the sample WAV file of the first attack. It may be listed as REF:aa:bb:cc too. In that case, it means that this pipe is borrowed from manual aa, first rank of stop bb, the pipe cc. It may contain DUMMY, which defines a non-sounding placeholder.
 
 OPTIONAL ATTRIBUTES :
+FirstMidiNoteNumber=(integer 0 - 256, if the rank is part of a stop section, the default value is derived from the associated manuals. Otherwise required) MIDI note number of the first pipe.
 AmplitudeLevel=(float 0-1000, default: 100) Linear amplitude scale factor applied to the whole rank. 100 means no change.
 Gain=(float -120 - 40, default: 0) Amplitude scale factor in dB applied to the whole rank. 0 means no change.
+Percussive=(boolean, default inherited from the Windchest section) If true, the samples are played as is (without any loop/release handling).
+HasIndependentRelease=(boolean, default inherited from the Windchest section). If true, releases are played independently of the attacks. If HasIndependentRelease is true then Percussive must also be set to true.
 PitchTuning=(float -1800-1800, default: 0) Retune the rank by the specified number of cents.
 TrackerDelay=(integer 0 - 10000, default: 0) Delay introduced by the tracker for that rank.
 HarmonicNumber=(float 1-1024, default: 8) Harmonic number (= 64 / rank size), eg. 2 2/3 => 64 / (2 2/3) = 24. The harmonic number is used determining alternative tunings.
@@ -758,10 +765,11 @@ MinVelocityVolume=(float 0-1000, default: 100) Linear amplitude scale factor at 
 MaxVelocityVolume=(float 0-1000, default: 100) Linear amplitude scale factor at high velocity applied to the whole rank. 100 means no change.
 AcceptsRetuning=(boolean, default: true) Determines if the rank will be retuned according to the current temperament. Retuning should be only disabled for sound effects.
 
-Pipe999Percussive=(boolean, default: rank percussive setting) If false, the samples are played as is (without any loop/release handling).
-Pipe999AmplitudeLevel=(float 0-1000, default: 100) Linear amplitude scale factor applied to the pipe (in addition to the organ/rank factor). 100 means no change.
-Pipe999Gain=(float -120 - 40, default: 0) Amplitude scale factor in dB applied to the pipe (in addition to the organ/rank factor). 0 means no change.
-Pipe999PitchTuning=(float -1800-1800, default: 0) Retune this pipe the specified number of cents (in addition to the organ/rank factor).
+Pipe999Percussive=(boolean, default: rank Percussive setting) If true, the samples are played as is (without any loop/release handling)
+Pipe999HasIndependentRelease=(boolean, default: rank HasIndependentRelease setting). If true, releases are played independently of attacks in this pipe. If HasIndependentRelease is true then Pipe999Percussive must be also true and Pipe999ReleaseCount must be greater than 0.
+Pipe999AmplitudeLevel=(float 0 - 1000, default: 100) Linear amplitude scale factor applied to the pipe (in addition to the organ/windchest/rank factor). 100 means no change.
+Pipe999Gain=(float -120 - 40, default: 0) Amplitude scale factor in dB applied to the pipe (in addition to the organ/windchest/rank factor). 0 means no change.
+Pipe999PitchTuning=(float -1800 - 1800, default: 0) Retune this pipe the specified number of cents (in addition to the organ/windchest/rank factor).
 Pipe999TrackerDelay=(integer 0 - 10000, default: 0) Delay introduced by the tracker for that pipe.
 Pipe999LoadRelease=(boolean, default: reverse of percussive setting) If true, the release part is loaded from the first attack sample.
 Pipe999AttackVelocity=(integer 0 - 127, default: 0) minimum velocity to use this attack sample.
@@ -807,9 +815,9 @@ Pipe999Release999ReleaseEnd=(integer -1 - 158760000, default: -1) Allows to over
 Pipe999LoopCrossfadeLength=(integer 0 - 3000, default: 0) Crossfade length in ms between loop end and loop start for all loops loaded from the file specified in the Pipe999 parameter. A cross fade requires enough samples before the start of the loop. This parameter is not inherited by loops loaded from additional attack files specified in the Pipe999Attack999 parameters.
 Pipe999Attack999LoopCrossfadeLength=(integer 0 - 3000, default: 0) Crossfade length in ms between loop end and loop start for all loops loaded from the file Pipe999Attack999. A cross fade requires enough samples before the start of the loop.
 
-Pipe999ReleaseCrossfadeLength=(integer 0 - 3000, default: 0) Crossfade length in ms between loop and the release (or other attacks). 0 means automatic selection. This parameter is inherited by all releases loaded from additional attack and release files specified in the Pipe999Attack999 and Pipe999Release999 parameters and may be redefined with the Pipe999Attack999ReleaseCrossfadeLength and Pipe999Release999ReleaseCrossfadeLength parameters.
-Pipe999Attack999ReleaseCrossfadeLength=(integer 0 - 3000, default: Pipe999ReleaseCrossfadeLength) Crossfade length in ms between loop and the release loaded from the file specified in the Pipe999Attack999 parameter.
-ipe999Release999ReleaseCrossfadeLength=(integer 0 - 3000, default: Pipe999ReleaseCrossfadeLength) Crossfade length in ms between loop and the release loaded from the file specified in the Pipe999Release999 parameter.
+Pipe999ReleaseCrossfadeLength=(integer 0 - 3000, default: 0). 0 means automatic selection. Crossfade length in ms between loop and the release loaded from the file specified in the Pipe999 parameter or between different attack samples if Pipe999AttackCount > 0. This parameter is not inherited by the releases loaded from additional attack and release files specified in the Pipe999Attack999 and Pipe999Release999 parameters that should be specified with the Pipe999Attack999ReleaseCrossfadeLength and Pipe999Release999ReleaseCrossfadeLength parameters.
+Pipe999Attack999ReleaseCrossfadeLength=(integer 0 - 3000, default: 0). 0 means automatic selection. Crossfade length in ms between loop and the release loaded from the file specified in the Pipe999Attack999 parameter.
+Pipe999Release999ReleaseCrossfadeLength=(integer 0 - 3000, default: 0). 0 means automatic selection. Crossfade length in ms between loop and the release loaded from the file specified in the Pipe999Release999 parameter.
 
 
 [ReversiblePiston999]
@@ -930,7 +938,7 @@ StopRate=(integer 1-100, required) Determines the stop time of the tremulant.
 AmpModDepth=(integer 1-100, required) Determines, how much the volume will be changed.
 
 OPTIONAL ATTRIBUTES :
-TremulantType=(enumeration, default: Synth) Type of the tremulant. Valid values are: Synth (synthesised tremulant) and Wave (tremulant based on different wave samples).
+TremulantType=(enumeration, default: Synth) Type of the tremulant. Valid values are: Synth (synthesized tremulant) and Wave (tremulant based on different wave samples).
 
 + attributes of a drawstop, see [ DrawStop ]
 
@@ -947,3 +955,10 @@ Tremulant999=(integer 1 - tremulant count, required) Number of a tremulant, whic
 
 OPTIONAL ATTRIBUTES :
 Name=(string, default: implementation dependent) Display name of this windchest.
+AmplitudeLevel=(float 0 - 1000, default: 100) Linear amplitude scale factor in percents applied to the windchest. It is multiplied to the AmplitudeLevel value of the Organ section. 100 means no change.
+Gain=(float -120 - 40, default: 0) Amplitude scale factor in dB applied to the windchest. It is added to the Gain value of the Organ section. 0 means no change.
+PitchTuning=(float -1800 - 1800, default: 0) Retune the windchest by the specified number of cents. It is added to the PitchTuning value of the Organ section. 0 means no change. This setting is used only for the original temperament.
+PitchCorrection=(float -1800 - 1800, default: 0) Correction factor in cent for the pitch of the windchest. It is added to the PitchTuning value of the Organ section. 0 means no change. This setting is used for retuning to other temperaments.
+TrackerDelay=(integer 0 - 10000, default: 0) Delay in miliseconds introduced by the tracker applied to the windchest. It is added to the TrackerDelay value of the Organ section.
+Percussive=(boolean, default inherited from the Organ section) If true, the samples are played as is (without any loop/release handling).
+HasIndependentRelease=(boolean, default inherited from the Organ section). If true, releases are played independently of the attacks. If HasIndependentRelease is true then Percussive must also be set to true.
