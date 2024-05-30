@@ -1,23 +1,27 @@
 >> IT IS HIGHLY RECOMMANDED TO MAKE CHANGES IN A COPY OF THE ORIGINAL ODF.
 
 >> General information
-This tool is intended to help in editing and checking a GrandOrgue organ definition file (ODF, extension .organ) in plain text mode, with the help of sections/objects browsers (sorted list or tree).
+This tool is intended to help in editing and checking a GrandOrgue organ definition file (ODF, extension .organ) in plain text mode, with the help of objects sections browsers (sorted list or tree).
 To completely check the goodness of an ODF, loading it in GrandOrgue will detect deeply all the remaining errors if any.
 Double clicking a section name in the sections list will expand the sections tree so that all the occurrences of the selected section are visible in the tree.
 Double clicking on a parent or child section name in the parents/children list will make this section the selected one in the sections list and tree.
+Double clicking on a search result in the HW sample set will make show the related section in the "HW sections" tab.
 The help below is largely inspired and copy/pasted from the GrandOrgue help.
 
 Menu items
 ------------------
-Save ODF in ISO-8859-1 format (else UTF-8) => if checked, the ODF saving is made with ISO-8859-1 encoding, else it is with UTF-8-COM.
-Sort references in selected section... => after confirming, it permits to sort in the selected section the references to other sections. It works for sections of types : Coupler, Divisional, General, Manual, Stop, Switch, Tremulant, WindchestGroup.
-HW to GO - do not convert keys noises => if checked, the manuals keys noises are not converted in the GO ODF.
+Save ODF in ISO-8859-1 format (else UTF-8) => if checked, the ODF saving is made with ISO-8859-1 encoding, else it is with UTF-8-COM. It is proposed as GrandOrgue supports this format, but it gives less range of supported accentuated characters as UTF-8.
+Sort references in selected section... => it sorts by ascending numerical order the references to other sections in the selected section. It works for sections of following types : Coupler, Divisional, General, Manual, Stop, Switch, Tremulant, WindchestGroup.
+HW to GO - do not convert keys noises => if checked, the manuals keys noises are not converted in the GO ODF. This can be wanted to not hear the keyboards noise of the sample set in addition to the keyboards noise of the organ used to play this sample set.
 HW to GO - convert alternate panels layouts => if checked, the alternate panels layouts of the HW sample set (portrait mode panels for example) are converted in GO panels.
-HW to GO - convert tremmed samples => if checked, the tremmed samples of the HW sample set are converted in the GO ODF. The usage of tremmed samples can increase a lot the RAM consumed by GrandOrgue to load the sample sets.
-HW to GO - place tremmed samples in separate ranks => if checked, tremmed samples are placed in separate ranks instead of being placed in ranks of the corresponding un-tremmed samples. This option is significant only if tremmed samples conversion is enabled.
-HW to GO - convert unused ranks => if checked, the ranks of the HW sample set which are not used by the stops of the built GO ODF are converted all the same in the GO ODF (can be then linked manually to stops).
-HW to GO - correct pipes pitch from samples metadata => if checked, the MIDI note number in samples metadata is used to apply if necessary a pitch tuning correction to some pipes. It increases the time of the HW to GO conversion. It can be necessary when some pipes are played at a wrong pitch. The corrected pipes are listed in the logs window at the end of the conversion.
-HW to GO - correct pipes pitch from samples file name => if checked, the MIDI note number in samples file name is used to apply if necessary a pitch tuning correction to some pipes. It can be necessary when some pipes are played at a wrong pitch, especially for manual keys extension. The corrected pipes are listed in the logs window at the end of the conversion.
+HW to GO - convert tremmed samples => if checked, the tremmed samples (sampled with a tremulant engaged) of the HW sample set are converted in the GO ODF. The usage of tremmed samples can increase a lot the RAM consumed by GrandOrgue to load the sample set. So it can be desired to not convert them to have a sample set needing less RAM size. Such sample sets generally propose as well synthetized tremulants which are always converted to GO ODF.
+HW to GO - place tremmed samples in separate ranks => if checked, tremmed samples are placed in separate ranks instead of being placed inside ranks of their corresponding untremmed samples. This option is significant only if tremmed samples conversion above is enabled. It can be wanted to have the possibility to not load these ranks later in the organ settings of GrandOrgue.
+HW to GO - convert unused ranks => if checked, the ranks of the HW sample set which are not used by the stops of the built GO ODF are converted all the same in the GO ODF. They can be then linked manually to stops if it is desired.
+
+Pipes pitch correction :
+If some notes of the converted ODF are not played at the expected pitch in GrandOrgue, try to fix it by enabling one of the two options below then convert again the HW ODF and test the converted ODF in GrandOrgue.
+HW to GO - correct pipes pitch from samples file name => if checked, the MIDI note number defined in samples file name is used to apply if necessary a pitch tuning correction to some pipes.
+HW to GO - correct pipes pitch from samples metadata => if checked, the MIDI note number defined in samples metadata is used to apply if necessary a pitch tuning correction to some pipes. This method can increase the conversion time as the metadata of each sample file are decoded, so this option should be used after the first one (from file name) if it does not fix the observed pipes pitch issues.
 
 Drag & drop
 ------------------
@@ -661,54 +665,47 @@ REQUIRED ATTRIBUTES :
 Type=Coupler
 Manual=(valid manual number, required) Number of the manual.
 Coupler=(valid coupler number, required) Number of the coupler on the manual.
-+ attributes of a coupler, see [ Coupler999 ]
++ GUI attributes of a coupler, see [ Coupler999 ]
 
 Type=Divisional
 Manual=(valid manual number, required) Number of the manual.
 Divisional=(valid divisional number, required) Number of the divisional on the manual.
-+ attributes of a divisional, see [ Divisional999 ]
++ GUI attributes of a divisional, see [ Divisional999 ]
 
 Type=DivisionalCoupler
 DivisionalCoupler=(valid divisional coupler number, required) Number of the divisional coupler.
-+ attributes of a divisional coupler, see [ DivisionalCoupler999 ]
++ GUI attributes of a divisional coupler, see [ DivisionalCoupler999 ]
 
 Type=Enclosure
 Enclosure=(valid enclosure number, required) Number of the enclosure.
-+ attributes of an enclosure, see [ Enclosure999 ]
++ GUI attributes of an enclosure, see [ Enclosure999 ]
 
 Type=General
 General=(valid general number, required) Number of the general.
-+ attributes of a general, see [ General999 ]
-
-Type=Label
-+ attributes of a label, see [ Label999 ]
++ GUI attributes of a general, see [ General999 ]
 
 Type=Manual
 Manual=(valid manual number, required) Number of the manual.
-+ attributes of a manual, see [ Manual999 ]
++ GUI attributes of a manual, see [ Manual999 ]
 
 Type=ReversiblePiston
 ReversiblePiston=(valid reversible piston number, required) Number of the reversible piston.
-+ attributes of a reversible piston, see [ ReversiblePiston999 ]
++ GUI attributes of a reversible piston, see [ ReversiblePiston999 ]
 
 Type=Stop
 Manual=(valid manual number, required) Number of the manual.
 Stop=(valid stop number, required) Number of the stop on the manual.
-+ attributes of a stop, see [ Stop999 ]
-
-Type=Swell (Represents the crescendo swell)
-+ attributes of an enclosure, see [ Enclosure999 ]
++ GUI attributes of a stop, see [ Stop999 ]
 
 Type=Switch
 Switch=(valid switch number, required) Number of the switch.
-+ attributes of a switch, see [ Switch999 ]
++ GUI attributes of a switch, see [ Switch999 ]
 
 Type=Tremulant
 Tremulant=(valid tremulant number, required) Number of the tremulant.
-+ attributes of a tremulant, see [ Tremulant999 ]
++ GUI attributes of a tremulant, see [ Tremulant999 ]
 
-Type=(a setter element, see the types in [ SetterElement999 ])
-+ attributes of a setter element, see [ SetterElement999 ]
+Type=(a setter element, see the possible types in [ SetterElement999 ])
 
 
 [Panel999Image999]
@@ -829,73 +826,97 @@ It is possible to display various setter elements on the panels. The Type attrib
 
 REQUIRED ATTRIBUTES :
 Type=CrescendoLabel (Represents a label with crescendo state, ie the current step that the crescendo pedal is at, from 1 to 32)
-+ attributes of a label, see [ Label999 ]
++ GUI attributes of a label, see [ Label999 ]
 
-Type=CrescendoA, CrescendoB, CrescendoC or CrescendoD (Buttons to switch between the various crescendo modes, displayed as button per default)
-+ attributes of a button, see [ Button ]
+Type=CrescendoA, CrescendoB, CrescendoC or CrescendoD (Buttons to switch between the various crescendo modes)
++ GUI attributes of a button, see [ Button ]  (displayed as button per default)
 
-Type=CrescendoPrev, CrescendoNext or CrescendoCurrent (Buttons for controling the crescendo combinations, displayed as button per default)
-+ attributes of a button, see [ Button ]
+Type=CrescendoPrev, CrescendoNext or CrescendoCurrent (Buttons for controling the crescendo combinations)
++ GUI attributes of a button, see [ Button ]  (displayed as button per default)
 
-Type=Current (Recall current number button of the setter, displayed as button per default)
-+ attributes of a button, see [ Button ]
+Type=Current (Recall current number button of the setter)
++ GUI attributes of a button, see [ Button ] (displayed as button per default)
 
-Type=Full (Button to enable storing all elements in the setter, restrictions from the ODF are ignored, displayed as button per default)
-+ attributes of a button, see [ Button ]
+Type=CurrFileName (Represents the current combinations file name of the setter
++ GUI attributes of a label, see [ Label999 ]
 
-Type=GC (General cancel button of the setter, displayed as button per default)
-+ attributes of a button, see [ Button ]
+Type=RefreshFiles, PrevFile, NextFile, LoadFile, SaveFile (Refresh files/Prev file/Next file/Load file/Save file buttons of the setter)
++ GUI attributes of a button, see [ Button ] (displayed as drawstop per default)
 
-Type=General01 - General50 (Buttons for the setter generals, displayed as button per default)
-+ attributes of a button, see [ Button ]
+Type=Full (Button to enable storing all elements in the setter, restrictions from the ODF are ignored)
++ GUI attributes of a button, see [ Button ]  (displayed as button per default)
+
+Type=GC (General cancel button of the setter)
++ GUI attributes of a button, see [ Button ] (displayed as button per default)
+
+Type=General01 - General50 (Buttons for the setter generals)
++ GUI attributes of a button, see [ Button ]  (displayed as button per default)
 
 Type=GeneralLabel (Represents a label with the general bank number)
-+ attributes of a label, see [ Label999 ]
++ GUI attributes of a label, see [ Label999 ]
 
-Type=GeneralPrev or GeneralNext (Buttons for switching banks of the setter generals, displayed as button per default)
-+ attributes of a button, see [ Button ]
+Type=GeneralPrev or GeneralNext (Buttons for switching banks of the setter generals)
++ GUI attributes of a button, see [ Button ] (displayed as button per default)
 
-Type=Home (Move to 000 button of the setter, displayed as button per default)
-+ attributes of a button, see [ Button ]
+Type=Home (Move to 000 button of the setter)
++ GUI attributes of a button, see [ Button ] (displayed as button per default)
 
-Type=Insert or Delete (Buttons to insert/delete a combination, displayed as button per default)
-+ attributes of a button, see [ Button ]
+Type=Insert or Delete (Buttons to insert/delete a combination)
++ GUI attributes of a button, see [ Button ] (displayed as button per default)
 
-Type=L0, L1, L2, L3, L4, L5, L6, L7, L8 or L9 (Recall combination with the specified digit as last digit button of the setter, displayed as button per default)
-+ attributes of a button, see [ Button ]
+Type=L0, L1, L2, L3, L4, L5, L6, L7, L8 or L9 (Recall combination with the specified digit as last digit button of the setter)
++ GUI attributes of a button, see [ Button ] (displayed as button per default)
 
-Type=M100, M10, M1, P1, P10 or P100 (+/- 1/10/100 button of the setter, displayed as button per default)
-+ attributes of a button, see [ Button ]
+Type=Label (Represents the current number of the setter. Only available for old format panels)
++ GUI attributes of a label, see [ Label999 ]
+
+Type=M100, M10, M1, P1, P10 or P100 (+/- 1/10/100 button of the setter)
++ GUI attributes of a button, see [ Button ] (displayed as button per default)
 
 Type=PitchLabel (Label displaying the current pitch shift of the organ)
-+ attributes of a label, see [ Label999 ]
++ GUI attributes of a label, see [ Label999 ]
 
-Type=PitchP1, PitchP10, PitchP100, PitchM1, PitchM10 or PitchM100 (Buttons for controlling the organ pitch +1, +10, +100, -1, -10, -100 cent, displayed as button per default)
-+ attributes of a button, see [ Button ]
+Type=PitchP1, PitchP10, PitchP100, PitchM1, PitchM10 or PitchM100 (Buttons for controlling the organ pitch +1, +10, +100, -1, -10, -100 cent)
++ GUI attributes of a button, see [ Button ] (displayed as button per default)
 
-Type=Prev, Next or Set (Prev/next/set button of the setter, displayed as button per default)
-+ attributes of a button, see [ Button ]
+Type=Prev, Next (Prev/next button of the setter)
++ GUI attributes of a button, see [ Button ] (displayed as button per default)
 
-Type=Regular, Scope or Scoped (Button to switch between the various setter modes, displayed as button per default)
-+ attributes of a button, see [ Button ]
+Type=Regular, Scope or Scoped (Button to switch between the various setter modes)
++ GUI attributes of a button, see [ Button ] (displayed as button per default)
 
-Type=Save (Save button, displayed as button per default)
-+ attributes of a button, see [ Button ]
+Type=Save (Save button)
++ GUI attributes of a button, see [ Button ] (displayed as button per default)
+
+Type=Set (Set button of the setter)
++ GUI attributes of a button, see [ Button ] (displayed as button per default)
+
+Type=SetterXXXDivisionalYYY (Represents a divisional button YYY (000 means 1, 001 - 2 etc) for the manual XXX (000 - Pedal, 001 - the first manual, etc))
++ GUI attributes of a button (displayed as piston per default), see [ Button ]
+
+Type=SetterXXXDivisionalBank (Represents a label showing the current bank of divisionals for the manual XXX (000 - Pedal, 001 - the first manual, etc))
++ GUI attributes of a label, see [ Label999 ]
+
+Type=SetterXXXDivisionalPrevBank or SetterXXXDivisionalNextBank (Represents a button switching the current bank of divisionals for the manual XXX (000 - Pedal, 001 - the first manual, etc))
++ GUI attributes of a button (displayed as piston per default), see [ Button ]
 
 Type=SequencerLabel (Represents the current number of the setter)
-+ attributes of a label, see [ Label999 ]
++ GUI attributes of a label, see [ Label999 ]
+
+Type=Swell (Represents the crescendo swell)
++ GUI attributes of an enclosure, see [ Enclosure999 ]
 
 Type=TemperamentLabel (Label displaying the current temperament of the organ)
-+ attributes of a label, see [ Label999 ]
++ GUI attributes of a label, see [ Label999 ]
 
-Type=TemperamentPrev or TemperamentNext (Buttons for switching temperaments, displayed as button per default)
-+ attributes of a button, see [ Button ]
+Type=TemperamentPrev or TemperamentNext (Buttons for switching temperaments)
++ GUI attributes of a button, see [ Button ] (displayed as button per default)
 
-Type=TransposeDown or TransposeUp (Buttons for transposing, displayed as button per default)
-+ attributes of a button, see [ Button ]
+Type=TransposeDown or TransposeUp (Buttons for transposing)
++ GUI attributes of a button, see [ Button ] (displayed as button per default)
 
 Type=TransposeLabel (Label displaying the current transpose setting)
-+ attributes of a label, see [ Label999 ]
++ GUI attributes of a label, see [ Label999 ]
 
 
 [Stop999]
