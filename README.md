@@ -18,7 +18,7 @@ Here are elements which can be converter by OdfEdit v2.9 from Hauptwerk to Grand
 - images, labels
 - manuals
 - stops, couplers, switches (which can be managed in GrandOrgue)
-- setters (Set, General Cancel, Generals)
+- combinations (Set, General cancel, General, Divisonal)
 - tremulants (wave based or synthesized)
 - enclosures (including volume tuning sliders)
 - windchests (with associated ranks/tremulants/enclosures)
