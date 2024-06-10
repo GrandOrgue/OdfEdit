@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "OdfEdit"
+version = "2.12"
+description = "Tool for GrandOrgue organ definition file edition and generation"
+readme = "README.md"
+authors = [{ name = "Eric Turpault" }]
+license = { file = "LICENSE.txt" }
+keywords = ["organ", "ODF", "GrandOrgue", "Hauptwerk"]
+dependencies = [
+    "tkinter",
+    "sounddevice",
+    "pillow",
+    "lxml",
+]
+requires-python = ">=3.10"
+
+[tool.setuptools]
+packages = ["src"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+mypkg = ["*.txt", "*.png", "*.ico"]
