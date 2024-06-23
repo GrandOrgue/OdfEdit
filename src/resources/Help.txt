@@ -6,6 +6,7 @@ To completely check the goodness of an ODF, loading it in GrandOrgue will detect
 Double clicking a section name in the sections list will expand the sections tree so that all the occurrences of the selected section are visible in the tree.
 Double clicking on a parent or child section name in the parents/children list will make this section the selected one in the sections list and tree.
 Double clicking on a search result in the HW sample set will make show the related section in the "HW sections" tab.
+Pressing on the Delete button of the computer keyboard will do the same clicking on the Delete button of OdfEdit.
 The help below is largely inspired and copy/pasted from the GrandOrgue help.
 
 Menu items
@@ -355,10 +356,10 @@ Manual999=(integer manual number, required) Manual affected by the coupler
 Drawstop is a button with toogle functions used for coupler, divisional coupler, stop, switch or tremulant, with the following additional non-GUI attributes.
 
 REQUIRED ATTRIBUTES :
+DefaultToEngaged=(boolean, required if Function is Input or not defined, else ignored) State of the button after loading.
 Switch999=(integer 1 - switch count, required) Lists the input switches of the logical function of the drawstop. If the drawstop is a switch, it can only reference switches with a lower number. The number of this settings depends on the function.
 
 OPTIONAL ATTRIBUTES :
-DefaultToEngaged=(boolean, default: false) State of the button after loading.
 Function=(enumeration, default: Input) Logical function of the drawstop. If the value is Input, it is a normal user controllable drawstop and has no input switches. Not has one only input and negates the state of the input switch. And, Xor, Nand, Nor as well as Or has a variable number of inputs.
 SwitchCount=(integer 1 - switch count, required if the logical function allows a variable number number of inputs) Contains the number of input ports. Switch999 contains the referenced switches.
 GCState=(integer -1 - 1, default: implementation defined) State of the button after pressing GC. -1 means no change, 0 off and 1 on.
