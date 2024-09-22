@@ -169,22 +169,23 @@
                           HW2GO : in ranks, set an harmonic number value at rank level, and at pipe level set only if it is different from the one at rank level
                           HW2GO : conversion of HW Combination into GO General/Divisional and master capture (SET) and general cancel
                           HW2GO : set the Enclosure attribute AmpMinimumLevel at 0 instead of 1 as GO 3.14.3 does not mute anymore pipes after enclosure set to 0 and then reopened
-   v2.13 - 19 June 2024 - The search is case insensitive by default (instead of case sensitive by default before)
+   v2.13 - 23 June 2024 - The search is case insensitive by default (instead of case sensitive by default before)
                           Pressing the Delete key of the keyboard does the same action as clicking on the Delete button
                           Adding a button to clear the search&replace data
                           HW2GO : fixing an issue with the attribute DefaultToEngaged=N not set when required, preventing the generated ODF to be loaded in GO
                           HW2GO : improving the manual keys building to support any kind of first and last key note (sharp notes included) when the keys aspect is defined at octave level
                           HW2GO : converting the tremmed samples in the way they are defined in Piotr Grabowski sample sets (placed in second pipes layers and not in alternate ranks as done by Sonus Paradisi)
+   v2.14 - 22 Sept 2024 - The Delete key pressing deletes the selected section only if the focus is in a sections list or tree
+                          Implementation of a manual / stop / rank compass extension feature (accessible from a menu item)
 
 TO DO :
-    add a compass extension feature (https://github.com/GrandOrgue/OdfEdit/issues/54)
     when a panel object is selected, display an overview of this panel in the viewer (display the position of the images defined in this panel)
 
 -------------------------------------------------------------------------------
 """
 
-APP_VERSION = 'v2.13'
-RELEASE_DATE = 'June 23th 2024'
+APP_VERSION = 'v2.14'
+RELEASE_DATE = 'September 22nd 2024'
 
 DEV_MODE = False
 LOG_HW2GO_drawstop = False
@@ -252,6 +253,9 @@ ATTR_TYPE_PIPE_WAVE = 15       # used in Rank
 NOTES_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 NOTES_NB_IN_OCTAVE = len(NOTES_NAMES)
 OCTAVES_RANGE = list(range(-1,10))
+
+# max MIDI note value allowed for the compass extension feature
+COMPASS_EXTEND_MAX = 108  # note C8
 
 # constants to identify the type of link between two objects
 TO_PARENT = 1
@@ -778,356 +782,508 @@ audio_player = C_AUDIO_PLAYER()
 class C_ODF_MISC:
     # class containing miscellaneous functions to manage data of GO ODF objects
 
-    def compass_extend_manual(self, manual_uid, midi_note_ext):
-        # extends the compass of the given manual of the ODF up to the given MIDI note included
+    def compass_get(self, object_uid, rank_compass_in_stop=False):
+        # return in a tuple the first and last MIDI notes of the given object (must be Manual, Stop or Rank)
+        # or return None in case a compass is not defined in this object or expected attributes are not defined correctly
 
-        manual_dic = self.object_dic_get(manual_uid)
-        if manual_dic == None:
-            # the given manual UID does not exist
-            logs.add(f'ERROR : section {manual_uid} does not exist')
-            return
+        object_type = self.object_type_get(object_uid)
+        object_dic = self.object_dic_get(object_uid)
 
-        # get the current compass attributes of the given manual and check if they are actually defined
-        manual_first_access_key_nb = myint(self.object_attr_value_get(manual_dic, 'FirstAccessibleKeyLogicalKeyNumber'))
-        if manual_first_access_key_nb == None:
-            logs.add(f'ERROR : attribute FirstAccessibleKeyLogicalKeyNumber is not defined in {manual_uid}')
-            return
+        if object_type == 'Manual':
 
-        manual_first_access_key_midi_note = myint(self.object_attr_value_get(manual_dic, 'FirstAccessibleKeyMIDINoteNumber'))
-        if manual_first_access_key_midi_note == None:
-            logs.add(f'ERROR : attribute FirstAccessibleKeyMIDINoteNumber is not defined in {manual_uid}')
-            return
+            manual_first_access_key_midi_note = myint(self.object_attr_value_get(object_dic, 'FirstAccessibleKeyMIDINoteNumber'))
+            if manual_first_access_key_midi_note == None:
+                logs.add(f'ERROR : The section {object_uid} has no FirstAccessibleKeyMIDINoteNumber value defined')
+                return None
 
-        manual_access_keys_nb = myint(self.object_attr_value_get(manual_dic, 'NumberOfAccessibleKeys'))
-        if manual_access_keys_nb == None:
-            logs.add(f'ERROR : attribute NumberOfAccessibleKeys is not defined in {manual_uid}')
-            return
+            manual_access_keys_nb = myint(self.object_attr_value_get(object_dic, 'NumberOfAccessibleKeys'))
+            if manual_access_keys_nb == None:
+                logs.add(f'ERROR : The section {object_uid} has no NumberOfAccessibleKeys value defined')
+                return None
 
-        manual_last_access_key_midi_note = manual_first_access_key_midi_note + manual_access_keys_nb - 1
+            if myint(self.object_attr_value_get(object_uid, 'FirstAccessibleKeyLogicalKeyNumber')) == None:
+                logs.add(f'ERROR : The section {object_uid} has no NumberOfLogicalKeys value defined')
+                return None
 
-        manual_logical_keys_nb = myint(self.object_attr_value_get(manual_dic, 'NumberOfLogicalKeys'))
-        if manual_logical_keys_nb == None:
-            logs.add(f'ERROR : attribute NumberOfLogicalKeys is not defined in {manual_uid}')
-            return
+            if myint(self.object_attr_value_get(object_uid, 'NumberOfLogicalKeys')) == None:
+                logs.add(f'ERROR : The section {object_uid} has no NumberOfLogicalKeys value defined')
+                return None
 
-        # set the new compass of the manual
-        if midi_note_ext < manual_first_access_key_midi_note:
-            # extension below the current compass
-            new_manual_first_access_key_midi_note = midi_note_ext
-            new_manual_last_access_key_midi_note = manual_last_access_key_midi_note
-
-            manual_first_access_key_nb_shift = new_manual_first_access_key_midi_note - manual_first_access_key_midi_note
-            new_manual_first_access_key_nb = min(1, manual_first_access_key_nb + manual_first_access_key_nb_shift)
-            new_manual_access_keys_nb = manual_access_keys_nb - manual_first_access_key_nb_shift
-            extention_side = 'below'
-        elif midi_note_ext > manual_last_access_key_midi_note:
-            # extension above the current compass
-            new_manual_first_access_key_midi_note = manual_first_access_key_midi_note
-            new_manual_last_access_key_midi_note = midi_note_ext
-
-            manual_first_access_key_nb_shift = 0
-            new_manual_first_access_key_nb = manual_first_access_key_nb
-            new_manual_access_keys_nb = manual_access_keys_nb + new_manual_last_access_key_midi_note - manual_last_access_key_midi_note
-            extention_side = 'above'
-        else:
-            # no extension to do, the given MIDI note is inside the current compass of the manual
-            logs.add(f'no compass extension to do in {manual_uid}, MIDI note {midi_note_ext} is inside its current compass {manual_first_access_key_midi_note} -> {manual_last_access_key_midi_note}')
-            return
-
-        new_manual_logical_keys_nb = max(manual_logical_keys_nb, new_manual_first_access_key_nb + new_manual_access_keys_nb - 1)
-
-        for stop_uid in self.object_kinship_list_get(manual_uid, TO_CHILD, 'Stop'):
-            # scan the stops belonging to the manual
-
-            if (self.object_attr_value_get(stop_uid, 'AcceptsRetuning') == 'N' or
-                self.object_attr_value_get(stop_uid, 'NumberOfLogicalPipes') == '1'):
-                # it is a stop corresponding to noise samples, no need to extend it
-                logs.add(f'{stop_uid} is skipped, it contains noise sample')
-            else:
-                # recover the current MIDI notes compass of the stop
-                stop_first_access_pipe_key_nb = myint(self.object_attr_value_get(stop_uid, 'FirstAccessiblePipeLogicalKeyNumber'))
-                if stop_first_access_pipe_key_nb == None:
-                    logs.add(f'ERROR : attribute FirstAccessiblePipeLogicalKeyNumber is not defined in {stop_uid}')
-                    return
-                stop_access_pipes_nb = myint(self.object_attr_value_get(stop_uid, 'NumberOfAccessiblePipes'))
-                if stop_access_pipes_nb == None:
-                    logs.add(f'ERROR : attribute NumberOfAccessiblePipes is not defined in {stop_uid}')
-                    return
-                stop_first_midi_note_nb = manual_first_access_key_midi_note + stop_first_access_pipe_key_nb - 1
-                stop_last_midi_note_nb = stop_first_midi_note_nb + stop_access_pipes_nb - 1
-
-                # set the new compass of the stop
-                if midi_note_ext < stop_first_midi_note_nb:
-                    # extension below the current compass
-                    new_manual_first_access_key_midi_note = midi_note_ext
-                    new_manual_last_access_key_midi_note = manual_last_access_key_midi_note
-
-                    manual_first_access_key_nb_shift = new_manual_first_access_key_midi_note - manual_first_access_key_midi_note
-                    new_manual_first_access_key_nb = min(1, manual_first_access_key_nb + manual_first_access_key_nb_shift)
-                    new_manual_access_keys_nb = manual_access_keys_nb - manual_first_access_key_nb_shift
-                    extention_side = 'below'
-                elif midi_note_ext > stop_last_midi_note_nb:
-                    # extension above the current compass
-                    new_manual_first_access_key_midi_note = manual_first_access_key_midi_note
-                    new_manual_last_access_key_midi_note = midi_note_ext
-
-                    manual_first_access_key_nb_shift = 0
-                    new_manual_first_access_key_nb = manual_first_access_key_nb
-                    new_manual_access_keys_nb = manual_access_keys_nb + new_manual_last_access_key_midi_note - manual_last_access_key_midi_note
-                    extention_side = 'above'
-                else:
-                    # no extension to do, the given MIDI note is inside the current compass of the manual
-                    pass
-
-                if ((extention_side == 'below' and stop_first_midi_note_nb == manual_first_access_key_midi_note) or
-                    (extention_side == 'above' and stop_last_midi_note_nb == manual_last_access_key_midi_note)):
-                    # the stop is covering the first or last MIDI note of the manual (whether the extension has to be done respectively below or above the manual compass)
-                    # it has to be extended
-
-                    if self.object_attr_value_get(stop_uid, 'WindchestGroup') != None:
-                        # the current stop contains rank attributes inside it
-
-                        stop_first_access_pipe_nb = myint(self.object_attr_value_get(stop_uid, 'FirstAccessiblePipeLogicalPipeNumber'), 1)
-                        if stop_first_access_pipe_nb == None:
-                            logs.add(f'ERROR : attribute FirstAccessiblePipeLogicalPipeNumber is not defined in {stop_uid}')
-                            return
-
-                        # extend the rank of the stop
-                        self.compass_extend_rank(stop_uid, midi_note_ext, manual_first_access_key_midi_note + stop_first_access_pipe_nb - 1)
-                        if compass != None:
-                            # the extension has been done
-                            new_manual_first_key_midi_note = min(new_manual_first_key_midi_note, compass[0])
-                            new_manual_last_key_midi_note = max(new_manual_last_key_midi_note, compass[1])
-
-                            # update the attributes of the stop to reflect the extension
-
-#++++++++++++++++++++
-                    else:
-                        stop_ranks_nb = myint(self.object_attr_value_get(stop_uid, 'NumberOfRanks'))
-                        if stop_ranks_nb == None:
-                            logs.add(f'ERROR : attribute NumberOfRanks is not defined in {stop_uid}')
-                            return
-
-                        for attr_rank_idx in range(1, stop_ranks_nb):
-
-                            attr_rank_name = 'Rank' + str(attr_rank_idx).zfill(3)
-                            rank_id = myint(self.object_attr_value_get(stop_uid, attr_rank_name))
-                            if rank_id == None:
-                                logs.add(f'ERROR : attribute {attr_rank_name} is not defined in {stop_uid}')
-                                return
-                            rank_uid = 'Rank' + str(rank_id).zfill(3)
-
-                            rank_first_pipe_nb = myint(self.object_attr_value_get(stop_uid, rank_id + 'FirstPipeNumber'), 1)
-                            rank_first_access_key_nb = myint(self.object_attr_value_get(stop_uid, rank_id + 'FirstAccessibleKeyNumber'), 1)
-                            rank_pipe_count = myint(self.object_attr_value_get(stop_uid, rank_id + 'PipeCount'), 1)
-    #---------------------------
-                            # recover the accessible MIDI notes compass of the rank in the Stop
-
-                            compass = self.compass_extend_rank(rank_uid, midi_note_ext, manual_first_access_key_midi_note)
-                            if compass != None:
-                                new_manual_first_key_midi_note = min(new_manual_first_key_midi_note, compass[0])
-                                new_manual_last_key_midi_note = max(new_manual_last_key_midi_note, compass[1])
+            return (manual_first_access_key_midi_note, manual_first_access_key_midi_note + manual_access_keys_nb - 1)
 
 
-        # extend the manual compass in order to cover the possible ranks extension
-        first_key_shift = manual_first_access_key_midi_note - new_manual_first_key_midi_note
-        new_first_key_nb = max(1, manual_first_access_key_nb + first_key_shift)
-        new_keys_nb = new_manual_last_key_midi_note - new_manual_first_key_midi_note + 1
+        if object_type == 'Stop':
 
-        self.object_attr_value_set(manual_dic, 'FirstAccessibleKeyLogicalKeyNumber', new_first_key_nb)
-        self.object_attr_value_set(manual_dic, 'FirstAccessibleKeyMIDINoteNumber', new_manual_first_key_midi_note)
-        self.object_attr_value_set(manual_dic, 'NumberOfAccessibleKeys', new_keys_nb)
+            manual_uid = self.object_parent_manual_get(object_uid)
+            manual_first_access_key_midi_note = myint(self.object_attr_value_get(manual_uid, 'FirstAccessibleKeyMIDINoteNumber'))
+            if manual_first_access_key_midi_note == None:
+                logs.add(f'ERROR : The section {manual_uid} has no FirstAccessibleKeyMIDINoteNumber value defined')
+                return None
 
-        if manual_logical_keys_nb < new_keys_nb:
-            self.object_attr_value_set(manual_dic, 'NumberOfLogicalKeys', new_keys_nb)
+            manual_first_access_key_logic_key_nb = myint(self.object_attr_value_get(manual_uid, 'FirstAccessibleKeyLogicalKeyNumber'))
+            if manual_first_access_key_logic_key_nb == None:
+                logs.add(f'ERROR : The section {manual_uid} has no FirstAccessibleKeyLogicalKeyNumber value defined')
+                return None
 
+            manual_first_logical_key_midi_note = manual_first_access_key_midi_note - manual_first_access_key_logic_key_nb + 1
 
+            stop_ranks_nb = myint(self.object_attr_value_get(object_dic, 'NumberOfRanks'), 0)
 
-        for stop_uid in self.object_kinship_list_get(manual_uid, TO_CHILD, 'Stop'):
-            # extend the pipe ranks of the stops attached to the manual, if applicable
+            stop_first_access_pipe_logic_key_nb = myint(self.object_attr_value_get(object_dic, 'FirstAccessiblePipeLogicalKeyNumber'))
+            if stop_first_access_pipe_logic_key_nb == None:
+                logs.add(f'ERROR : The section {object_uid} has no attribute FirstAccessiblePipeLogicalKeyNumber defined')
+                return None
 
-            if self.object_attr_value_get(stop_uid, 'WindchestGroup') != None:
-                # the current stop contains rank attributes inside it
-                compass = self.compass_extend_rank(stop_uid, midi_note_ext, manual_first_access_key_midi_note)
-                if compass != None:
-                    new_manual_first_key_midi_note = min(new_manual_first_key_midi_note, compass[0])
-                    new_manual_last_key_midi_note = max(new_manual_last_key_midi_note, compass[1])
+            stop_first_access_pipe_midi_note = manual_first_logical_key_midi_note + stop_first_access_pipe_logic_key_nb - 1
 
-            else:
-                for rank_uid in self.object_kinship_list_get(stop_uid, TO_CHILD, 'Rank'):
-                    compass = self.compass_extend_rank(rank_uid, midi_note_ext, manual_first_access_key_midi_note)
-                    if compass != None:
-                        new_manual_first_key_midi_note = min(new_manual_first_key_midi_note, compass[0])
-                        new_manual_last_key_midi_note = max(new_manual_last_key_midi_note, compass[1])
+            stop_access_pipes_nb = myint(self.object_attr_value_get(object_dic, 'NumberOfAccessiblePipes'))
+            if stop_access_pipes_nb == None:
+                logs.add(f'ERROR : The section {object_uid} has no attribute NumberOfAccessiblePipes defined')
+                return None
 
-        # update the compass of the manual based on the overall extended compass of the associated pipe ranks
-        first_key_shift = manual_first_access_key_midi_note - new_manual_first_key_midi_note
-        new_first_key_nb = max(1, manual_first_access_key_nb + first_key_shift)
-        new_keys_nb = new_manual_last_key_midi_note - new_manual_first_key_midi_note + 1
+            if stop_ranks_nb == 0:
+                stop_first_access_pipe_logic_pipe_nb = myint(self.object_attr_value_get(object_uid, 'FirstAccessiblePipeLogicalPipeNumber'))
+                if stop_first_access_pipe_logic_pipe_nb == None:
+                    logs.add(f'ERROR : The section {object_uid} has no FirstAccessiblePipeLogicalPipeNumber value defined')
+                    return None
 
-        self.object_attr_value_set(manual_dic, 'FirstAccessibleKeyLogicalKeyNumber', new_first_key_nb)
-        self.object_attr_value_set(manual_dic, 'FirstAccessibleKeyMIDINoteNumber', new_manual_first_key_midi_note)
-        self.object_attr_value_set(manual_dic, 'NumberOfAccessibleKeys', new_keys_nb)
+                stop_logic_pipes_nb = myint(self.object_attr_value_get(object_dic, 'NumberOfLogicalPipes'))
+                if stop_logic_pipes_nb == None:
+                    logs.add(f'ERROR : The section {object_uid} has no attribute NumberOfLogicalPipes defined')
+                    return None
 
-        if manual_logical_keys_nb < new_keys_nb:
-            self.object_attr_value_set(manual_dic, 'NumberOfLogicalKeys', new_keys_nb)
+            if rank_compass_in_stop and stop_ranks_nb == 0:
+                # instead of returning the compass of the stop, do return the compass of the rank defined in the stop
 
-        if new_keys_nb > manual_access_keys_nb:
-            logs.add(f'{manual_uid} MIDI notes compass extended from {manual_first_access_key_midi_note} -> {manual_first_access_key_midi_note + manual_access_keys_nb - 1} to {new_manual_first_key_midi_note} -> {new_manual_first_key_midi_note + new_keys_nb - 1}')
+                stop_first_logical_pipe_midi_note = stop_first_access_pipe_midi_note - stop_first_access_pipe_logic_pipe_nb + 1
 
-        # update the compass of the stops linked to the manual
-        for stop_uid in self.object_kinship_list_get(manual_uid, TO_CHILD, 'Stop'):
+                return (stop_first_logical_pipe_midi_note, stop_first_logical_pipe_midi_note + stop_logic_pipes_nb - 1)
 
-            if self.object_attr_value_get(stop_uid, 'WindchestGroup') != None:
-                # the current stop contains rank attributes inside it
-                pass
-
-            else:
-                for rank_uid in self.object_kinship_list_get(stop_uid, TO_CHILD, 'Rank'):
-                    pass
+            return (stop_first_access_pipe_midi_note, stop_first_access_pipe_midi_note + stop_access_pipes_nb - 1)
 
 
-        # extend the keys of the manual
-        if new_keys_nb > manual_access_keys_nb:
-            pass
+        if object_type == 'Rank':
+
+            rank_midi_note_first = myint(self.object_attr_value_get(object_dic, 'FirstMidiNoteNumber'))
+            if rank_midi_note_first == None:
+                logs.add(f'ERROR : The section {object_uid} has no attribute FirstMidiNoteNumber defined')
+                return None
+
+            rank_pipes_nb = myint(self.object_attr_value_get(object_dic, 'NumberOfLogicalPipes'))
+            if rank_pipes_nb == None:
+                logs.add(f'ERROR : The section {object_uid} has no attribute NumberOfLogicalPipes defined')
+                return None
+
+            return (rank_midi_note_first, rank_midi_note_first + rank_pipes_nb - 1)
+
+        logs.add(f"A section {object_type} has no compass attributes")
+        return None
 
     #-------------------------------------------------------------------------------------------------
-    def compass_extend_rank(self, object_uid, midi_note_ext, manual_first_access_midi_note=None, check_only=False):
-        # extends the compass of the given object UID (rank or stop with rank inside) of the GO ODF, up/down to the given MIDI note (included)
-        # the manual first accessible MIDI note is required in case of given Stop object UID (the first accessible MIDI note is not defined in the Stop)
-        # try to borrow existings pipes of the rank with one octave of interval, if not possible (more than 1200 cents of pitch tuning needed) use closer existing pipe
-        # return in a tuple the first and last MIDI notes of the rank if it has been extended, if not or if error return None
+    def compass_extend(self, object_uid, midi_note_ext):
+        # extends the compass of the given object (Manual or Stop or Rank) of the ODF up or down to the given MIDI note included
+        # return in a tuple the new first and last MIDI notes of the manual
+        # or return None if an error has occurred
 
-        object_dic = self.object_dic_get(object_uid)
-        if object_dic == None:
+        # check if the given object can be extended
+        compass = self.compass_get(object_uid)
+        if compass == None:
+            # the object has not a compass which can be extended or there are errors in the object
             return None
+
         object_type = self.object_type_get(object_uid)
+        midi_note_first, midi_note_last = compass
+        logs.add(f'Trying to extend {object_uid} from MIDI notes compass {midi_note_first}-{midi_note_last} up to MIDI note {midi_note_ext}')
+        logs.add('')
 
-        if (self.object_attr_value_get(object_uid, 'AcceptsRetuning') == 'N' or
-            self.object_attr_value_get(object_uid, 'NumberOfLogicalPipes') == '1'):
-            # it is a rank/stop with noise samples, no need to extend it, it cannot be retuned
-            if not check_only: logs.add(f'{object_uid} is skipped, it contains noise samples')
+        if object_type == 'Rank':
+            return self.compass_extend_rank(object_uid, midi_note_ext)
+
+        if object_type == 'Stop':
+            return self.compass_extend_stop(object_uid, midi_note_ext)
+
+        if object_type == 'Manual':
+            return self.compass_extend_manual(object_uid, midi_note_ext)
+
+        return None
+
+    #-------------------------------------------------------------------------------------------------
+    def compass_extend_manual(self, object_uid, midi_note_ext):
+        # extends the compass of the Stops objects which are children of the given Manual object UID, up to the given MIDI note (included)
+        # return in a tuple the new first and last MIDI notes of the manual
+        # or return None in case an issue has occurred
+
+        object_type = self.object_type_get(object_uid)
+        object_dic = self.object_dic_get(object_uid)
+
+        if object_type != 'Manual':
+            logs.add('INTERNAL ERROR : a Manual section is expected in compass_extend_manual()')
             return None
 
-        # get the current MIDI notes compass of the given rank
-        first_midi_note_cur = myint(self.object_attr_value_get(object_dic, 'FirstMidiNoteNumber'), manual_first_access_midi_note)
-        if first_midi_note_cur == None and object_type == 'Rank':
-            logs.add(f'ERROR : attribute FirstMidiNoteNumber is not defined in {object_uid}')
+        # get the initial compass and data of the Manual
+        first_midi_note_init, last_midi_note_init = self.compass_get(object_uid)
+        first_midi_note_ext = first_midi_note_init
+        last_midi_note_ext = last_midi_note_init
+
+        nb_logical_keys = myint(self.object_attr_value_get(object_dic, 'NumberOfLogicalKeys'))
+        nb_access_keys = myint(self.object_attr_value_get(object_dic, 'NumberOfAccessibleKeys'))
+        first_access_key_logic_key_nb = myint(self.object_attr_value_get(object_dic, 'FirstAccessibleKeyLogicalKeyNumber'))
+        first_access_key_midi_note = myint(self.object_attr_value_get(object_dic, 'FirstAccessibleKeyMIDINoteNumber'))
+
+        stops_nb = myint(self.object_attr_value_get(object_dic, 'NumberOfStops'))
+        if stops_nb == None:
+            logs.add(f'ERROR : {object_uid} has no NumberOfStops value defined')
+            return None
+        if stops_nb == 0:
+            logs.add(f'{object_uid} has no children Stop sections defined')
             return None
 
-        pipes_nb = myint(self.object_attr_value_get(object_dic, 'NumberOfLogicalPipes'))
-        if pipes_nb == None:
-            logs.add(f'ERROR : attribute NumberOfLogicalPipes is not defined in {object_uid}')
+        pipes_stop_extended = False
+
+        # extend each child stop of the given Manual object, if it is used by the last note of the manual
+        for stop_idx in range(1, stops_nb + 1):
+
+            stop_attr_id = 'Stop' + str(stop_idx).zfill(3)
+            # get the ID and UID of the stop referenced in the current stop index
+            stop_id = myint(self.object_attr_value_get(object_dic, stop_attr_id))
+            if stop_id == None:
+                logs.add(f'ERROR : the attribute {stop_attr_id} is not defined in {object_uid}')
+                return None
+            stop_uid = 'Stop' + str(stop_id).zfill(3)
+            if self.object_dic_get(stop_uid) == None:
+                logs.add(f'ERROR : the stop {stop_uid} referenced in {object_uid} as {stop_attr_id} does not exist')
+                return None
+
+            # get the initial compass of the current stop
+            compass = self.compass_get(stop_uid)
+            if compass == None:
+                return None
+            stop_first_midi_note_init, stop_last_midi_note_init = compass
+
+            # extend the current stop
+            if myint(self.object_attr_value_get(stop_uid, 'NumberOfAccessiblePipes')) == 1:
+                compass = None
+                logs.add(f'{stop_uid} is not extended as it has only one accessible pipe')
+            elif stop_last_midi_note_init < last_midi_note_init:
+                # the stop is not used by the last note of the manual
+                compass = None
+                logs.add(f'{stop_uid} does not have to be extended as it is not played by the last note of {object_uid}')
+            elif mystr(self.object_attr_value_get(stop_uid, 'AcceptsRetuning')) == 'N' and pipes_stop_extended:
+                # the current stop cannot be retuned, it should be a stop containing noises
+                # extend it until the last extended note of the manual if pipes stop has been extended before, in case it is a stop with keys noises
+                compass = self.compass_extend_stop(stop_uid, last_midi_note_ext)
+            else:
+                compass = self.compass_extend_stop(stop_uid, midi_note_ext)
+                pipes_stop_extended = True
+
+            if compass != None:
+                # the stop has been extended
+                stop_first_midi_note_ext, stop_last_midi_note_ext = compass
+                stop_last_midi_note_ext = min(stop_last_midi_note_ext, midi_note_ext)  # if the stop goes beyond the extension MIDI note, ignore the beyong compass
+
+                # update the last MIDI note of the manual based on the extension done in the current stop
+                last_midi_note_ext = max(last_midi_note_ext, stop_last_midi_note_ext)
+
+            logs.add('')  # add a blank line in the logs window between each stop
+
+        # update the number of accessible keys
+        nb_access_keys_ext = last_midi_note_ext - first_access_key_midi_note + 1
+        self.object_attr_value_set(object_uid, 'NumberOfAccessibleKeys', nb_access_keys_ext)
+
+        # update the number of logical keys
+        if first_access_key_logic_key_nb + nb_access_keys_ext - 1 > nb_logical_keys:
+            nb_logical_keys_ext = first_access_key_logic_key_nb + nb_access_keys_ext - 1
+            self.object_attr_value_set(object_uid, 'NumberOfLogicalKeys', nb_logical_keys_ext)
+
+        # add or update the DisplayKeys attribute, set at the initial compass, so that number of displayed keys is unchanged
+        # to be placed in the child PanelElement (Type=Manual) object of the Manual if it is defined, else in the Manual object
+        panel_elem_children_list = self.object_kinship_list_get(object_uid, TO_CHILD, 'PanelElement')
+        if len(panel_elem_children_list) > 0:
+            manual_panel_elem_uid = panel_elem_children_list[0]
+            self.object_attr_value_set(manual_panel_elem_uid, 'DisplayKeys', last_midi_note_init - first_midi_note_init + 1)
+        else:
+            self.object_attr_value_set(object_uid, 'DisplayKeys', last_midi_note_init - first_midi_note_init + 1)
+
+        if nb_access_keys_ext > nb_access_keys:
+            logs.add(f'{object_uid} MIDI notes compass extended from {first_midi_note_init}-{last_midi_note_init} to {first_midi_note_ext}-{last_midi_note_ext}')
+        else:
+            logs.add(f'{object_uid} compass not extended')
+
+        return first_midi_note_ext, last_midi_note_ext
+
+    #-------------------------------------------------------------------------------------------------
+    def compass_extend_stop(self, object_uid, midi_note_ext):
+        # extends the compass of the Rank objects which are children of the given Stop object UID, up to the given MIDI note (included)
+        # return in a tuple the new first and last MIDI notes of the stop
+        # or return None in case an issue has occurred
+
+        object_type = self.object_type_get(object_uid)
+        object_dic = self.object_dic_get(object_uid)
+
+        if object_type != 'Stop':
+            logs.add('INTERNAL ERROR : a Stop section is expected in compass_extend_stop()')
             return None
 
-        last_midi_note_cur = first_midi_note_cur + pipes_nb - 1
+        # get the initial compass of the Stop (accessible pipes compass)
+        compass = self.compass_get(object_uid)
+        if compass == None:
+            return None
+
+        first_midi_note_init, last_midi_note_init = compass
+
+        if midi_note_ext <= last_midi_note_init:
+            logs.add(f'{object_uid} has the MIDI notes compass {first_midi_note_init}-{last_midi_note_init} which covers the MIDI note {midi_note_ext}, it does not need to be extended')
+            return first_midi_note_init, last_midi_note_init
+
+        if myint(self.object_attr_value_get(object_uid, 'NumberOfAccessiblePipes')) == 1:
+            logs.add(f'{object_uid} is not extended as it has only one accessible pipe')
+            return first_midi_note_init, last_midi_note_init
+
+        last_midi_note_ext = last_midi_note_init  # this value will increase based on the extension actually done in each rank used by the stop
+
+        ranks_nb = myint(self.object_attr_value_get(object_uid, 'NumberOfRanks'), 0)
+
+        if ranks_nb == 0:
+            # one rank definition is included in the Stop object
+
+            # extend the rank up to the given MIDI note extension
+            compass = self.compass_extend_rank(object_uid, midi_note_ext)
+            if compass == None:
+                # an error has occured
+                return None
+            rank_first_midi_note_ext, rank_last_midi_note_ext = compass
+
+            # update the number of accessible pipes of the stop
+            rank_last_used_midi_note_ext = min(rank_last_midi_note_ext, midi_note_ext) # if the rank goes beyond the MIDI note extension, ignore the beyong compass
+            nb_access_pipes = rank_last_used_midi_note_ext - first_midi_note_init + 1
+            self.object_attr_value_set(object_uid, 'NumberOfAccessiblePipes', nb_access_pipes)
+
+            last_midi_note_ext = rank_last_used_midi_note_ext
+
+        else:
+            # it is a stop having children ranks, extend each child rank if it is used by the last note of the stop
+
+            for rank_idx in range(1, ranks_nb + 1):
+                # scan the children ranks
+
+                rank_attr_id = 'Rank' + str(rank_idx).zfill(3)
+                # get the ID and UID of the rank referenced in the current rank index
+                rank_id = myint(self.object_attr_value_get(object_dic, rank_attr_id))
+                if rank_id == None:
+                    logs.add(f'ERROR : the attribute {rank_attr_id} is not defined in {object_uid}')
+                    return None
+                rank_uid = 'Rank' + str(rank_id).zfill(3)
+                if self.object_dic_get(rank_uid) == None:
+                    logs.add(f'ERROR : the rank {rank_uid} referenced in {object_uid} as {rank_attr_id} does not exist')
+                    return None
+
+                # get the initial compass of the current rank
+                compass = self.compass_get(rank_uid)
+                if compass == None:
+                    return None
+                rank_first_midi_note_init, rank_last_midi_note_init = compass
+
+                # recover the MIDI notes compass used by the Stop in the current rank
+                rank_first_used_pipe_nb = myint(self.object_attr_value_get(object_dic, rank_attr_id + 'FirstPipeNumber'), 1)
+                rank_used_pipes_count = myint(self.object_attr_value_get(object_dic, rank_attr_id + 'PipeCount'), rank_last_midi_note_init - rank_first_midi_note_init + 1 - (rank_first_used_pipe_nb - 1))
+                rank_first_used_midi_note_init = rank_first_midi_note_init + (rank_first_used_pipe_nb - 1)
+                rank_last_used_midi_note_init = rank_first_used_midi_note_init + rank_used_pipes_count - 1
+
+                logs.add(f'{object_uid} uses in {rank_uid} the MIDI notes compass {rank_first_used_midi_note_init}-{rank_last_used_midi_note_init}')
+
+                # recover the MIDI note shift from manual keys to rank pipes
+                manual_first_access_key_nb = myint(self.object_attr_value_get(object_dic, rank_attr_id + 'FirstAccessibleKeyNumber'), 1)
+                midi_note_manual_to_rank_shift = rank_first_used_midi_note_init - (first_midi_note_init + manual_first_access_key_nb - 1)
+                if midi_note_manual_to_rank_shift != 0:
+                    logs.add(f'                  from manual keys MIDI notes compass {rank_first_used_midi_note_init - midi_note_manual_to_rank_shift}-{rank_last_used_midi_note_init - midi_note_manual_to_rank_shift}')
+
+                if last_midi_note_init + midi_note_manual_to_rank_shift <= rank_last_used_midi_note_init:
+                    # the last note of the stop if using the current rank, so extend it
+                    compass = self.compass_extend_rank(rank_uid, midi_note_ext + midi_note_manual_to_rank_shift)
+                    if compass != None:
+                        rank_first_midi_note_ext, rank_last_midi_note_ext = compass
+                        rank_last_used_midi_note_ext = min(rank_last_midi_note_ext, midi_note_ext + midi_note_manual_to_rank_shift)  # if the rank goes beyond the extension MIDI note, ignore the beyong compass
+
+                        # update the number of pipes used by the stop in the current rank
+                        if self.object_attr_value_get(object_dic, rank_attr_id + 'PipeCount') != None:
+                            # the attribute Rank999PipeCount is defined, update it
+                            rank_pipe_count_ext = rank_last_used_midi_note_ext - rank_first_used_midi_note_init + 1
+                            self.object_attr_value_set(object_dic, rank_attr_id + 'PipeCount', rank_pipe_count_ext)
+
+                        if mystr(self.object_attr_value_get(rank_uid, 'AcceptsRetuning'), 'Y') == 'Y':
+                            # update the last MIDI note of the stop based on the extension done in the current rank
+                            # only if the rank can be retuned
+                            # this is to avoid to take into the extension of the ranks which can be extended up to the required MIDI note without pitch tuning limitation
+                            last_midi_note_ext = max(last_midi_note_ext, rank_last_used_midi_note_ext - midi_note_manual_to_rank_shift)
+
+                else:
+                    logs.add(f'{rank_uid} does not have to be extended as it is not played by the last note of {object_uid}')
+
+            # update the number of pipes used in the stop, adding to it the number of added MIDI notes in the ranks
+            nb_access_pipes = myint(self.object_attr_value_get(object_uid, 'NumberOfAccessiblePipes')) + last_midi_note_ext - last_midi_note_init
+            self.object_attr_value_set(object_uid, 'NumberOfAccessiblePipes', nb_access_pipes)
+
+            if last_midi_note_ext > last_midi_note_init:
+                logs.add(f'{object_uid} MIDI notes compass extended from {first_midi_note_init}-{last_midi_note_init} to {first_midi_note_init}-{last_midi_note_ext}')
+            else:
+                logs.add(f'{object_uid} MIDI notes compass not extended')
+
+        return first_midi_note_init, last_midi_note_ext
+
+    #-------------------------------------------------------------------------------------------------
+    def compass_extend_rank(self, object_uid, midi_note_ext):
+        # extends the compass of the given object UID (rank or stop with rank data inside) of the GO ODF, up/down to the given MIDI note (included)
+        # borrowing existing pipes of the rank with one octave of interval
+        # the extension can be done below or above the existing compass
+        # return in a tuple the new first and last MIDI notes of the rank
+        # or return None in case an issue has occurred
+
+        object_type = self.object_type_get(object_uid)
+        object_dic = self.object_dic_get(object_uid)
+
+        # get the initial MIDI notes compass of the given Rank or Stop
+        if object_type not in ('Rank', 'Stop'):
+            logs.add('INTERNAL ERROR : a Rank or Stop section is expected in compass_extend_rank()')
+            return None
+
+        # get the compass of the given Rank or the rank which is inside the given Stop
+        compass = self.compass_get(object_uid, object_type == 'Stop')
+        if compass == None:
+            # there is an error in the objects
+            return None
+
+        first_midi_note_init, last_midi_note_init = compass
+
+        if last_midi_note_init - first_midi_note_init < 12:
+            logs.add(f'{object_uid} is not extended as it has less than 12 accessible pipes')
+            return first_midi_note_init, last_midi_note_init
+
+        rank_accepts_retuning = mystr(self.object_attr_value_get(object_dic, 'AcceptsRetuning'), 'Y')
 
         # define the extended MIDI notes compass of the given rank
-        if midi_note_ext < first_midi_note_cur:
-            # extension below the current compass
+        if midi_note_ext < first_midi_note_init:
+            # extension below the initial rank compass
             first_midi_note_ext = midi_note_ext
-            last_midi_note_ext = last_midi_note_cur
-        elif midi_note_ext > last_midi_note_cur:
-            # extension above the current compass
-            first_midi_note_ext = first_midi_note_cur
+            last_midi_note_ext = last_midi_note_init
+        elif midi_note_ext > last_midi_note_init:
+            # extension above the initial rank compass
+            first_midi_note_ext = first_midi_note_init
             last_midi_note_ext = midi_note_ext
         else:
-            # no extension to do, the given MIDI note is inside the rank compass
-            if not check_only: logs.add(f'{object_uid} does not need to be extended, MIDI note {midi_note_ext} is already in its MIDI notes compass {first_midi_note_cur} -> {last_midi_note_cur}')
-            return None
+            # no extension to do, the given MIDI note is inside the initial rank compass
+            logs.add(f'{object_uid} does not need to be extended, the MIDI note {midi_note_ext} is inside its MIDI notes compass {first_midi_note_init}-{last_midi_note_init}')
+            return first_midi_note_init, last_midi_note_init
 
-        # build a dictionary having as keys the MIDI notes of the extended rank
-        # and for each MIDI note a tuple value with : the pipe number of the current rank to map for this MIDI note
-        #                                             the pitch tuning in cents to apply to the pipe number to play the MIDI note
-        pipes_mapping_dic = {}
+        # build a dictionary having as keys all MIDI notes of the extended rank
+        # and for each MIDI note a tuple value with : the pipe number of the initial rank to use to play this MIDI note
+        #                                             the pitch tuning in cents to apply to this pipe to play the MIDI note
+        #                                             the gain to apply to the pipe (+5dB to apply if negative pitch tuning, -5dB if positive pitch tuning)
+        # or None if none pipe can be mapped for the MIDI note
+        midi_pipe_mapping_dic = {}
         for midi_note_nb in range(first_midi_note_ext, last_midi_note_ext + 1):
             # scan the MIDI notes of the extended compass
 
-            # determine if a pipe borrowing with pitch tuning is needed and if yes in which direction
-            if midi_note_nb < first_midi_note_cur:
-                # the current MIDI note is before the first pipe of the rank : need to apply a negative pitch tuning of a borrowed pipe
-                pitch_tuning_factor = -1
-            elif midi_note_nb > last_midi_note_cur:
-                # the current MIDI note is after the last pipe of the rank : need to apply a positive pitch tuning of a borrowed pipe
-                pitch_tuning_factor = 1
+            # determine if an existing pipe has to be changed to play the current MIDI note
+            if midi_note_nb < first_midi_note_init:
+                # the current MIDI note is below the first MIDI note of the initial rank : need to apply a -1 octave pitch tuning
+                change_factor = -1
+            elif midi_note_nb > last_midi_note_init:
+                # the current MIDI note is above the last MIDI note of the initial rank : need to apply a +1 octave pitch tuning
+                change_factor = 1
             else:
-                # the current MIDI note is within the current pipes range : no pitch tuning to apply
-                pitch_tuning_factor = 0
+                # the current MIDI note is within the initial MIDI notes range : no pitch tuning to apply
+                change_factor = 0
 
-            mapped_midi_note_cur = midi_note_nb # MIDI note of the current compass which will be mapped to the MIDI note of the extended compass
+            # determine which pipe of the rank has to be used to play the current MIDI note
+            while 1:
+                used_midi_note = midi_note_nb - 12 * change_factor
 
-            if pitch_tuning_factor != 0:
-                # a pipe borrowing has to be done to play the MIDI note
-                # search which of the existing pipes can be borrowed for the MIDI note
-                pitch_tuning_cents = 1200 * pitch_tuning_factor # by default borrows a note at one octave of interval from the MIDI note
-                while pitch_tuning_cents != 0:
-                    # check if with the current pitch tuning we can find a pipe to borrow
-                    mapped_midi_note_cur = midi_note_nb - int(pitch_tuning_cents / 100)
-                    if mapped_midi_note_cur in range(first_midi_note_cur, last_midi_note_cur + 1):
-                        # the MIDI note to borrow is inside the current MIDI notes range
-                        # check if the borrowed pipe can be actually used if it is already a borrowed pipe
-                        mapped_pipe_id_cur = 'Pipe' + str(mapped_midi_note_cur - first_midi_note_cur + 1).zfill(3)
-                        mapped_pipe_pitch_tuning = myint(self.object_attr_value_get(object_dic, mapped_pipe_id_cur + 'PitchTuning'), 0)
-                        if pitch_tuning_cents + mapped_pipe_pitch_tuning > 1200:
-                            # the pitch tuning to apply + the pitch already applied to the pipe is higher than 1200
-                            # this is not allowed in the Pipe999PitchTuning attribute
-                            # try to borrow the next pipe closer to the MIDI note
-                            pitch_tuning_cents -= pitch_tuning_factor * 100
-                        else:
-                            # the current pitch tuning value can be used to borrow an existing pipe
-                            pitch_tuning_cents += mapped_pipe_pitch_tuning
-                            break
+                if used_midi_note in range(first_midi_note_init, last_midi_note_init + 1):
+                    # the note to use is inside the initial compass of the rank, take it
+                    break
+
+                if rank_accepts_retuning == 'Y' and abs(change_factor) == 1:
+                    # the note to use is outside the initial compass of the rank with a pitch tuning of 1 x 1200 cents and the rank can be retuned
+                    # the retuning cannot be more than 1 x 1200 cents, so none note can be used
+                    used_midi_note = None
+                    break
+
+                if change_factor == 5:
+                    # stop the factor increase loop at 5 x 1200 cents, none note can be used
+                    used_midi_note = None
+                    break
+
+                # try to use a note with one octave of distance more
+                if change_factor > 0:
+                    change_factor += 1
+                else:
+                    change_factor -= 1
+
+            # do the mapping between the current MIDI note and one existing pipe of the rank if possible
+            if used_midi_note != None:
+                # the note to use is inside the initial compass of the rank
+                # determine the associated pipe
+                used_pipe_nb = used_midi_note - first_midi_note_init + 1
+                used_pipe_id = 'Pipe' + str(used_pipe_nb).zfill(3)
+
+                # check if the pipe can be used, and if yes map it with the current MIDI note
+                if mystr(self.object_attr_value_get(object_dic, used_pipe_id)).startswith('REF'):
+                    # the pipe to use is borrowing another pipe using the REF:aa:bb:cc syntax
+                    if change_factor != 0:
+                        # the pipe to use must be retuned but it cannot because it is using the REF:aa:bb:cc syntax
+                        midi_pipe_mapping_dic[midi_note_nb] = None
+                        logs.add(f'{object_uid} : {used_pipe_id} (MIDI {used_midi_note}) cannot be used to play the MIDI note {midi_note_nb} as it is a borrowed pipe')
                     else:
-                        # none pipe can be borrowed
-                        pitch_tuning_cents = None
-                        break
+                        midi_pipe_mapping_dic[midi_note_nb] = (used_pipe_nb, 0, 0)
 
-                if pitch_tuning_cents == 0:
-                    # none pipe can be borrowed
-                    pitch_tuning_cents = None
-            else:
-                # no pipe borrowing to do
-                mapped_pipe_id_cur = 'Pipe' + str(mapped_midi_note_cur - first_midi_note_cur + 1).zfill(3)
-                pitch_tuning_cents = myint(self.object_attr_value_get(object_dic, mapped_pipe_id_cur + 'PitchTuning'), 0)
+                elif mystr(self.object_attr_value_get(object_dic, used_pipe_id + 'AcceptsRetuning'), rank_accepts_retuning) == 'Y':
+                    # the pipe to use can be retuned, apply the change factor to its existing pitch tuning and gain values
+                    pitch_tuning = 1200 * change_factor + myint(self.object_attr_value_get(object_dic, used_pipe_id + 'PitchTuning'), 0)
+                    pipe_gain = max(min(-5.0 * change_factor + myfloat(self.object_attr_value_get(object_dic, used_pipe_id + 'Gain'), 0.0), 40.0), -120.0)
 
-            # add an entry in the mapping dictionary for the current MIDI note
-            if pitch_tuning_cents != None:
-                pipe_nb_cur = mapped_midi_note_cur - first_midi_note_cur + 1
-                pipes_mapping_dic[midi_note_nb] = (pipe_nb_cur, pitch_tuning_cents)
+                    if abs(pitch_tuning) > 1800:
+                        midi_pipe_mapping_dic[midi_note_nb] = None
+                        logs.add(f'{object_uid} : {used_pipe_id} (MIDI {used_midi_note}) cannot be used to play the MIDI note {midi_note_nb}, a pitch tuning of {pitch_tuning} cents is necessary')
+                    else:
+                        midi_pipe_mapping_dic[midi_note_nb] = (used_pipe_nb, pitch_tuning, pipe_gain)
+
+                else:
+                    # the pipe to use cannot be retuned, let unchanged its existing pitch tuning and gain
+                    pitch_tuning = myint(self.object_attr_value_get(object_dic, used_pipe_id + 'PitchTuning'), 0)
+                    pipe_gain = myfloat(self.object_attr_value_get(object_dic, used_pipe_id + 'Gain'), 0)
+                    midi_pipe_mapping_dic[midi_note_nb] = (used_pipe_nb, pitch_tuning, pipe_gain)
+
             else:
-                if not check_only: logs.add(f'{object_uid} : none existing pipe of the rank can be borrowed to play the MIDI note {midi_note_nb} with 1200 cents of pitch tuning or less')
-                pipes_mapping_dic[midi_note_nb] = (None, 0)
+                # none pipe can be used
+                midi_pipe_mapping_dic[midi_note_nb] = None
+                logs.add(f'{object_uid} : none pipe of the rank can be used to play the MIDI note {midi_note_nb} with a pitch tuning of {1200 * change_factor} cents')
 
         # check if consecutive MIDI notes at the beginning or the end of the extended compass have no mapped pipe in order to remove them
-        for midi_note_nb in list(pipes_mapping_dic.keys()):
-            if pipes_mapping_dic[midi_note_nb][0] == None:
-                pipes_mapping_dic.pop(midi_note_nb)
+        for midi_note_nb in list(midi_pipe_mapping_dic.keys()):
+            if midi_pipe_mapping_dic[midi_note_nb] == None:
+                midi_pipe_mapping_dic.pop(midi_note_nb)
             else:
                 # stop the loop at the first mapped pipe
                 break
-        for midi_note_nb in reversed(list(pipes_mapping_dic.keys())):
-            if pipes_mapping_dic[midi_note_nb][0] == None:
-                pipes_mapping_dic.pop(midi_note_nb)
+        for midi_note_nb in reversed(list(midi_pipe_mapping_dic.keys())):
+            if midi_pipe_mapping_dic[midi_note_nb] == None:
+                midi_pipe_mapping_dic.pop(midi_note_nb)
             else:
                 break
-        # update the MIDI notes extended compass
+        # update the MIDI notes extended compass in case some dictionary entries have been removed above
         first_midi_note_ext = 999
         last_midi_note_ext = 0
-        for midi_note_nb in pipes_mapping_dic.keys():
+        for midi_note_nb in midi_pipe_mapping_dic.keys():
             first_midi_note_ext = min(midi_note_nb, first_midi_note_ext)
-            last_midi_note_ext = max(midi_note_nb, last_midi_note_ext)
+            last_midi_note_ext  = max(midi_note_nb, last_midi_note_ext)
 
-        if first_midi_note_ext == first_midi_note_cur and last_midi_note_ext == last_midi_note_cur:
-            # no extension will be done finally, exit
-            logs.add(f'{object_uid} : compass not extended due to the impossibility to retune existing pipes')
-            return None
-
-        if check_only:
-            # only the possible compass extension check was requested
-            return (first_midi_note_ext, last_midi_note_ext)
+        if first_midi_note_ext == first_midi_note_init and last_midi_note_ext == last_midi_note_init:
+            # no extension can be done finally
+            logs.add(f'{object_uid} cannot be extended as none existing pipe can be reused')
+            return first_midi_note_init, last_midi_note_init
 
         # create an object to put in it the extended rank/stop copied from the given rank/stop
-        new_object_dic = self.object_new(object_uid)
+        new_object_dic = self.object_new()
         new_object_dic['names'] = object_dic['names']
         new_object_dic['parents'] = object_dic['parents']
         new_object_dic['children'] = object_dic['children']
@@ -1136,50 +1292,62 @@ class C_ODF_MISC:
             if line[:4] != 'Pipe':
                 new_object_dic['lines'].append(line)
 
-        # update the compass attributes
-        self.object_attr_value_set(new_object_dic, 'NumberOfLogicalPipes', last_midi_note_ext - first_midi_note_ext + 1)
-        if object_type == 'Rank':
-            self.object_attr_value_set(new_object_dic, 'FirstMidiNoteNumber', first_midi_note_ext)
-        else:
-            self.object_attr_value_set(new_object_dic, 'NumberOfAccessiblePipes', last_midi_note_ext - first_midi_note_ext + 1)
-            if self.object_attr_value_get(new_object_dic, 'FirstMidiNoteNumber') != None:
-                # the attribute FirstMidiNoteNumber is defined in the Stop, update it
-                self.object_attr_value_set(new_object_dic, 'FirstMidiNoteNumber', first_midi_note_ext)
-
         # build the pipe attributes of the extended rank/stop
-        for (midi_note_nb, (pipe_nb_cur, pitch_tuning_cents)) in pipes_mapping_dic.items():
+        for (midi_note_nb, mapping_data) in midi_pipe_mapping_dic.items():
             # scan the MIDI notes of the mapping dictionary
+
+            # define the pipe nb and ID that the current MIDI note must have in the new compass
             pipe_nb_new = midi_note_nb - first_midi_note_ext + 1
             pipe_id_new = 'Pipe' + str(pipe_nb_new).zfill(3)
-            if pipe_nb_cur != None:
-                # a pipe of the current rank can be used for the current extended pipe nb
-                pipe_id_cur = 'Pipe' + str(pipe_nb_cur).zfill(3)
 
-                # recover the attributes of the current pipe nb
-                pipe_lines_list = self.object_lines_search(object_uid, pipe_id_cur)
+            if mapping_data != None:
+                # a pipe of the initial rank can be used to play the current MIDI note
+                (pipe_nb_init, pitch_tuning, pipe_gain) = mapping_data
 
-                # add or update the PitchTuning attribute in case of need to borrow another pipe
-                if pitch_tuning_cents != 0:
-                    # search if the current pipe has already a PitchTuning attribute
+                pipe_id_init = 'Pipe' + str(pipe_nb_init).zfill(3)
+                # recover all the attributes of this pipe
+                pipe_lines_list = self.object_lines_search(object_uid, pipe_id_init)
+
+                # add or update the Gain attribute in the pipe lines list
+                if pipe_gain != 0:
+                    gain_line_found = False
+                    pipe_id_gain_init = pipe_id_init + 'Gain'
+                    for i, line in enumerate(pipe_lines_list):
+                        if line.startswith(pipe_id_gain_init):
+                            # the pipe has the Gain attribute defined, update it
+                            (error_msg, attr_name, attr_value, comment) = self.object_line_split(line)
+                            pipe_lines_list[i] = self.object_line_join(attr_name, pipe_gain, comment)
+                            gain_line_found = True
+                            break
+
+                    if not gain_line_found:
+                        # the pipe has not already the Gain attribute defined, add it in first position
+                        pipe_lines_list.insert(0, pipe_id_gain_init + '=' + str(pipe_gain))
+
+                # add or update the PitchTuning attribute in the pipe lines list if a pitch tuning has to be done
+                if pitch_tuning != 0:
                     pitch_line_found = False
                     for i, line in enumerate(pipe_lines_list):
-                        if line.startswith(pipe_id_cur + 'PitchTuning='):
-                            pitch_line_found = True
+                        if line.startswith(pipe_id_init + 'PitchTuning='):
+                            # the pipe has already the PitchTuning attribute defined, update it
                             (error_msg, attr_name, attr_value, comment) = self.object_line_split(line)
-                            pipe_lines_list[i] = self.object_line_join(attr_name, pitch_tuning_cents, comment)
+                            pipe_lines_list[i] = self.object_line_join(attr_name, pitch_tuning, comment)
+                            pitch_line_found = True
+                            break
+
                     if not pitch_line_found:
-                        pipe_lines_list.insert(0, pipe_id_new + 'PitchTuning=' + str(pitch_tuning_cents))
+                        # the pipe has not already the PitchTuning attribute defined, add it in first position
+                        pipe_lines_list.insert(0, pipe_id_init + 'PitchTuning=' + str(pitch_tuning))
 
-                # rename the pipe ID if the extended pipe nb is different from the current pipe nb
-                # then add the current pipe attributes to the new object
+                # add all the attributes of the pipe to the new object, renaming the pipe ID if it is changed
                 for line in pipe_lines_list:
-                    if pipe_nb_new != pipe_nb_cur:
-                        line = line.replace(pipe_id_cur, pipe_id_new)
+                    if pipe_nb_new != pipe_nb_init:
+                        line = line.replace(pipe_id_init, pipe_id_new)
                     new_object_dic['lines'].append(line)
-            else:
-                new_object_dic['lines'].append(pipe_id_new + '=DUMMY')
 
-        logs.add(f'{object_uid} MIDI notes compass extended from {first_midi_note_cur} -> {last_midi_note_cur} to {first_midi_note_ext} -> {last_midi_note_ext}')
+            else:
+                # a pipe of the initial rank cannot be used to play the current MIDI note, so set a dummy pipe
+                new_object_dic['lines'].append(pipe_id_new + '=DUMMY')
 
         # delete in the ODF the current rank/stop
         self.odf_data_dic.pop(object_uid)
@@ -1187,7 +1355,23 @@ class C_ODF_MISC:
         # add in the ODF the extended rank/stop
         self.odf_data_dic[object_uid] = new_object_dic
 
+        # update the compass related attributes of the Rank or Stop (with rank attributes inside)
+        self.object_attr_value_set(new_object_dic, 'NumberOfLogicalPipes', last_midi_note_ext - first_midi_note_ext + 1)
+
+        if object_type == 'Rank':
+            self.object_attr_value_set(new_object_dic, 'FirstMidiNoteNumber', first_midi_note_ext)
+        else:  # object_type == 'Stop'
+            if myint(self.object_attr_value_get(new_object_dic, 'FirstMidiNoteNumber')) != None:
+                # the attribute FirstMidiNoteNumber is defined in the Stop (it is not required in a Stop section), so update it
+                self.object_attr_value_set(new_object_dic, 'FirstMidiNoteNumber', first_midi_note_ext)
+
+        if last_midi_note_ext > last_midi_note_init:
+            logs.add(f'{object_uid} MIDI notes compass extended from {first_midi_note_init}-{last_midi_note_init} to {first_midi_note_ext}-{last_midi_note_ext}')
+        else:
+            logs.add(f'{object_uid} compass not extended')
+
         return (first_midi_note_ext, last_midi_note_ext)
+
 
 #-------------------------------------------------------------------------------------------------
 class C_ODF_DATA_CHECK:
@@ -1830,6 +2014,7 @@ class C_ODF_DATA_CHECK:
         # check the data of a General object section which the lines are in the given lines list
 
         is_general_obj = self.object_type_get(object_uid) == 'General' # some mandatory attributes are not mandatory for objects which inherit the General attributes
+        store_div_coupl_in_gen = self.object_attr_value_get(object_uid, 'GeneralsStoreDivisionalCouplers')
 
         # required attributes
         max_val = self.objects_type_number_get('Coupler')
@@ -1840,7 +2025,7 @@ class C_ODF_DATA_CHECK:
                 self.check_attribute_value(object_uid, lines_list, f'CouplerManual{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
         max_val = self.objects_type_number_get('DivisionalCoupler')
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfDivisionalCouplers', ATTR_TYPE_INTEGER, is_general_obj, 0, max_val)
+        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfDivisionalCouplers', ATTR_TYPE_INTEGER, is_general_obj and store_div_coupl_in_gen == 'Y', 0, max_val)
         if value != None and value.isdigit():
             for idx in range(1, int(value)+1):
                 self.check_attribute_value(object_uid, lines_list, f'DivisionalCouplerNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
@@ -2835,7 +3020,7 @@ class C_ODF_DATA_CHECK:
 
 
 #-------------------------------------------------------------------------------------------------
-class C_ODF_DATA(C_ODF_DATA_CHECK):
+class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
     # class to store and manage GO ODF data
 
     odf_file_name = ""      # name of the ODF which the data have been loaded
@@ -5236,24 +5421,20 @@ class C_ODF_HW2GO():
         if HW_object_dic != None:
             for obj_attr_name, obj_attr_value in HW_object_dic.items():
                 if obj_attr_name in ('_parents', '_children'):
-                    # this attribute value contains a list of objects dictionaries
-                    attr_value = ''
-                    for HW_object_dic2 in obj_attr_value:
-                        attr_value += (HW_object_dic2['_uid'] + ' ')
-                    if len(attr_value) > 250:
-                        attr_value = attr_value[:250] + ' ...'
-                    obj_attr_value = attr_value
+                    # this attribute value contains a list of parents/children HW objects dictionaries
+                    obj_attr_value = sorted(self.HW_DIC2UID(obj_attr_value))
+                    if len(obj_attr_value) > 50:
+                        obj_attr_value = obj_attr_value[:50]
+                        obj_attr_value.append(' ...')
+
                 elif obj_attr_name == '_GO_windchests_uid_list':
-                    # this attribute value contains a list of GO objects uid strings
-                    attr_value = ''
-                    for object_uid in obj_attr_value:
-                        attr_value += (object_uid + ' ')
-                    if len(attr_value) > 250:
-                        attr_value = attr_value[:250] + ' ...'
-                    obj_attr_value = attr_value
+                    # this attribute value contains a list of GO objects UID strings
+                    obj_attr_value = sorted(obj_attr_value)
+
                 elif isinstance(obj_attr_value, dict):
-                    # this attribute value contains a dictionary of a HW object
+                    # this attribute value contains the dictionary of a HW object
                     obj_attr_value = obj_attr_value['_uid']
+
                 data_list.append(f'{obj_attr_name}={obj_attr_value}')
 
         return data_list
@@ -7306,16 +7487,16 @@ class C_ODF_HW2GO():
 
         else:  # GO_object_type == 'Combination'
             if GO_attr_dic['_comb_type'] == 'general' and GO_object_uid != None:
-                settings_dic = {'Type': 'General', 'PanElemObject': GO_object_uid, 'Manual': None, 'NbControlling': 0}
+                settings_dic = {'Type': 'General', 'PanElemObject': GO_object_uid, 'GCState': 0, 'Manual': None, 'NbControlling': 0}
 
             elif GO_attr_dic['_comb_type'] == 'divisional' and GO_object_uid != None and GO_manual_uid != None:
-                settings_dic = {'Type': 'Divisional', 'PanElemObject': GO_object_uid, 'Manual': GO_manual_uid, 'NbControlling': 0}
+                settings_dic = {'Type': 'Divisional', 'PanElemObject': GO_object_uid, 'GCState': 0, 'Manual': GO_manual_uid, 'NbControlling': 0}
 
             elif GO_attr_dic['_comb_type'] == 'set':
-                settings_dic = {'Type': 'Set', 'PanElemObject': 'Set', 'Manual': None, 'NbControlling': 0}
+                settings_dic = {'Type': 'Set', 'PanElemObject': 'Set', 'GCState': 0, 'Manual': None, 'NbControlling': 0}
 
             elif GO_attr_dic['_comb_type'] == 'gc':
-                settings_dic = {'Type': 'GC', 'PanElemObject': 'GC', 'Manual': None, 'NbControlling': 0}
+                settings_dic = {'Type': 'GC', 'PanElemObject': 'GC', 'GCState': 0, 'Manual': None, 'NbControlling': 0}
 
             else:
                 settings_dic = None  # dictionary where are given the settings to build the controlling PanelElement or Switch objects
@@ -7549,7 +7730,7 @@ class C_ODF_HW2GO():
                     if LOG_HW2GO_switch: print(f"{rlspace}{HW_object_dic['_uid']} already managed, it is closing a switches LOOP")
 
                 if settings_dic['Type'] == 'Switch':
-                    # the given controlled object is controlled by switches, built the GO switch corresponding to the current HW Switch if needed
+                    # the given controlled object is controlled by switches, build the GO switch corresponding to the current HW Switch if needed
                     if len(GO_input_switches_uid_list) == 0:
                         # the given HW Switch has no switch controlling it, it is as the top of a controlling branch
                         if is_default_engaged or is_clickable or mydickey(settings_dic, 'sw_loop_dic') != None:
@@ -7639,19 +7820,21 @@ class C_ODF_HW2GO():
             else:
                 # get properties about the given HW SwitchLinkage
                 HW_source_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'SourceSwitchID')
+                HW_dest_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'DestSwitchID')
                 HW_cond_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'ConditionSwitchID')
                 HW_engage_action_code = myint(self.HW_ODF_get_attribute_value(HW_object_dic, 'EngageLinkActionCode'), 1)
                 HW_disengage_action_code = myint(self.HW_ODF_get_attribute_value(HW_object_dic, 'DisengageLinkActionCode'), 2)
 
                 if HW_cond_switch_dic != None:
-                    if LOG_HW2GO_switch: print(f"{rlspace}{HW_object_dic['_uid']} (engage action code {HW_engage_action_code}, disengage action code {HW_disengage_action_code}, source {HW_source_switch_dic['_uid']}, condition {HW_cond_switch_dic['_uid']})")
+                    if LOG_HW2GO_switch: print(f"{rlspace}{HW_object_dic['_uid']} (engage action code {HW_engage_action_code}, disengage action code {HW_disengage_action_code}, source {HW_source_switch_dic['_uid']}, destination {HW_dest_switch_dic['_uid']}, condition {HW_cond_switch_dic['_uid']})")
                 else:
-                    if LOG_HW2GO_switch: print(f"{rlspace}{HW_object_dic['_uid']} (engage action code {HW_engage_action_code}, disengage action code {HW_disengage_action_code}, source {HW_source_switch_dic['_uid']}, condition None)")
+                    if LOG_HW2GO_switch: print(f"{rlspace}{HW_object_dic['_uid']} (engage action code {HW_engage_action_code}, disengage action code {HW_disengage_action_code}, source {HW_source_switch_dic['_uid']}, destination {HW_dest_switch_dic['_uid']}, condition None)")
 
-                if not (HW_engage_action_code == 1 and HW_disengage_action_code == 2):  # 1 = engage action, 2 = disengage action
-                    # the HW linkage has not engage and disengage action codes, doesn't convert it to a GO which
-                    if LOG_HW2GO_switch: print(f"{rlspace}{HW_object_dic['_uid']} has unsupported engage action code {HW_engage_action_code} and disengage action code {HW_disengage_action_code} ====> SKIPPED")
-                else:
+                if HW_engage_action_code == 1 and HW_disengage_action_code == 2:
+                    # action code 1 = to engage    the destination switch when the source switch is engaged
+                    # action code 2 = to disengage the destination switch when the source switch is disengageds
+                    # this is the standard switch linkage action which can be converted in GO
+
                     # get the GO switch UID coming from the HW source switch
                     if HW_source_switch_dic != None:
                         GO_source_switch_uid = self.GO_ODF_build_Switch_controlling_objects(HW_source_switch_dic, settings_dic, rec_level+1)
@@ -7713,17 +7896,21 @@ class C_ODF_HW2GO():
 
                     HW_object_dic['_GO_uid'] = GO_switch_uid
 
+                else:
+                    # the HW linkage has not supported engage or disengage action codes
+                    if LOG_HW2GO_switch: print(f"{rlspace}{HW_object_dic['_uid']} has unsupported engage action code {HW_engage_action_code} and disengage action code {HW_disengage_action_code} ====> SKIPPED")
+
         elif HW_object_type in ('Stop', 'Tremulant'):
             # recover the HW switch controlling the given HW Stop or Tremulant
             HW_cntrl_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'ControllingSwitchID')
-            if LOG_HW2GO_switch: print(f"{rlspace}{HW_object_dic['_uid']} is controlled by {HW_cntrl_switch_dic['_GO_uid']} : --------------------------------")
+            if LOG_HW2GO_switch: print(f"{rlspace}{HW_object_dic['_uid']} is controlled by {HW_cntrl_switch_dic['_uid']} : --------------------------------")
             GO_switch_uid = self.GO_ODF_build_Switch_controlling_objects(HW_cntrl_switch_dic, settings_dic, 0)
 
         elif HW_object_type == 'KeyAction':
             # recover the HW switch controlling the given HW KeyAction
             HW_cntrl_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'ConditionSwitchID')
             if HW_cntrl_switch_dic != None:  # it can exist HW KeyAction object not controlled by a switch
-                if LOG_HW2GO_switch: print(f"{rlspace}{HW_object_dic['_uid']} is controlled by {HW_cntrl_switch_dic['_GO_uid']} : --------------------------------")
+                if LOG_HW2GO_switch: print(f"{rlspace}{HW_object_dic['_uid']} is controlled by {HW_cntrl_switch_dic['_uid']} : --------------------------------")
                 GO_switch_uid = self.GO_ODF_build_Switch_controlling_objects(HW_cntrl_switch_dic, settings_dic, 0)
             else:
                 if LOG_HW2GO_switch: print(f"{rlspace}{HW_object_dic['_uid']} is controlled by none switch")
@@ -7732,7 +7919,7 @@ class C_ODF_HW2GO():
             # recover the HW switch controlling the given HW Combination
             HW_cntrl_switch_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_object_dic, 'Switch', TO_PARENT, FIRST_ONE)
             if HW_cntrl_switch_dic != None:  # it can exist HW Combination object not controlled by a switch
-                if LOG_HW2GO_switch: print(f"{rlspace}{HW_object_dic['_uid']} is controlled by {HW_cntrl_switch_dic['_GO_uid']} : --------------------------------")
+                if LOG_HW2GO_switch: print(f"{rlspace}{HW_object_dic['_uid']} is controlled by {HW_cntrl_switch_dic['_uid']} : --------------------------------")
                 GO_switch_uid = self.GO_ODF_build_Switch_controlling_objects(HW_cntrl_switch_dic, settings_dic, 0)
 
         elif HW_object_type == '_General':
@@ -10510,9 +10697,9 @@ class C_GUI_NOTEBOOK():
                 return True
 
             if case_sens:
-                self.lst_odf_sresults.insert(tk.END, 'Nothing found in the ODF (the search is case sensitive)')
+                self.lst_odf_sresults.insert(tk.END, f'"{text_to_search}" is not found in the ODF (the search is case sensitive)')
             else:
-                self.lst_odf_sresults.insert(tk.END, 'Nothing found in the ODF')
+                self.lst_odf_sresults.insert(tk.END, f'"{text_to_search}" is not found in the ODF')
 
         return False
 
@@ -10536,8 +10723,8 @@ class C_GUI_NOTEBOOK():
             self.objects_tree_update()
             self.object_links_list_update()
             self.object_text_update()
-            self.gui_status_update_buttons()
             self.gui_status_update_lists()
+            self.gui_status_update_buttons()
 
             # update the events log text
             self.logs_update()
@@ -10582,6 +10769,7 @@ class C_GUI_NOTEBOOK():
         text_to_search = self.ent_odf_search_text.get()
 
         self.lst_odf_sresults.delete(0, tk.END)
+        self.lab_search_results_nb.config(text='')
 
         if text_to_search != '':
             results_list = []
@@ -10616,8 +10804,10 @@ class C_GUI_NOTEBOOK():
                     self.lab_search_results_nb.config(text=f'{len(results_list)} result')
                 self.lst_odf_sresults.insert(tk.END, *results_list)
             else:
-                self.lab_search_results_nb.config(text='')
-                self.lst_odf_sresults.insert(tk.END, 'Nothing found in the HW ODF (the search is case sensitive)')
+                if case_sens:
+                    self.lst_odf_sresults.insert(tk.END, f'"{text_to_search}" is not found in the HW ODF (the search is case sensitive)')
+                else:
+                    self.lst_odf_sresults.insert(tk.END, f'"{text_to_search}" is not found in the HW ODF')
 
     #-------------------------------------------------------------------------------------------------
     def odf_search_uid_hw(self, event=None):
@@ -10641,8 +10831,8 @@ class C_GUI_NOTEBOOK():
                 self.object_links_list_update()
                 self.objects_list_update_hw()
                 self.object_text_update()
-                self.gui_status_update_buttons()
                 self.gui_status_update_lists()
+                self.gui_status_update_buttons()
             else:
                 AskUserAnswerQuestion(self.wnd_main, 'OdfEdit', f'"{text_to_search}" is not a known HW UID.', ['Close'], 'Close')
         else:
@@ -10655,7 +10845,7 @@ class C_GUI_NOTEBOOK():
         # get the selected indice
         selected_indice = self.lst_odf_sresults.curselection()
 
-        if self.can_i_make_change() and selected_indice != None and not self.lst_odf_sresults.get(selected_indice[0]).startswith('Nothing'):
+        if self.can_i_make_change() and len(selected_indice) > 0 and not self.lst_odf_sresults.get(selected_indice[0]).startswith('"'):
             # the user has saved his modifications if he wanted and has not canceled the operation
             selected_text = self.lst_odf_sresults.get(selected_indice[0])
 
@@ -10669,15 +10859,13 @@ class C_GUI_NOTEBOOK():
             else:
                 self.selected_object_app = 'GO'
 
-            self.focused_objects_widget = None
-
             # update the object text box and links list
             self.object_text_update()
             self.object_links_list_update()
 
             # select in the object edition text box the line which corresponds to the selected result
             if ':' in selected_text:
-                selected_search_result = selected_text.split(':')[1].strip()
+                selected_search_result = selected_text.split(':', maxsplit=1)[1].strip()
                 idx = self.txt_object_text.search(selected_search_result, '1.0', stopindex=tk.END)
                 if idx != '':
                     self.txt_object_text.tag_remove('sel', '1.0', 'end')
@@ -10686,8 +10874,8 @@ class C_GUI_NOTEBOOK():
                     self.txt_object_text.focus_set()
 
             # update the status of GUI widgets
-            self.gui_status_update_buttons()
             self.gui_status_update_lists(True)
+            self.gui_status_update_buttons()
 
     #-------------------------------------------------------------------------------------------------
     def odf_search_text_result_selected_dbl(self, event):
@@ -11103,8 +11291,8 @@ class C_GUI_NOTEBOOK():
             self.object_text_update()
 
         # update the status of GUI widgets
-        self.gui_status_update_buttons()
         self.gui_status_update_lists()
+        self.gui_status_update_buttons()
 
     #-------------------------------------------------------------------------------------------------
     def objects_list_selected_dbl_hw(self, event):
@@ -11128,8 +11316,9 @@ class C_GUI(C_GUI_NOTEBOOK):
 
     focused_objects_widget = None  # objects widget which has the focus : self.lst_objects_list / self.trv_objects_tree / self.lst_links_list / self.lst_hw_browser / None
     focused_sel_item_id = None     # identifier of the selected item of the focused widget
+    is_focus_on_objects_lists = False   # flag at True if one objects list or tree has currently the focus
 
-    key_control_pressed_bool = False # flag indicating if a Control key is currently pressed on the keyboard of the computer in OdfEdit
+    is_key_control_pressed = False # flag indicating if a Control key is currently pressed on the keyboard of the computer in OdfEdit
 
     ignore_b1_release = False        # flag permitting to ignore the processing of the mouse button 1 release event
     object_dragging_in_progress = False # flag indicating that a mouse cursor dragging is in progress
@@ -11340,6 +11529,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.general_menu = tk.Menu(self.btn_gen_menu, tearoff=0, background=COLOR_BACKGROUND1, foreground=TEXT_COLOR, activebackground=COLOR_BACKGROUND2, activeforeground=TEXT_COLOR)
         self.general_menu.add_checkbutton(label='Save ODF with ISO-8859-1 encoding (else UTF-8-BOM)', onvalue=ENCODING_ISO_8859_1, offvalue=ENCODING_UTF8_BOM, variable=self.odf_save_encoding, command=self.gen_menu_open)
         self.general_menu.add_command(label='Sort references in selected section...', command=self.gen_menu_references_sort)
+        self.general_menu.add_command(label='Extend the compass of the selected Manual/Stop/Rank...', command=self.compass_extend)
         self.general_menu.add_separator()
         self.general_menu.add_checkbutton(label='HW to GO - do not convert keys noises', onvalue=True, offvalue=False, variable=self.hw2go_not_convert_keys_noises_bool, command=self.gen_menu_open)
         self.general_menu.add_checkbutton(label='HW to GO - convert alternate panels layouts', onvalue=True, offvalue=False, variable=self.hw2go_convert_alt_scr_layers_bool, command=self.gen_menu_open)
@@ -11435,6 +11625,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.lst_objects_list.bind('<B1-Motion>', self.object_b1_motion)
         self.lst_objects_list.bind('<ButtonRelease-1>', self.object_b1_release)
         self.lst_objects_list.bind('<B1-Leave>', lambda event: 'break')  # to avoid the auto scrolling in the list on drag
+        self.lst_objects_list.bind('<FocusOut>', self.objects_widget_focus_out)
 
         self.lst_objects_list.bind('<Up>', self.objects_list_selected)
         self.lst_objects_list.bind('<Down>', self.objects_list_selected)
@@ -11483,6 +11674,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.trv_objects_tree.bind('<<TreeviewSelect>>', self.objects_tree_selected)
         self.trv_objects_tree.bind('<B1-Motion>', self.object_b1_motion)
         self.trv_objects_tree.bind('<ButtonRelease-1>', self.object_b1_release)
+        self.trv_objects_tree.bind('<FocusOut>', self.objects_widget_focus_out)
 
         self.trv_objects_tree.config(yscrollcommand=scrollbarv.set)
         self.trv_objects_tree.config(xscrollcommand=scrollbarh.set)
@@ -11560,6 +11752,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.lst_links_list.bind('<B1-Motion>', self.object_b1_motion)
         self.lst_links_list.bind('<ButtonRelease-1>', self.object_b1_release)
         self.lst_links_list.bind('<B1-Leave>', lambda event: 'break')  # to avoid the auto scrolling in the list on drag
+        self.lst_links_list.bind('<FocusOut>', self.objects_widget_focus_out)
         self.lst_links_list.config(yscrollcommand=scrollbarv.set)
         scrollbarv.config(command=self.lst_links_list.yview)
 
@@ -11607,8 +11800,8 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.reset_all_data()
 
         # update the status of GUI widgets
-        self.gui_status_update_buttons()
         self.gui_status_update_lists()
+        self.gui_status_update_buttons()
         self.gui_status_update_notebook()
 
         # display the logs resulting from the init of the application if any
@@ -11648,22 +11841,22 @@ class C_GUI(C_GUI_NOTEBOOK):
     def wnd_main_key_press(self, event):
         # (GUI event callback) the user has pressed a keyboard key
 
-        if event.keysym in ('Control_L', 'Control_R') and not self.key_control_pressed_bool:
+        if event.keysym in ('Control_L', 'Control_R') and not self.is_key_control_pressed:
             # control left or right key is pressed
-            self.key_control_pressed_bool = True
+            self.is_key_control_pressed = True
             # update the mouse cursor aspect
             self.object_b1_motion()
 
-        elif event.keysym == 'Delete':
+        elif event.keysym == 'Delete' and self.is_focus_on_objects_lists:
             self.object_delete()
 
     #-------------------------------------------------------------------------------------------------
     def wnd_main_key_release(self, event):
         # (GUI event callback) the user has released a keyboard key
 
-        if event.keysym in ('Control_L', 'Control_R') and self.key_control_pressed_bool:
+        if event.keysym in ('Control_L', 'Control_R') and self.is_key_control_pressed:
             # control left or right key is released
-            self.key_control_pressed_bool = False
+            self.is_key_control_pressed = False
             # update the mouse cursor aspect
             self.object_b1_motion()
 
@@ -11794,11 +11987,11 @@ class C_GUI(C_GUI_NOTEBOOK):
             f.write(str(data_dic))
 
     #-------------------------------------------------------------------------------------------------
-    def file_new(self):
+    def file_new(self, ignore_changes=False):
         # (GUI event callback) the user has clicked on the button "New"
         # do a reset of the objects list/tree, edit box and ODF data
 
-        if self.can_i_make_change(is_odf_changed=True):
+        if ignore_changes or self.can_i_make_change(is_odf_changed=True):
             # the user has saved his modifications if he wanted and has not canceled the operation
 
             # reset the various data
@@ -11834,8 +12027,7 @@ class C_GUI(C_GUI_NOTEBOOK):
 
                 self.is_loading = True
 
-                # reset the data and HMI
-                self.file_new()
+                self.file_new(True)  # ignore the changes in the file_new function, already checked above
 
                 # show the mouse cursor watch
                 self.wnd_main['cursor'] = 'watch'
@@ -11942,7 +12134,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         if self.can_i_make_change():
             if file_name == '':
                 # let the user select the ODF file in which to make the saving
-                file_name = fdialog.asksaveasfilename(title='Save in ODF...', filetypes=[('ODF', '*.organ')])
+                file_name = path2ospath(fdialog.asksaveasfilename(title='Save in ODF...', filetypes=[('ODF', '*.organ')]))
 
             if file_name != '' and self.odf_data.save_to_file(file_name, self.odf_save_encoding.get()):
                 # a file has been selected by the user
@@ -11952,6 +12144,7 @@ class C_GUI(C_GUI_NOTEBOOK):
                 self.recent_odf_list_update(file_name)
 
                 self.odf_data_changed = False
+                self.edited_object_changed = False
                 self.gui_status_update_buttons()
                 data_saved = True
             else:
@@ -12043,6 +12236,9 @@ class C_GUI(C_GUI_NOTEBOOK):
         root_object_not_def = bool('Header' not in self.odf_data.objects_list_get() or 'Organ' not in self.odf_data.objects_list_get())
         # True if the root object Header or Organ is not present in the ODF
 
+        # get if an object is selected in the objects tree
+        objects_tree_selected = len(self.trv_objects_tree.selection()) > 0
+
         # button "New"
         self.btn_odf_new['state'] = tk.NORMAL if objects_nb > 0 else tk.DISABLED
 
@@ -12067,10 +12263,10 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.btn_gen_menu['state'] = tk.NORMAL if not self.is_loading else tk.DISABLED
 
         # button "Collapse"
-        self.btn_collapse_tree_node['state'] = tk.NORMAL if (objects_nb > 0 and self.focused_objects_widget == self.trv_objects_tree) else tk.DISABLED
+        self.btn_collapse_tree_node['state'] = tk.NORMAL if objects_tree_selected else tk.DISABLED
 
         # button "Expand"
-        self.btn_expand_tree_node['state'] = tk.NORMAL if (objects_nb > 0 and self.focused_objects_widget == self.trv_objects_tree) else tk.DISABLED
+        self.btn_expand_tree_node['state'] = tk.NORMAL if objects_tree_selected else tk.DISABLED
 
         # button "Apply changes"
         self.btn_object_apply_chg['state'] = tk.NORMAL if self.edited_object_changed else tk.DISABLED
@@ -12120,6 +12316,7 @@ class C_GUI(C_GUI_NOTEBOOK):
     #-------------------------------------------------------------------------------------------------
     def gui_status_update_lists(self, object_see_list=False, object_see_tree=False):
         # update the selections in the GUI lists/tree
+        # if one object_see flag is enabled, the corresponding list or tree is moved to see the selected object
 
         # to block the GUI events triggered by the GUI updates done in this function
         self.gui_events_block()
@@ -12137,7 +12334,7 @@ class C_GUI(C_GUI_NOTEBOOK):
                 self.lst_objects_list.itemconfig(i, foreground=TEXT_COLOR, background=COLOR_BG_LIST)
 
             if self.focused_objects_widget == self.lst_objects_list and self.focused_sel_item_id == object_uid:
-                # the current item has the focus : select it and make it visible
+                # the current item has the focus : select it
                 self.lst_objects_list.selection_set(i)
             else:
                 self.lst_objects_list.selection_clear(i)
@@ -12227,7 +12424,7 @@ class C_GUI(C_GUI_NOTEBOOK):
                 if i > 0 or not self.is_loaded_odf:
                     # if an ODF is loaded, does not put the first ODF file name of the list, it is the current loaded ODF
                     if os.path.exists(odf_name):
-                        # the file actually exists
+                        # the file actually exists, add it in the list shown to the user
                         self.lst_recent_odf.insert(tk.END, odf_name)
             self.lst_recent_odf.focus_set()
         else:
@@ -12286,6 +12483,14 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.file_open(file_name)
 
     #-------------------------------------------------------------------------------------------------
+    def objects_widget_focus_out(self, event):
+        # (GUI event callback) an objects widget (list or tree) has left the focus
+
+        if event.widget == self.focused_objects_widget:
+            # the widget which has lost the focus is the currently selected list or tree widget
+            self.is_focus_on_objects_lists = False
+
+    #-------------------------------------------------------------------------------------------------
     def objects_list_update(self):
         # do an update of the objects list widget content
 
@@ -12315,6 +12520,8 @@ class C_GUI(C_GUI_NOTEBOOK):
         # (GUI event callback) the user has selected an item in the objects list widget
 
         if self.gui_events_blocked: return
+
+        self.is_focus_on_objects_lists = True
 
         # get the line number of the selected item in the list
         cursel_tuple = self.lst_objects_list.curselection()
@@ -12355,12 +12562,6 @@ class C_GUI(C_GUI_NOTEBOOK):
                     self.ignore_b1_release = False
                     self.object_b1_release(event)
                 # else the widgets will be updated on mouse button release
-
-                if event.keysym in ('Up', 'Down'):
-                    self.object_text_update()
-                    self.object_links_list_update()
-                    self.gui_status_update_buttons()
-                    self.gui_status_update_lists()
 
             else:
                 # the user had canceled the selection
@@ -12452,12 +12653,11 @@ class C_GUI(C_GUI_NOTEBOOK):
         # (GUI event callback) the user has pressed the button "Expand"
         # expend the node of the selected object and its children
 
-        if self.focused_objects_widget == self.trv_objects_tree:
-            # get the iid of the selected node in the tree
-            cursel_tuple = self.trv_objects_tree.selection()
-            if len(cursel_tuple) > 0:
-                selected_node_iid = cursel_tuple[0]
-                self.objects_tree_node_and_children_open(selected_node_iid, True)
+        # get the iid of the selected node in the tree
+        cursel_tuple = self.trv_objects_tree.selection()
+        if len(cursel_tuple) > 0:
+            selected_node_iid = cursel_tuple[0]
+            self.objects_tree_node_and_children_open(selected_node_iid, True)
 
     #-------------------------------------------------------------------------------------------------
     def objects_tree_collapse_all(self):
@@ -12471,12 +12671,11 @@ class C_GUI(C_GUI_NOTEBOOK):
         # (GUI event callback) the user has pressed the button "Expand"
         # collapse the node of the selected object and its children, except the root and the 'Organ' nodes
 
-        if self.focused_objects_widget == self.trv_objects_tree:
-            # get the iid of the selected node in the tree
-            cursel_tuple = self.trv_objects_tree.selection()
-            if len(cursel_tuple) > 0:
-                selected_node_iid = cursel_tuple[0]
-                self.objects_tree_node_and_children_open(selected_node_iid, False)
+        # get the iid of the selected node in the tree
+        cursel_tuple = self.trv_objects_tree.selection()
+        if len(cursel_tuple) > 0:
+            selected_node_iid = cursel_tuple[0]
+            self.objects_tree_node_and_children_open(selected_node_iid, False)
 
     #-------------------------------------------------------------------------------------------------
     def objects_tree_node_and_parents_open(self, node_iid):
@@ -12566,6 +12765,8 @@ class C_GUI(C_GUI_NOTEBOOK):
 
         if self.gui_events_blocked: return
 
+        self.is_focus_on_objects_lists = True
+
         # get the iid of the selected node in the tree
         cursel_tuple = self.trv_objects_tree.selection()
         if len(cursel_tuple) > 0:
@@ -12637,6 +12838,8 @@ class C_GUI(C_GUI_NOTEBOOK):
 
         if self.gui_events_blocked: return
 
+        self.is_focus_on_objects_lists = True
+
         # get the line number of the selected item in the list
         cursel_tuple = self.lst_links_list.curselection()
         if len(cursel_tuple) > 0:
@@ -12689,8 +12892,8 @@ class C_GUI(C_GUI_NOTEBOOK):
 
             # update the status of GUI widgets
             self.object_links_list_update()
-            self.gui_status_update_buttons()
             self.gui_status_update_lists(True)
+            self.gui_status_update_buttons()
 
     #-------------------------------------------------------------------------------------------------
     def object_b1_motion(self, event=None):
@@ -12750,7 +12953,7 @@ class C_GUI(C_GUI_NOTEBOOK):
                 # overflown and dragged objects have not the same UID
                 if overflown_object_uid[:-3] == self.dragged_object_uid[:-3]:
                     # dragged and overflown objects UID have the same type
-                    if not self.key_control_pressed_bool:
+                    if not self.is_key_control_pressed:
                         # the Control key is not pressed
                         self.selected_object_uid = overflown_object_uid
                         self.dragged_object_drop_action = 'reorder'
@@ -12761,7 +12964,7 @@ class C_GUI(C_GUI_NOTEBOOK):
                 elif (self.dragged_object_type in self.odf_data.object_poss_children_type_list_get(overflown_object_uid) and
                       overflown_object_uid not in ('Organ', 'Header')):
                     # the dragged object can be child of the overflown object which is not Organ or Header
-                    if not self.key_control_pressed_bool:
+                    if not self.is_key_control_pressed:
                         # the Control key is not pressed
                         if overflown_object_uid not in self.dragged_object_parents_list:
                             # the overflown object is not parent of the dragged object
@@ -12780,7 +12983,6 @@ class C_GUI(C_GUI_NOTEBOOK):
     #-------------------------------------------------------------------------------------------------
     def object_b1_release(self, event):
         # (GUI event callback) the user has released the mouse button 1 inside the GO objects lists or tree
-
 
         if self.ignore_b1_release:
             # the mouse button 1 release event has to be ignored (asked by a list/tree select function if the edited object has been changed)
@@ -12873,8 +13075,8 @@ class C_GUI(C_GUI_NOTEBOOK):
 
         # update the status of GUI widgets
         self.object_text_update()
-        self.gui_status_update_buttons()
         self.gui_status_update_lists(self.dragged_object_drop_action != None, self.dragged_object_drop_action != None)
+        self.gui_status_update_buttons()
 
         # reset the drag&drop variables
         self.object_dragging_in_progress = False
@@ -12907,8 +13109,8 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.txt_object_text.edit_modified(False)
             self.edited_object_changed = False
 
-            self.gui_status_update_buttons()
             self.gui_status_update_lists()
+            self.gui_status_update_buttons()
 
     #-------------------------------------------------------------------------------------------------
     def object_text_update(self):
@@ -13080,8 +13282,8 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.objects_list_update()
             self.objects_tree_update()
             self.object_links_list_update()
-            self.gui_status_update_buttons()
             self.gui_status_update_lists(True)
+            self.gui_status_update_buttons()
             changes_applied = True
         else:
             changes_applied = False
@@ -13160,8 +13362,8 @@ class C_GUI(C_GUI_NOTEBOOK):
             else:
                 self.focused_sel_item_id = new_object_uid
 
-            self.gui_status_update_buttons()
             self.gui_status_update_lists(True)
+            self.gui_status_update_buttons()
 
         # update the events log text
         self.logs_update()
@@ -13246,8 +13448,8 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.objects_tree_update()
             self.object_links_list_update()
             self.object_text_update()
-            self.gui_status_update_buttons()
             self.gui_status_update_lists(True)
+            self.gui_status_update_buttons()
 
         # update the events log text
         self.logs_update()
@@ -13299,8 +13501,8 @@ class C_GUI(C_GUI_NOTEBOOK):
                 self.objects_tree_update()
                 self.object_links_list_update()
                 self.object_text_update()
-                self.gui_status_update_buttons()
                 self.gui_status_update_lists(True)
+                self.gui_status_update_buttons()
 
             # update the events log text
             self.logs_update()
@@ -13357,11 +13559,73 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.objects_tree_update()
             self.object_links_list_update()
             self.object_text_update()
-            self.gui_status_update_buttons()
             self.gui_status_update_lists()
+            self.gui_status_update_buttons()
 
         # update the events log text
         self.logs_update()
+
+    #-------------------------------------------------------------------------------------------------
+    def compass_extend(self):
+        # (GUI event callback) the user has clicked on the Menu item to extend the compass of the selected manual or stop or rank
+
+        object_uid = self.edited_object_uid
+        object_type = self.odf_data.object_type_get(object_uid)
+
+        if object_uid == None or object_type not in ('Manual', 'Stop', 'Rank'):
+            AskUserAnswerQuestion(self.wnd_main, 'OdfEdit', 'Select a Manual or Stop or Rank section first.', ['Close'], 'Close')
+            return
+
+        # check if the selected object has a MIDI notes compass and if yes gets its first and last MIDI notes
+        compass = self.odf_data.compass_get(object_uid)
+
+        if compass != None:
+            # the selected object has a compass, recover it
+            midi_note_first, midi_note_last = compass
+            midi_note_last_max = COMPASS_EXTEND_MAX
+            prompt =  f"{object_uid} has a MIDI notes compass from {midi_note_first} to {midi_note_last} ({midi_nb_to_note2(midi_note_first)} to {midi_nb_to_note2(midi_note_last)})."
+
+            if midi_note_last >= COMPASS_EXTEND_MAX:
+                # the selected object has already the maximum extendable MIDI note
+                prompt += '\nIt has already the highest possible MIDI note.'
+                AskUserAnswerQuestion(self.wnd_main, 'OdfEdit', prompt, ['Close'], 'Close')
+            else:
+                # ask the user to give the MIDI note to which to extend the compass of the selected object (maximum 12 notes of extension)
+                prompt += f"\nEnter the MIDI note number between {midi_note_last + 1} and {midi_note_last_max} ({midi_nb_to_note2(midi_note_last + 1)} to {midi_nb_to_note2(midi_note_last_max)}) up to which to extend this {object_type}."
+                if object_type == 'Manual':
+                    prompt += '\nThe manual displayed keys will not be extended.'
+                keyboard_image = os.path.dirname(__file__) + os.path.sep + 'resources' + os.path.sep + 'NotesMidiKeys.png'
+                answer = AskUserEnterString(self.wnd_main, 'OdfEdit', prompt, '', keyboard_image)
+                if answer != None:
+                    # the user has given his choice
+                    if answer.isdigit() and int(answer) in range(midi_note_last + 1, midi_note_last_max + 1):
+                        # the user has given a proper MIDI note number
+                        # do the compass extension
+                        self.wnd_main['cursor'] = 'watch'
+                        compass = self.odf_data.compass_extend(object_uid, int(answer))
+                        self.wnd_main['cursor'] = ''
+                        if compass != None:
+                            # the extension has been done successfully
+                            self.odf_data_changed = True
+                            self.object_text_update()
+                            self.gui_status_update_buttons()
+
+                            new_midi_note_first, new_midi_note_last = compass
+                            if new_midi_note_last > midi_note_last:
+                                AskUserAnswerQuestion(self.wnd_main, 'OdfEdit', f'{object_uid} compass extended\nfrom MIDI {midi_note_first}-{midi_note_last} ({midi_nb_to_note2(midi_note_first)} to {midi_nb_to_note2(midi_note_last)}) to {new_midi_note_first}-{new_midi_note_last} ({midi_nb_to_note2(new_midi_note_first)} to {midi_nb_to_note2(new_midi_note_last)}).\nSee details in the logs tab.', ['Close'], 'Close')
+                            else:
+                                AskUserAnswerQuestion(self.wnd_main, 'OdfEdit', f'{object_uid} compass not extended.\nSee details in the logs tab.', ['Close'], 'Close')
+                    else:
+                        AskUserAnswerQuestion(self.wnd_main, 'OdfEdit', f'{answer} is not in the proposed MIDI notes range {midi_note_last + 1}-{midi_note_last_max}.', ['Close'], 'Close')
+
+        if compass == None:
+            # an error has occurred
+            AskUserAnswerQuestion(self.wnd_main, 'OdfEdit', 'The extension cannot be done.\nSee details in the logs tab.', ['Close'], 'Close')
+
+        # update the events log text
+        self.logs_update()
+        # select the logs tab of the notebook to show the logs generated by the operation
+        self.notebook.select(self.frm_logs)
 
     #-------------------------------------------------------------------------------------------------
     images_ref=[]  # list needed to keep in memory the reference to the images opened by tk.PhotoImage and added in the text box (to prevent them being garbage collected)
@@ -13702,7 +13966,7 @@ class AskUserEnterString():
     # class to open and manage a dialog box to ask the user to enter a string
     # returns the entered string or None if the user has clicked the windows close button or pressed Escape key or there is empty answer provided
 
-    def __new__(cls, parent_wnd, title, message, initial_string):
+    def __new__(cls, parent_wnd, title, message, initial_string='', image_path=None):
 
         # disable the parent window so that the dialog box is modal (only possible in Windows OS)
         if os.name == 'nt':
@@ -13732,9 +13996,20 @@ class AskUserEnterString():
         listdialog_label = ttk.Label(dialog_wnd, text=message, anchor='center')
         listdialog_label.pack(side=tk.TOP, padx=20, pady=10, fill=tk.X)
 
-        # create an entry widget to let the user enter his string
+        # create the label widget to display the given image if any
+        if image_path != None:
+            try:
+                image = tk.PhotoImage(file=image_path)
+            except:
+                image = None
+
+            if image != None:
+                label_image = tk.Label(dialog_wnd, image=image)
+                label_image.pack(side=tk.TOP, padx=20, pady=0, fill=tk.X)
+
+        # create the entry widget to let the user enter his string
         text_entry = tk.Entry(dialog_wnd)
-        text_entry.pack(side=tk.TOP, padx=20, pady=10, fill=tk.X)
+        text_entry.pack(side=tk.TOP, padx=40, pady=10, fill=tk.X)
         text_entry.bind('<Return>', lambda event, reason='OK': closure_reason.set(reason))
 
         # frame to occupy the bottom area of the dialog window to encapsulate buttons
@@ -13777,14 +14052,19 @@ class AskUserEnterString():
 #-------------------------------------------------------------------------------------------------
 
 def midi_nb_to_note(midi_nb):
-    # return in a tuple (note name (string), octave number (integer)) the note corresponding to the given MIDI number
-    assert 0 <= midi_nb <= 127, f'Out of range MIDI number {midi_nb} given to midi_nb_to_note function'
-    octave = int(midi_nb // NOTES_NB_IN_OCTAVE) - 1   # -1 to have MIDI number 69 = note A4 and not A5
+    # return in a tuple (note name (string), octave number (integer)) the note corresponding to the given MIDI note number
+    assert 0 <= midi_nb <= 127, f'Out of range MIDI note number {midi_nb} given to midi_nb_to_note function'
+    octave = int(midi_nb // NOTES_NB_IN_OCTAVE) - 1   # -1 to have MIDI note number 69 = note A4 and not A5
     note = NOTES_NAMES[midi_nb % NOTES_NB_IN_OCTAVE]
     return note, octave
 
+def midi_nb_to_note2(midi_nb):
+    # return in a string (note name + octave number concatenated, for example C#4) the note name corresponding to the given MIDI note number
+    note, octave = midi_nb_to_note(midi_nb)
+    return note + str(octave)
+
 def note_to_midi_nb(note, octave):
-    # return the MIDI number corresponding to the given note (string in NOTES_NAMES list) and octave number (value in OCTAVES_RANGE list, -1 to 9)
+    # return the MIDI note number corresponding to the given note (string in NOTES_NAMES list) and octave number (value in OCTAVES_RANGE list, -1 to 9)
     assert note in NOTES_NAMES, f'Wrong note name {note} given to note_to_midi_nb function'
     assert octave in OCTAVES_RANGE, f'Out of range octave number {octave} given to note_to_midi_nb function'
     midi_nb = NOTES_NAMES.index(note) + (NOTES_NB_IN_OCTAVE * (octave + 1))   # +1 to have note A4 = MIDI number 69 and not 57
