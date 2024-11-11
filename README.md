@@ -4,7 +4,7 @@ It can be run either directly with the Python file (OdfEdit.py and other files o
 
 Way to run directly the script file :
 - install Python 3.x on your computer
-- install the Python libraries pillow, lxml and sounddevice
+- install the Python libraries pillow, lxml, audioplayer and sounddevice
 - copy the content of the src folder in a local folder of your computer, or install it with pip : pip install OdfEdit
 - in the local src folder run the command : python3 OdfEdit.py (or in Linux : python3 ./OdfEdit.py)
 
