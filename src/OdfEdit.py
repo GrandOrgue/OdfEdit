@@ -65,8 +65,8 @@
    v2.4 - 30 May 2023   - objects having child(ren) cannot be deleted with the button Delete
                           added a menu item checkbox to select the file format to use when saving an ODF (ISO_8859_1 or UTF-8 BOM)
                           added a menu item checkbox to disable the automatic objects tree expand on object selection
-                          added a menu item checkbox to enable the wave based tremulants convertion from HW to GO
-                          added a menu item checkbox to enable the unused ranks convertion from HW to GO
+                          added a menu item checkbox to enable the wave based tremulants conversion from HW to GO
+                          added a menu item checkbox to enable the unused ranks conversion from HW to GO
                           configuration data of the application (last ODF folder, options of the menu) are saved in a file OdfEdit.cfg
                           improvements made in the objects list/tree behavior on object selection or change
                           the parents/children of the selected object can be selected and edited in the central list (above the text editor)
@@ -91,7 +91,7 @@
                           added the possibility to replace the text found by the search
                           "object" renamed to "section" in the GUI
                           HW2GO : check that the mouse or text rectangle doesn't exceed the image size of a switch or label
-                          HW2GO : unused HW noise ranks are converted to GO ranks if the convertion option is enabled in the menu
+                          HW2GO : unused HW noise ranks are converted to GO ranks if the conversion option is enabled in the menu
                           HW2GO : add in a switch or setter the text of a label which is overlapping it
                           HW2GO : rework of the way to calculate the rank related attributes in the Stop object (pipes stop)
                           HW2GO : update the organ / pipes pitch tuning calculation
@@ -178,8 +178,9 @@
                           HW2GO : converting the tremmed samples in the way they are defined in Piotr Grabowski sample sets (placed in second pipes layers and not in alternate ranks as done by Sonus Paradisi)
    v2.14 - 22 Sept 2024 - The Delete key pressing deletes the selected section only if the focus is in a sections list or tree
                           Implementation of a manual / stop / rank compass extension feature (accessible from a menu item)
-   v2.15 -                Bug fix in rank compass extension where the gain was not considered as a float value
-                          Adding a button "Reload" to reload from the storage the ODF currently opened (to discard changes made in the ODF and not saved yet)
+   v2.15 - 11 Nov 2024  - Adding a button "Reload" to reload from the storage the ODF currently opened (to discard changes made in the ODF and not saved yet)
+                          The compass extension at Manual level is defined with the new number of keys instead of the new maximum MIDI note
+                          Bug fix in rank compass extension where the gain was not considered as a float value
                           Improvement of the viewer's features :
                             - the viewer is inactive when its tab is not selected
                             - the images zoom/unzoom is centered on the mouse cursor position
@@ -190,14 +191,30 @@
                             - if OdfEdit is executed with the Windows executable or in a normal Python process (Windows or Linux), WavPack files can be played.
                               if OdfEdit is executed with the Linux executable, WavPack files cannot be played (this is to avoid to have the size of the OdfEdit executable file increased by 36MB)
                           (the version v10.1.0 at least of the library Pillow must be installed)
-TO DO :
-    waiting for good ideas...
+   v2.16 - 01 Dec 2024  - Menu button moved at the most left position
+                          Button New renamed in Close and move at the right
+                          Adding a button "Clone" to clone the selected section in a new section under the same parent section
+                          Adding a button "File picker" permitting to set in the text editor the file of the attribute on which is placed the insertion cursor
+                          Adding "undo" / "redo" buttons in the text editor
+                          Grouping the buttons "Apply changes", "Undo", "Redo", "File picker" and "Help" in a new buttons bar at the top of the text editor
+                          Adding a contextual menu in the logs area, displayed on mouse right click, permitting to clear logs or to select the section which the name is under the mouse cursor
+                          Improvement of the ODF Reload processing to make it faster
+                          Fixes and improvements in the ODF data check feature
+                          Performance improvements in the ODF data processing
+                          The search in the help can be done with regular expressions or with case unsensitive/sensitive. The index of the focused found occurrence is displayed.
+                          Improvements of the images viewer's features :
+                            - a right click on an image permits to select/unselect it and its section in the text editor and the list/tree
+                            - a right click drag on an image permits to move it and update consequently its coordinates in the text editor
+                            - the zoom-in has more effect than the zoom-out
+                          HW2GO : files not found in the sample set folders are converted all the same in the GO ODF if they are not addressing Hauptwerk Standard Components packages
+                                  (if their package ID is higher than 10)
+TO DO LIST :
 
 -------------------------------------------------------------------------------
 """
 
-APP_VERSION = 'v2.15'
-RELEASE_DATE = 'November 11th 2024'
+APP_VERSION = 'v2.16'
+RELEASE_DATE = 'December 1st 2024'
 
 DEV_MODE = False
 LOG_HW2GO_drawstop = False
@@ -215,25 +232,28 @@ import math
 import sys
 import time
 
+##import traceback  # call traceback.print_stack(limit=5) in a function to print in the Python console the last 5 calls stack to this function
+
 from threading import Thread
 from datetime  import date
 
 import tkinter as tk                       # already installed with Python on Windows and macOS. Ubuntu/Debian Linux : sudo apt install python3-tk
 import tkinter.filedialog as fdialog
 import tkinter.font as tkf
-from tkinter import ttk
+from   tkinter import ttk
 
 if os.name == 'nt' or not(getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')):
-    # program running in Windows OS or not running in a PyInstaller bundle
-    from audioplayer import AudioPlayer        # install with : pip install audioplayer
+    # program running in Windows OS or not running in a PyInstaller bundle : import the audioplayer library
+    from audioplayer import AudioPlayer    # install with : pip install audioplayer
     is_audio_player_lib_present = True
 else:
-    # audioplayer library not used in Linux because including it increases the size of the OdfEdit executable by 36MB
-    import sounddevice as sd                   # install with : pip install sounddevice
+    # audioplayer library not used in Linux because including it increases the size of the OdfEdit executable (bundled by PyInstaller) by 36MB
+    # we use sounddevice library instead, but WavPack files cannot be played
+    import sounddevice as sd               # install with : pip install sounddevice
     is_audio_player_lib_present = False
 
 from lxml import etree                     # install with : pip install lxml
-from PIL import Image, ImageOps, ImageTk, ImageEnhance    # install with : pip install pillow or pip install -U Pillow (+ if needed : sudo apt-get install python3-pil python3-pil.imagetk)
+from PIL  import Image, ImageOps, ImageTk, ImageEnhance    # install with : pip install pillow or pip install -U Pillow (+ if needed : sudo apt-get install python3-pil python3-pil.imagetk)
 
 MAIN_WINDOW_TITLE = 'OdfEdit - ' + APP_VERSION + (' - DEV MODE' if DEV_MODE else '')
 
@@ -319,6 +339,8 @@ COLOR_TAG_FOUND2  = '#EDAF04'
 
 COLOR_SELECTED_ITEM = COLOR_BACKGROUND2 # background color for the selected object UID in the lists or tree
 COLOR_SAME_UID_ITEM = '#BCE6F2'         # background color for the objects of the lists or tree having the selected object UID but not being selected
+
+VW_MARG = 10  # margin in pixels to have around the images viewer
 
 #-------------------------------------------------------------------------------------------------
 class C_LOGS:
@@ -1448,7 +1470,7 @@ class C_ODF_DATA_CHECK:
             logs.add("ERROR the Organ section is not defined")
 
         for object_uid, object_dic in sorted(self.odf_data_dic.items()):
-            # scan the objects of the ODF data
+            # scan the objects of the ODF data dictionary
 
             # recover a copy of the lines of the current object
             object_lines_list = list(object_dic['lines'])
@@ -1463,7 +1485,7 @@ class C_ODF_DATA_CHECK:
                 object_lines_list.sort()
 
                 # remove the first line while it is empty (after the sorting the empty lines are all in first positions)
-                while len(object_lines_list) > 0 and object_lines_list[0] == '':
+                while len(object_lines_list) > 0 and len(object_lines_list[0]) == 0:
                     object_lines_list.pop(0)
 
                 # check if the attributes are all uniques in the object
@@ -1472,7 +1494,7 @@ class C_ODF_DATA_CHECK:
                 # check the attributes and values of the object by type
                 object_type = self.object_type_get(object_uid)
                 if object_type == 'Header':
-                    pass
+                    self.check_object_Header(object_uid, object_lines_list)
                 elif object_type == 'Organ':
                     self.check_object_Organ(object_uid, object_lines_list)
                 elif object_type == 'Coupler':
@@ -1512,12 +1534,12 @@ class C_ODF_DATA_CHECK:
                 elif object_type == 'WindchestGroup':
                     self.check_object_WindchestGroup(object_uid, object_lines_list)
                 else:
-                    # the object UID has not been recognized
+                    # the object type is unknown
                     logs.add(f"WARNING the section {object_uid} has an unknown type")
-                    # empty the lines list of the object which is not recognized, to not display in the log its attributes which have not been checked
+                    # empty the lines list of the object which is not recognized, to not display later in the log its attributes which have not been checked
                     object_lines_list = []
 
-                # check the lines not checked by the function check_attribute_value() (that is which are still present in the lines list)
+                # check the lines not checked by the function check_attribute_value() (which has removed in object_lines_list the checked lines)
                 for line in object_lines_list:
                     (error_msg, attr_name, attr_value, comment) = self.check_object_line(line, True)
                     if error_msg != None:
@@ -1531,11 +1553,11 @@ class C_ODF_DATA_CHECK:
         # display in the log the number of checked attributes
         logs.add(f"{self.checked_attr_nb:,} attributes checked")
 
-        # update the panel format flag
+        # check the kind of panel format (new or old)
         self.check_panel_format()
 
         # display in the log if none error has been detected
-        if logs.nb_get() <= 3:  # there are 3 log lines when no error : check start message + detected panel format + number of checked attributes
+        if logs.nb_get() <= 3:  # there are 3 log lines when there is no error : check start message + detected panel format + number of checked attributes
             logs.add("None error found, can be loaded in GrandOrgue for a final check")
 
     #-------------------------------------------------------------------------------------------------
@@ -1552,7 +1574,7 @@ class C_ODF_DATA_CHECK:
 
     #-------------------------------------------------------------------------------------------------
     def check_object_uid(self, object_uid):
-        # return an error message if an issue has been detected in the given object UID, else None
+        # return an error message if an issue is detected in the given object UID, else None
 
         error_msg = None
 
@@ -1574,7 +1596,7 @@ class C_ODF_DATA_CHECK:
         return error_msg
 
     #-------------------------------------------------------------------------------------------------
-    def check_object_line(self, line, do_check_chars=False):
+    def check_object_line(self, line, do_check_chars):
         # check the syntax of the given object line and extract from it the attribute name + attribute value + comment
         # return a tuple containing : (error message, attribute name, attribute value, comment)
         # attribute name = 'uid' if the given line contains an object UID between brackets, the UID is in the attribute value
@@ -1582,7 +1604,7 @@ class C_ODF_DATA_CHECK:
 
         error_msg = attr_name = attr_value = comment = None
 
-        if line != None and len(line) > 0: # not an empty line
+        if line not in (None, ''): # not an empty line
             if line[0] == "[":
                 # line with an object UID inside normally
                 pos = line.find(']', 1)
@@ -1604,17 +1626,22 @@ class C_ODF_DATA_CHECK:
                         if comment.lstrip()[0] != ';':
                             error_msg = 'only text beginning by ; is allowed after the ] character'
 
-            elif line[0] != ";":  # not a comment line
+            elif line[0] == ";":
+                # comment line
+                comment = line
 
+            elif line[0] == "=":
+                # the line starts by an equal character
+                error_msg = 'the character "=" cannot start a line'
+                comment = line
+
+            else:
+                # line containing an attribute definition normally
                 # recover the string parts on both sides of the = character
                 line_parts_list = line.split('=')
                 if len(line_parts_list) == 1:
-                    # no equal character present in the line
+                    # there is none equal character present in the line
                     error_msg = 'missing character ";" (if comment) or "=" (if attribute)'
-                    comment = line
-                elif len(line_parts_list[0]) == 0:
-                    # the line starts by an equal character
-                    error_msg = 'the character "=" cannot start a line'
                     comment = line
                 else:
                     attr_name = line_parts_list[0]
@@ -1631,11 +1658,16 @@ class C_ODF_DATA_CHECK:
                     if len(line_parts_list) > 1:
                         comment = ';' + line_parts_list[1]
 
-            else: # comment or empty line
-                comment = line
-
         return (error_msg, attr_name, attr_value, comment)
 
+    #-------------------------------------------------------------------------------------------------
+    def check_object_Header(self, object_uid, lines_list):
+        # check the data of the Header object which the lines are in the given lines list
+        # the lines must be either starting by a semi-colon or empty
+
+        for line in lines_list:
+            if len(line) > 0 and line[0] != ';':
+                logs.add(f'ERROR in {object_uid} : this line must start with a semi-colon "{line}"')
 
     #-------------------------------------------------------------------------------------------------
     def check_object_Organ(self, object_uid, lines_list):
@@ -1651,36 +1683,36 @@ class C_ODF_DATA_CHECK:
         elif value == "N" and 'Manual000' in self.odf_data_dic:
             logs.add(f"ERROR in {object_uid} : HasPedals=N whereas a Manual000 section is defined")
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfDivisionalCouplers', ATTR_TYPE_INTEGER, True, 0, 8)
-        if value != None and value.isdigit() and int(value) >= 0:
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfDivisionalCouplers', ATTR_TYPE_INTEGER, True, 0, 8))
+        if value != None:
             count = self.objects_type_number_get('DivisionalCoupler')
-            if count != int(value):
+            if count != value:
                 logs.add(f"ERROR in {object_uid} : NumberOfDivisionalCouplers={value} whereas {count} DivisionalCoupler section(s) defined")
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfEnclosures', ATTR_TYPE_INTEGER, True, 0, 999)
-        if value != None and value.isdigit() and int(value) >= 0:
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfEnclosures', ATTR_TYPE_INTEGER, True, 0, 999))
+        if value != None:
             count = self.objects_type_number_get('Enclosure')
-            if count != int(value):
+            if count != value:
                 logs.add(f"ERROR in {object_uid} : NumberOfEnclosures={value} whereas {count} Enclosure section(s) defined")
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfGenerals', ATTR_TYPE_INTEGER, True, 0, 99)
-        if value != None and value.isdigit() and int(value) >= 0:
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfGenerals', ATTR_TYPE_INTEGER, True, 0, 99))
+        if value != None:
             count = self.objects_type_number_get('General')
-            if count != int(value):
+            if count != value:
                 logs.add(f"ERROR in {object_uid} : NumberOfGenerals={value} whereas {count} General section(s) defined")
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfManuals', ATTR_TYPE_INTEGER, True, 1, 16)
-        if value != None and value.isdigit() and int(value) >= 0:
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfManuals', ATTR_TYPE_INTEGER, True, 1, 16))
+        if value != None:
             count = self.objects_type_number_get('Manual')
             if 'Manual000' in self.odf_data_dic.keys(): count -= 1
-            if count != int(value):
+            if count != value:
                 logs.add(f"ERROR in {object_uid} : NumberOfManuals={value} whereas {count} Manual section(s) defined")
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfPanels', ATTR_TYPE_INTEGER, self.new_panel_format_bool, 0, 100)
-        if value != None and value.isdigit() and int(value) >= 0:
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfPanels', ATTR_TYPE_INTEGER, self.new_panel_format_bool, 0, 100))
+        if value != None:
             count = self.objects_type_number_get('Panel')
             if 'Panel000' in self.odf_data_dic.keys(): count -= 1
-            if count != int(value):
+            if count != value:
                 logs.add(f"ERROR in {object_uid} : NumberOfPanels={value} whereas {count} Panel section(s) defined")
 
         if self.new_panel_format_bool and not 'Panel000' in self.odf_data_dic:
@@ -1688,22 +1720,22 @@ class C_ODF_DATA_CHECK:
         elif not self.new_panel_format_bool and 'Panel000' in self.odf_data_dic:
             logs.add(f"ERROR in {object_uid} : old panel format used whereas a Panel000 is defined")
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfReversiblePistons', ATTR_TYPE_INTEGER, True, 0, 32)
-        if value != None and value.isdigit() and int(value) >= 0:
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfReversiblePistons', ATTR_TYPE_INTEGER, True, 0, 32))
+        if value != None:
             count = self.objects_type_number_get('ReversiblePiston')
-            if count != int(value):
+            if count != value:
                 logs.add(f"ERROR in {object_uid} : NumberOfReversiblePistons={value} whereas {count} ReversiblePiston section(s) defined")
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, True, 0, 10)
-        if value != None and value.isdigit() and int(value) >= 0:
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, True, 0, 10))
+        if value != None:
             count = self.objects_type_number_get('Tremulant')
-            if count != int(value):
+            if count != value:
                 logs.add(f"ERROR in {object_uid} : NumberOfTremulants={value} whereas {count} Tremulant section(s) defined")
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfWindchestGroups', ATTR_TYPE_INTEGER, True, 1, 999)
-        if value != None and value.isdigit() and int(value) >= 0:
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfWindchestGroups', ATTR_TYPE_INTEGER, True, 1, 999))
+        if value != None:
             count = self.objects_type_number_get('WindchestGroup')
-            if count != int(value):
+            if count != value:
                 logs.add(f"ERROR in {object_uid} : NumberOfWindchestGroups={value} whereas {count} WindchestGroup section(s) defined")
 
         self.check_attribute_value(object_uid, lines_list, 'DivisionalsStoreIntermanualCouplers', ATTR_TYPE_BOOLEAN, True)
@@ -1718,34 +1750,34 @@ class C_ODF_DATA_CHECK:
         self.check_attribute_value(object_uid, lines_list, 'RecordingDetails', ATTR_TYPE_STRING, False)
         self.check_attribute_value(object_uid, lines_list, 'InfoFilename', ATTR_TYPE_STRING, False)
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfImages', ATTR_TYPE_INTEGER, False, 0, 999) # old panel format
-        if value != None and value.isdigit() and int(value) >= 0:
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfImages', ATTR_TYPE_INTEGER, False, 0, 999)) # old panel format
+        if value != None:
             count = self.objects_type_number_get('Image')
-            if count != int(value):
+            if count != value:
                 logs.add(f"ERROR in {object_uid} : NumberOfImages={value} whereas {count} Image section(s) defined")
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfLabels', ATTR_TYPE_INTEGER, False, 0, 999)  # old panel format
-        if value != None and value.isdigit() and int(value) >= 0:
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfLabels', ATTR_TYPE_INTEGER, False, 0, 999))  # old panel format
+        if value != None:
             count = self.objects_type_number_get('Label')
-            if count != int(value):
+            if count != value:
                 logs.add(f"ERROR in {object_uid} : NumberOfLabels={value} whereas {count} Label section(s) defined")
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfRanks', ATTR_TYPE_INTEGER, False, 0, 999)
-        if value != None and value.isdigit() and int(value) >= 0:
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfRanks', ATTR_TYPE_INTEGER, False, 0, 999))
+        if value != None:
             count = self.objects_type_number_get('Rank')
-            if count != int(value):
+            if count != value:
                 logs.add(f"ERROR in {object_uid} : NumberOfRanks={value} whereas {count} Rank section(s) defined")
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfSetterElements', ATTR_TYPE_INTEGER, False, 0, 999)  # old panel format
-        if value != None and value.isdigit() and int(value) >= 0:
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfSetterElements', ATTR_TYPE_INTEGER, False, 0, 999))  # old panel format
+        if value != None:
             count = self.objects_type_number_get('SetterElement')
-            if count != int(value):
+            if count != value:
                 logs.add(f"ERROR in {object_uid} : NumberOfSetterElements={value} whereas {count} SetterElement section(s) defined")
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, 999)
-        if value != None and value.isdigit() and int(value) >= 0:
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, 999))
+        if value != None:
             count = self.objects_type_number_get('Switch')
-            if count != int(value):
+            if count != value:
                 logs.add(f"ERROR in {object_uid} : NumberOfSwitches={value} whereas {count} Switch section(s) defined")
 
         self.check_attribute_value(object_uid, lines_list, 'CombinationsStoreNonDisplayedDrawstops', ATTR_TYPE_BOOLEAN, False)
@@ -1756,7 +1788,6 @@ class C_ODF_DATA_CHECK:
         self.check_attribute_value(object_uid, lines_list, 'TrackerDelay', ATTR_TYPE_FLOAT, False, 0, 10000)
         self.check_attribute_value(object_uid, lines_list, 'Percussive', ATTR_TYPE_BOOLEAN, False)
         self.check_attribute_value(object_uid, lines_list, 'HasIndependentRelease', ATTR_TYPE_BOOLEAN, False)
-
 
         if not self.new_panel_format_bool:
             # if old parnel format, the Organ object contains panel attributes
@@ -1801,17 +1832,13 @@ class C_ODF_DATA_CHECK:
 
         # get the dimensions of the parent panel
         panel_uid = self.object_parent_panel_get(object_uid)
-        value = self.object_attr_value_get(panel_uid, 'DispScreenSizeHoriz')
-        panel_width = int(value) if value != None and value.isdigit() else 3000
-        value = self.object_attr_value_get(panel_uid, 'DispScreenSizeVert')
-        panel_height = int(value) if value != None and value.isdigit() else 2000
+        panel_width = myint(self.object_attr_value_get(panel_uid, 'DispScreenSizeHoriz'), 3000)
+        panel_height = myint(self.object_attr_value_get(panel_uid, 'DispScreenSizeVert'), 2000)
 
         self.check_attribute_value(object_uid, lines_list, 'PositionX', ATTR_TYPE_INTEGER, False, 0, panel_width)
         self.check_attribute_value(object_uid, lines_list, 'PositionY', ATTR_TYPE_INTEGER, False, 0, panel_height)
-        width = self.check_attribute_value(object_uid, lines_list, 'Width', ATTR_TYPE_INTEGER, False, 0, panel_width)
-        height = self.check_attribute_value(object_uid, lines_list, 'Height', ATTR_TYPE_INTEGER, False, 0, panel_height)
-        max_width = int(width) if width != None and width.isdigit() else panel_width
-        max_height = int(height) if height != None and height.isdigit() else panel_height
+        max_width = myint(self.check_attribute_value(object_uid, lines_list, 'Width', ATTR_TYPE_INTEGER, False, 0, panel_width), panel_width)
+        max_height = myint(self.check_attribute_value(object_uid, lines_list, 'Height', ATTR_TYPE_INTEGER, False, 0, panel_height), panel_height)
 
         # get the dimensions of the button bitmap
         if image_on not in (None, ''):
@@ -1836,21 +1863,21 @@ class C_ODF_DATA_CHECK:
 
         self.check_attribute_value(object_uid, lines_list, 'MouseRectLeft', ATTR_TYPE_INTEGER, False, 0, max_width)
         self.check_attribute_value(object_uid, lines_list, 'MouseRectTop', ATTR_TYPE_INTEGER, False, 0, max_height)
-        mouse_rect_width = self.check_attribute_value(object_uid, lines_list, 'MouseRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width)
-        mouse_rect_height = self.check_attribute_value(object_uid, lines_list, 'MouseRectHeight', ATTR_TYPE_INTEGER, False, 0, max_height)
+        mouse_rect_width = myint(self.check_attribute_value(object_uid, lines_list, 'MouseRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width))
+        mouse_rect_height = myint(self.check_attribute_value(object_uid, lines_list, 'MouseRectHeight', ATTR_TYPE_INTEGER, False, 0, max_height))
 
-        if mouse_rect_width != None and mouse_rect_width.isdigit() and mouse_rect_height != None and  mouse_rect_height.isdigit():
-            mouse_radius = max(int(mouse_rect_width), int(mouse_rect_height))
+        if mouse_rect_width != None and mouse_rect_height != None:
+            mouse_radius = max(mouse_rect_width, mouse_rect_height)
         else:
             mouse_radius = max(bitmap_width, bitmap_height)
         self.check_attribute_value(object_uid, lines_list, 'MouseRadius', ATTR_TYPE_INTEGER, False, 0, mouse_radius)
 
         self.check_attribute_value(object_uid, lines_list, 'TextRectLeft', ATTR_TYPE_INTEGER, False, 0, max_width)
         self.check_attribute_value(object_uid, lines_list, 'TextRectTop', ATTR_TYPE_INTEGER, False, 0, max_height)
-        text_rect_width = self.check_attribute_value(object_uid, lines_list, 'TextRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width)
+        text_rect_width = myint(self.check_attribute_value(object_uid, lines_list, 'TextRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width))
         self.check_attribute_value(object_uid, lines_list, 'TextRectHeight', ATTR_TYPE_INTEGER, False, 0, max_height)
 
-        if text_rect_width != None and text_rect_width.isdigit():
+        if text_rect_width != None:
             text_break_width = int(text_rect_width)
         else:
             text_break_width = bitmap_width
@@ -1892,36 +1919,28 @@ class C_ODF_DATA_CHECK:
         parent_manual_uid = self.object_parent_manual_get(object_uid)
 
         # required attributes
-        value = self.object_attr_value_get(parent_manual_uid, 'NumberOfCouplers')
-        max_val = int(value) if value != None and value.isdigit() else 999
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfCouplers', ATTR_TYPE_INTEGER, is_divisional_obj, 0, max_val)
-        if value != None and value.isdigit():
-            for idx in range(1, int(value)+1):
-                self.check_attribute_value(object_uid, lines_list, f'Coupler{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+        max_val = myint(self.object_attr_value_get(parent_manual_uid, 'NumberOfCouplers'), 999)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfCouplers', ATTR_TYPE_INTEGER, is_divisional_obj, 0, max_val), 0)
+        for idx in range(1, value + 1):
+            self.check_attribute_value(object_uid, lines_list, f'Coupler{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
-        value = self.object_attr_value_get(parent_manual_uid, 'NumberOfStops')
-        max_val = int(value) if value != None and value.isdigit() else 999
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfStops', ATTR_TYPE_INTEGER, is_divisional_obj, 0, max_val)
-        if value != None and value.isdigit():
-            for idx in range(1, int(value)+1):
-                self.check_attribute_value(object_uid, lines_list, f'Stop{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+        max_val = myint(self.object_attr_value_get(parent_manual_uid, 'NumberOfStops'), 999)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfStops', ATTR_TYPE_INTEGER, is_divisional_obj, 0, max_val), 0)
+        for idx in range(1, value + 1):
+            self.check_attribute_value(object_uid, lines_list, f'Stop{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
-        value = self.object_attr_value_get(parent_manual_uid, 'NumberOfTremulants')
-        max_val = int(value) if value != None and value.isdigit() else 10
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, is_divisional_obj, 0, max_val)
-        if value != None and value.isdigit():
-            for idx in range(1, int(value)+1):
-                self.check_attribute_value(object_uid, lines_list, f'Tremulant{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+        max_val = myint(self.object_attr_value_get(parent_manual_uid, 'NumberOfTremulants'), 10)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, is_divisional_obj, 0, max_val), 0)
+        for idx in range(1, value + 1):
+            self.check_attribute_value(object_uid, lines_list, f'Tremulant{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
         # optional attributes
         self.check_attribute_value(object_uid, lines_list, 'Protected', ATTR_TYPE_BOOLEAN, False)
 
-        value = self.object_attr_value_get(parent_manual_uid, 'NumberOfSwitches')
-        max_val = int(value) if value != None and value.isdigit() else 999
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, max_val)
-        if value != None and value.isdigit():
-            for idx in range(1, int(value)+1):
-                self.check_attribute_value(object_uid, lines_list, f'Switch{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+        max_val = myint(self.object_attr_value_get(parent_manual_uid, 'NumberOfSwitches'), 10)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, max_val), 0)
+        for idx in range(1, value + 1):
+            self.check_attribute_value(object_uid, lines_list, f'Switch{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
         # a Divisional has in addition the attributes of a Push Button
         self.check_object_PushButton(object_uid, lines_list)
@@ -1935,12 +1954,10 @@ class C_ODF_DATA_CHECK:
         # required attributes
         self.check_attribute_value(object_uid, lines_list, 'BiDirectionalCoupling', ATTR_TYPE_BOOLEAN, is_divisional_coupler_obj)
 
-        value = self.object_attr_value_get('Organ', 'NumberOfManuals')
-        max_val = int(value) if value != None and value.isdigit() else 16
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfManuals', ATTR_TYPE_INTEGER, is_divisional_coupler_obj, 1, max_val)
-        if value != None and value.isdigit():
-            for idx in range(1, int(value)+1):
-                self.check_attribute_value(object_uid, lines_list, f"Manual{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
+        max_val = myint(self.object_attr_value_get('Organ', 'NumberOfManuals'), 16)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfManuals', ATTR_TYPE_INTEGER, is_divisional_coupler_obj, 1, max_val), 0)
+        for idx in range(1, value + 1):
+            self.check_attribute_value(object_uid, lines_list, f"Manual{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
 
         # a Divisional Coupler has in addition the attributes of a DrawStop
         self.check_object_DrawStop(object_uid, lines_list)
@@ -1965,8 +1982,8 @@ class C_ODF_DATA_CHECK:
             switch_nb = 1
 
         for idx in range(1, switch_nb + 1):
-            attr_value = self.check_attribute_value(object_uid, lines_list, f"Switch{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
-            if switch_id != 999 and int(attr_value) >= switch_id:
+            attr_value = myint(self.check_attribute_value(object_uid, lines_list, f"Switch{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True))
+            if switch_id != 999 and attr_value != None and attr_value >= switch_id:
                 # the given object is a Switch and it refers to another switch which has an higher ID than it
                 logs.add(f'ERROR in {object_uid} section, cannot reference a switch having an equal or higher number')
 
@@ -1995,14 +2012,14 @@ class C_ODF_DATA_CHECK:
         self.check_attribute_value(object_uid, lines_list, 'DispLabelText', ATTR_TYPE_STRING, False)
         self.check_attribute_value(object_uid, lines_list, 'EnclosureStyle', ATTR_TYPE_INTEGER, False, 1, 4)
 
-        value = self.check_attribute_value(object_uid, lines_list, 'BitmapCount', ATTR_TYPE_INTEGER, False, 1, 128)
-        if value != None and value.isdigit():
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'BitmapCount', ATTR_TYPE_INTEGER, False, 1, 128))
+        if value != None:
             image = None
-            for idx in range(1, int(value)+1):
+            for idx in range(1, value + 1):
                 image = self.check_attribute_value(object_uid, lines_list, f'Bitmap{str(idx).zfill(3)}', ATTR_TYPE_FILE_NAME, True)
                 self.check_attribute_value(object_uid, lines_list, f'Mask{str(idx).zfill(3)}', ATTR_TYPE_FILE_NAME, False)
             # get the dimensions of the last enclosure bitmap
-            if image != None and image != '' and self.check_files_names:
+            if image not in (None, '') and self.check_files_names:
                 # an image is defined to display the enclosure
                 # get the sizes of the image in the file which is existing
                 im = Image.open(os.path.dirname(self.odf_file_name) + os.path.sep + path2ospath(image))
@@ -2018,17 +2035,13 @@ class C_ODF_DATA_CHECK:
 
         # get the dimensions of the parent panel
         panel_uid = self.object_parent_panel_get(object_uid)
-        value = self.object_attr_value_get(panel_uid, 'DispScreenSizeHoriz')
-        panel_width = int(value) if value != None and value.isdigit() else 3000
-        value = self.object_attr_value_get(panel_uid, 'DispScreenSizeVert')
-        panel_height = int(value) if value != None and value.isdigit() else 2000
+        panel_width = myint(self.object_attr_value_get(panel_uid, 'DispScreenSizeHoriz'), 3000)
+        panel_height = myint(self.object_attr_value_get(panel_uid, 'DispScreenSizeVert'), 2000)
 
         self.check_attribute_value(object_uid, lines_list, 'PositionX', ATTR_TYPE_INTEGER, False, 0, panel_width)
         self.check_attribute_value(object_uid, lines_list, 'PositionY', ATTR_TYPE_INTEGER, False, 0, panel_height)
-        width = self.check_attribute_value(object_uid, lines_list, 'Width', ATTR_TYPE_INTEGER, False, 0, panel_width)
-        height = self.check_attribute_value(object_uid, lines_list, 'Height', ATTR_TYPE_INTEGER, False, 0, panel_height)
-        max_width = int(width) if width != None and width.isdigit() else panel_width
-        max_height = int(height) if height != None and height.isdigit() else panel_height
+        max_width = myint(self.check_attribute_value(object_uid, lines_list, 'Width', ATTR_TYPE_INTEGER, False, 0, panel_width), panel_width)
+        max_height = myint(self.check_attribute_value(object_uid, lines_list, 'Height', ATTR_TYPE_INTEGER, False, 0, panel_height), panel_height)
 
         self.check_attribute_value(object_uid, lines_list, 'TileOffsetX', ATTR_TYPE_INTEGER, False, 0, bitmap_width)
         self.check_attribute_value(object_uid, lines_list, 'TileOffsetY', ATTR_TYPE_INTEGER, False, 0, bitmap_height)
@@ -2036,29 +2049,14 @@ class C_ODF_DATA_CHECK:
         self.check_attribute_value(object_uid, lines_list, 'MouseRectLeft', ATTR_TYPE_INTEGER, False, 0, max_width)
         self.check_attribute_value(object_uid, lines_list, 'MouseRectTop', ATTR_TYPE_INTEGER, False, 0, max_height)
         self.check_attribute_value(object_uid, lines_list, 'MouseRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width)
-        mouse_rect_height = self.check_attribute_value(object_uid, lines_list, 'MouseRectHeight', ATTR_TYPE_INTEGER, False, 0, max_height)
-
-        if mouse_rect_height != None and mouse_rect_height.isdigit():
-            max_start = int(mouse_rect_height)
-        else:
-            max_start = 200
-        mouse_axis_start = self.check_attribute_value(object_uid, lines_list, 'MouseAxisStart', ATTR_TYPE_INTEGER, False, 0, max_start)
-
-        if mouse_axis_start != None and mouse_axis_start.isdigit():
-            min_end = int(mouse_axis_start)
-        else:
-            min_end = 200
+        max_start = myint(self.check_attribute_value(object_uid, lines_list, 'MouseRectHeight', ATTR_TYPE_INTEGER, False, 0, max_height), 200)
+        min_end = myint(self.check_attribute_value(object_uid, lines_list, 'MouseAxisStart', ATTR_TYPE_INTEGER, False, 0, max_start), 200)
         self.check_attribute_value(object_uid, lines_list, 'MouseAxisEnd', ATTR_TYPE_INTEGER, False, min_end, max_start)
 
         self.check_attribute_value(object_uid, lines_list, 'TextRectLeft', ATTR_TYPE_INTEGER, False, 0, max_width)
         self.check_attribute_value(object_uid, lines_list, 'TextRectTop', ATTR_TYPE_INTEGER, False, 0, max_height)
-        text_rect_width = self.check_attribute_value(object_uid, lines_list, 'TextRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width)
+        text_break_width = myint(self.check_attribute_value(object_uid, lines_list, 'TextRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width), bitmap_width)
         self.check_attribute_value(object_uid, lines_list, 'TextRectHeight', ATTR_TYPE_INTEGER, False, 0, max_height)
-
-        if text_rect_width != None and text_rect_width.isdigit():
-            text_break_width = int(text_rect_width)
-        else:
-            text_break_width = bitmap_width
         self.check_attribute_value(object_uid, lines_list, 'TextBreakWidth', ATTR_TYPE_INTEGER, False, 0, text_break_width)
 
     #-------------------------------------------------------------------------------------------------
@@ -2069,38 +2067,34 @@ class C_ODF_DATA_CHECK:
         store_div_coupl_in_gen = self.object_attr_value_get(object_uid, 'GeneralsStoreDivisionalCouplers')
 
         # required attributes
-        max_val = self.objects_type_number_get('Coupler')
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfCouplers', ATTR_TYPE_INTEGER, is_general_obj, 0, max_val)
-        if value != None and value.isdigit():
-            for idx in range(1, int(value)+1):
-                self.check_attribute_value(object_uid, lines_list, f'CouplerNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
-                self.check_attribute_value(object_uid, lines_list, f'CouplerManual{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfCouplers', ATTR_TYPE_INTEGER, is_general_obj, 0, self.objects_type_number_get('Coupler')), 0)
+        for idx in range(1, value + 1):
+            manual_id = self.check_attribute_value(object_uid, lines_list, f'CouplerManual{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+            if manual_id != '':
+                manual_uid = 'Manual' + manual_id.zfill(3)
+                elements_nb = myint(self.object_attr_value_get(manual_uid, 'NumberOfCouplers'), 0)
+                self.check_attribute_value(object_uid, lines_list, f'CouplerNumber{str(idx).zfill(3)}', ATTR_TYPE_INTEGER, True, 0, elements_nb)
 
-        max_val = self.objects_type_number_get('DivisionalCoupler')
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfDivisionalCouplers', ATTR_TYPE_INTEGER, is_general_obj and store_div_coupl_in_gen == 'Y', 0, max_val)
-        if value != None and value.isdigit():
-            for idx in range(1, int(value)+1):
-                self.check_attribute_value(object_uid, lines_list, f'DivisionalCouplerNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfDivisionalCouplers', ATTR_TYPE_INTEGER, is_general_obj and store_div_coupl_in_gen == 'Y', 0, self.objects_type_number_get('DivisionalCoupler')), 0)
+        for idx in range(1, value + 1):
+            self.check_attribute_value(object_uid, lines_list, f'DivisionalCouplerNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
-        max_val = self.objects_type_number_get('Stop')
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfStops', ATTR_TYPE_INTEGER, is_general_obj, 0, max_val)
-        if value != None and value.isdigit():
-            for idx in range(1, int(value)+1):
-                self.check_attribute_value(object_uid, lines_list, f'StopNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
-                self.check_attribute_value(object_uid, lines_list, f'StopManual{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfStops', ATTR_TYPE_INTEGER, is_general_obj, 0, self.objects_type_number_get('Stop')), 0)
+        for idx in range(1, value + 1):
+            manual_id = self.check_attribute_value(object_uid, lines_list, f'StopManual{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+            if manual_id != '':
+                manual_uid = 'Manual' + manual_id.zfill(3)
+                elements_nb = myint(self.object_attr_value_get(manual_uid, 'NumberOfStops'), 0)
+                self.check_attribute_value(object_uid, lines_list, f'StopNumber{str(idx).zfill(3)}', ATTR_TYPE_INTEGER, True, 0, elements_nb)
 
-        max_val = self.objects_type_number_get('Tremulant')
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, is_general_obj, 0, max_val)
-        if value != None and value.isdigit():
-            for idx in range(1, int(value)+1):
-                self.check_attribute_value(object_uid, lines_list, f'TremulantNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, is_general_obj, 0, self.objects_type_number_get('Tremulant')), 0)
+        for idx in range(1, value + 1):
+            self.check_attribute_value(object_uid, lines_list, f'TremulantNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
         # optional attributes
-        max_val = self.objects_type_number_get('Switch')
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, max_val)
-        if value != None and value.isdigit():
-            for idx in range(1, int(value)+1):
-                self.check_attribute_value(object_uid, lines_list, f'SwitchNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, self.objects_type_number_get('Switch')), 0)
+        for idx in range(1, value + 1):
+            self.check_attribute_value(object_uid, lines_list, f'SwitchNumber{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
         self.check_attribute_value(object_uid, lines_list, 'Protected', ATTR_TYPE_BOOLEAN, False)
 
@@ -2116,10 +2110,8 @@ class C_ODF_DATA_CHECK:
 
         # get the dimensions of the parent panel
         parent_panel_uid = self.object_parent_panel_get(object_uid)
-        value = self.object_attr_value_get(parent_panel_uid, 'DispScreenSizeHoriz')
-        panel_width = int(value) if value != None and value.isdigit() else 3000
-        value = self.object_attr_value_get(parent_panel_uid, 'DispScreenSizeVert')
-        panel_height = int(value) if value != None and value.isdigit() else 2000
+        panel_width = myint(self.object_attr_value_get(parent_panel_uid, 'DispScreenSizeHoriz'), 3000)
+        panel_height = myint(self.object_attr_value_get(parent_panel_uid, 'DispScreenSizeVert'), 2000)
 
         # optional attributes
         self.check_attribute_value(object_uid, lines_list, 'Mask', ATTR_TYPE_FILE_NAME, False)
@@ -2158,10 +2150,8 @@ class C_ODF_DATA_CHECK:
 
         # get the dimensions of the parent panel
         parent_panel_uid = self.object_parent_panel_get(object_uid)
-        value = self.object_attr_value_get(parent_panel_uid, 'DispScreenSizeHoriz')
-        panel_width = int(value) if value != None and value.isdigit() else 3000
-        value = self.object_attr_value_get(parent_panel_uid, 'DispScreenSizeVert')
-        panel_height = int(value) if value != None and value.isdigit() else 2000
+        panel_width = myint(self.object_attr_value_get(parent_panel_uid, 'DispScreenSizeHoriz'), 3000)
+        panel_height = myint(self.object_attr_value_get(parent_panel_uid, 'DispScreenSizeVert'), 2000)
 
         self.check_attribute_value(object_uid, lines_list, 'DispXpos', ATTR_TYPE_INTEGER, False, 0, panel_width)
         self.check_attribute_value(object_uid, lines_list, 'DispYpos', ATTR_TYPE_INTEGER, False, 0, panel_height)
@@ -2169,8 +2159,7 @@ class C_ODF_DATA_CHECK:
         self.check_attribute_value(object_uid, lines_list, 'DispAtTopOfDrawstopCol', ATTR_TYPE_BOOLEAN, ret2 == 'N')
 
         # get the number of drawstop columns in the parent panel
-        value = self.object_attr_value_get(parent_panel_uid, 'DispDrawstopCols')
-        columns_nb = int(value) if value != None and value.isdigit() else 12
+        columns_nb = myint(self.object_attr_value_get(parent_panel_uid, 'DispDrawstopCols'), 12)
         self.check_attribute_value(object_uid, lines_list, 'DispDrawstopCol', ATTR_TYPE_INTEGER, ret1 == 'N', 1, columns_nb)
 
         self.check_attribute_value(object_uid, lines_list, 'DispSpanDrawstopColToRight', ATTR_TYPE_BOOLEAN, ret1 == 'N')
@@ -2183,10 +2172,8 @@ class C_ODF_DATA_CHECK:
 
         self.check_attribute_value(object_uid, lines_list, 'PositionX', ATTR_TYPE_INTEGER, False, 0, panel_width)
         self.check_attribute_value(object_uid, lines_list, 'PositionY', ATTR_TYPE_INTEGER, False, 0, panel_height)
-        width = self.check_attribute_value(object_uid, lines_list, 'Width', ATTR_TYPE_INTEGER, False, 0, panel_width)
-        height = self.check_attribute_value(object_uid, lines_list, 'Height', ATTR_TYPE_INTEGER, False, 0, panel_height)
-        max_width = int(width) if width != None and width.isdigit() else panel_width
-        max_height = int(height) if height != None and height.isdigit() else panel_height
+        max_width = myint(self.check_attribute_value(object_uid, lines_list, 'Width', ATTR_TYPE_INTEGER, False, 0, panel_width), panel_width)
+        max_height = myint(self.check_attribute_value(object_uid, lines_list, 'Height', ATTR_TYPE_INTEGER, False, 0, panel_height), panel_height)
 
         # get the dimensions of the label bitmap
         if image not in (None, ''):
@@ -2219,13 +2206,8 @@ class C_ODF_DATA_CHECK:
 
         self.check_attribute_value(object_uid, lines_list, 'TextRectLeft', ATTR_TYPE_INTEGER, False, 0, max_width)
         self.check_attribute_value(object_uid, lines_list, 'TextRectTop', ATTR_TYPE_INTEGER, False, 0, max_height)
-        text_rect_width = self.check_attribute_value(object_uid, lines_list, 'TextRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width)
+        text_break_width = myint(self.check_attribute_value(object_uid, lines_list, 'TextRectWidth', ATTR_TYPE_INTEGER, False, 0, max_width), bitmap_width)
         self.check_attribute_value(object_uid, lines_list, 'TextRectHeight', ATTR_TYPE_INTEGER, False, 0, max_height)
-
-        if text_rect_width != None and text_rect_width.isdigit():
-            text_break_width = int(text_rect_width)
-        else:
-            text_break_width = bitmap_width
         self.check_attribute_value(object_uid, lines_list, 'TextBreakWidth', ATTR_TYPE_INTEGER, False, 0, text_break_width)
 
     #-------------------------------------------------------------------------------------------------
@@ -2244,74 +2226,65 @@ class C_ODF_DATA_CHECK:
 
         # required attributes
         self.check_attribute_value(object_uid, lines_list, 'Name', ATTR_TYPE_STRING, is_manual_obj)
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfLogicalKeys', ATTR_TYPE_INTEGER, is_manual_obj, 1, 192)
-        if value == None and manual_uid != None:
+        logical_keys_nb = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfLogicalKeys', ATTR_TYPE_INTEGER, is_manual_obj, 1, 192))
+        if logical_keys_nb == None and manual_uid != None:
             # recover the number of accessible keys in the linked Manual object
-            value = self.object_attr_value_get(manual_uid, 'NumberOfAccessibleKeys')
+            logical_keys_nb = myint(self.object_attr_value_get(manual_uid, 'NumberOfAccessibleKeys'), 192)
+        else:
+            logical_keys_nb = 192
 
-        if value != None and value.isdigit() and int(value) > 0:
-            for idx in range(1, int(value) + 1):
+        if logical_keys_nb > 0:
+            for idx in range(1, logical_keys_nb + 1):
                 # attributes Key999xxx
-                image = self.check_attribute_value(object_uid, lines_list, f'Key{str(idx).zfill(3)}ImageOn', ATTR_TYPE_FILE_NAME, False)
-                if image not in (None, ''):
-                    # check the other attributes for this key only if an image on is defined
-                    key_id = f'Key{str(idx).zfill(3)}'
-                    self.check_attribute_value(object_uid, lines_list, key_id + 'ImageOff', ATTR_TYPE_FILE_NAME, False)
-                    self.check_attribute_value(object_uid, lines_list, key_id + 'MaskOn', ATTR_TYPE_FILE_NAME, False)
-                    self.check_attribute_value(object_uid, lines_list, key_id + 'MaskOff', ATTR_TYPE_FILE_NAME, False)
-                    self.check_attribute_value(object_uid, lines_list, key_id + 'Width', ATTR_TYPE_INTEGER, False, 0, 500)
-                    self.check_attribute_value(object_uid, lines_list, key_id + 'Offset', ATTR_TYPE_INTEGER, False, -500, 500)
-                    self.check_attribute_value(object_uid, lines_list, key_id + 'YOffset', ATTR_TYPE_INTEGER, False, -500, 500)
+                key_id = f'Key{str(idx).zfill(3)}'
+                image = self.check_attribute_value(object_uid, lines_list, key_id + 'ImageOn', ATTR_TYPE_FILE_NAME, False)
+                self.check_attribute_value(object_uid, lines_list, key_id + 'ImageOff', ATTR_TYPE_FILE_NAME, False)
+                self.check_attribute_value(object_uid, lines_list, key_id + 'MaskOn', ATTR_TYPE_FILE_NAME, False)
+                self.check_attribute_value(object_uid, lines_list, key_id + 'MaskOff', ATTR_TYPE_FILE_NAME, False)
+                self.check_attribute_value(object_uid, lines_list, key_id + 'Width', ATTR_TYPE_INTEGER, False, 0, 500)
+                self.check_attribute_value(object_uid, lines_list, key_id + 'Offset', ATTR_TYPE_INTEGER, False, -500, 500)
+                self.check_attribute_value(object_uid, lines_list, key_id + 'YOffset', ATTR_TYPE_INTEGER, False, -500, 500)
 
-                    # get the dimensions of the key bitmap
-                    # an image is defined to display the key
-                    if self.check_files_names:
-                        # get the sizes of the image in the file which is existing
-                        im = Image.open(os.path.dirname(self.odf_file_name) + os.path.sep + path2ospath(image))
-                        bitmap_width = im.size[0]
-                        bitmap_height = im.size[1]
-                    else:
-                        bitmap_width = 100  # arbritrary default value
-                        bitmap_height = 300 # arbritrary default value
+                # get the dimensions of the key bitmap
+                # an image is defined to display the key
+                if self.check_files_names and image not in (None, ''):
+                    # get the sizes of the image in the file which is existing
+                    im = Image.open(os.path.dirname(self.odf_file_name) + os.path.sep + path2ospath(image))
+                    bitmap_width = im.size[0]
+                    bitmap_height = im.size[1]
+                else:
+                    bitmap_width = 100  # arbritrary default value
+                    bitmap_height = 300 # arbritrary default value
 
-                    self.check_attribute_value(object_uid, lines_list, key_id + 'MouseRectLeft', ATTR_TYPE_INTEGER, False, 0, bitmap_width)
-                    self.check_attribute_value(object_uid, lines_list, key_id + 'MouseRectTop', ATTR_TYPE_INTEGER, False, 0, bitmap_height)
-                    self.check_attribute_value(object_uid, lines_list, key_id + 'MouseRectWidth', ATTR_TYPE_INTEGER, False, 0, bitmap_width)
-                    self.check_attribute_value(object_uid, lines_list, key_id + 'MouseRectHeight', ATTR_TYPE_INTEGER, False, 0, bitmap_height)
+                self.check_attribute_value(object_uid, lines_list, key_id + 'MouseRectLeft', ATTR_TYPE_INTEGER, False, 0, bitmap_width)
+                self.check_attribute_value(object_uid, lines_list, key_id + 'MouseRectTop', ATTR_TYPE_INTEGER, False, 0, bitmap_height)
+                self.check_attribute_value(object_uid, lines_list, key_id + 'MouseRectWidth', ATTR_TYPE_INTEGER, False, 0, bitmap_width)
+                self.check_attribute_value(object_uid, lines_list, key_id + 'MouseRectHeight', ATTR_TYPE_INTEGER, False, 0, bitmap_height)
 
-        logical_keys_nb = int(value) if value != None and value.isdigit() else 192
         self.check_attribute_value(object_uid, lines_list, 'FirstAccessibleKeyLogicalKeyNumber', ATTR_TYPE_INTEGER, is_manual_obj, 1, logical_keys_nb)
         self.check_attribute_value(object_uid, lines_list, 'FirstAccessibleKeyMIDINoteNumber', ATTR_TYPE_INTEGER, is_manual_obj, 0, 127)
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfAccessibleKeys', ATTR_TYPE_INTEGER, is_manual_obj, 0, 85)
-        accessible_keys_nb = int(value) if value != None and value.isdigit() else 85
+        accessible_keys_nb = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfAccessibleKeys', ATTR_TYPE_INTEGER, is_manual_obj, 0, 85), 85)
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfCouplers', ATTR_TYPE_INTEGER, False, 0, 999)
-        if value != None and value.isdigit() and int(value) > 0:
-            for idx in range(1, int(value)+1):
-                self.check_attribute_value(object_uid, lines_list, f'Coupler{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfCouplers', ATTR_TYPE_INTEGER, False, 0, 999), 0)
+        for idx in range(1, value + 1):
+            self.check_attribute_value(object_uid, lines_list, f'Coupler{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfDivisionals', ATTR_TYPE_INTEGER, False, 0, 999)
-        if value != None and value.isdigit() and int(value) > 0:
-            for idx in range(1, int(value)+1):
-                self.check_attribute_value(object_uid, lines_list, f'Divisional{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfDivisionals', ATTR_TYPE_INTEGER, False, 0, 999), 0)
+        for idx in range(1, value + 1):
+            self.check_attribute_value(object_uid, lines_list, f'Divisional{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfStops', ATTR_TYPE_INTEGER, False, 0, 999)
-        if value != None and value.isdigit() and int(value) > 0:
-            for idx in range(1, int(value)+1):
-                self.check_attribute_value(object_uid, lines_list, f'Stop{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfStops', ATTR_TYPE_INTEGER, False, 0, 999), 0)
+        for idx in range(1, value + 1):
+            self.check_attribute_value(object_uid, lines_list, f'Stop{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
-        max_val = self.objects_type_number_get('Switch')
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, max_val)
-        if value != None and value.isdigit() and int(value) > 0:
-            for idx in range(1, int(value)+1):
-                self.check_attribute_value(object_uid, lines_list, f'Switch{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, self.objects_type_number_get('Switch')), 0)
+        for idx in range(1, value + 1):
+            self.check_attribute_value(object_uid, lines_list, f'Switch{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
-        max_val = self.objects_type_number_get('Tremulant')
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, False, 0, max_val)
-        if value != None and value.isdigit() and int(value) > 0:
-            for idx in range(1, int(value)+1):
-                self.check_attribute_value(object_uid, lines_list, f'Tremulant{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, False, 0, self.objects_type_number_get('Tremulant')), 0)
+        for idx in range(1, value + 1):
+            self.check_attribute_value(object_uid, lines_list, f'Tremulant{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
         # optional attributes
         for idx in range(0, 128):
@@ -2322,10 +2295,8 @@ class C_ODF_DATA_CHECK:
 
         # get the dimensions of the parent panel
         parent_panel_uid = self.object_parent_panel_get(object_uid)
-        value = self.object_attr_value_get(parent_panel_uid, 'DispScreenSizeHoriz')
-        panel_width = int(value) if value != None and value.isdigit() else 3000
-        value = self.object_attr_value_get(parent_panel_uid, 'DispScreenSizeVert')
-        panel_height = int(value) if value != None and value.isdigit() else 2000
+        panel_width = myint(self.object_attr_value_get(parent_panel_uid, 'DispScreenSizeHoriz'), 3000)
+        panel_height = myint(self.object_attr_value_get(parent_panel_uid, 'DispScreenSizeVert'), 2000)
 
         self.check_attribute_value(object_uid, lines_list, 'PositionX', ATTR_TYPE_INTEGER, False, 0, panel_width)
         self.check_attribute_value(object_uid, lines_list, 'PositionY', ATTR_TYPE_INTEGER, False, 0, panel_height)
@@ -2334,11 +2305,10 @@ class C_ODF_DATA_CHECK:
         self.check_attribute_value(object_uid, lines_list, 'DispKeyColourWooden', ATTR_TYPE_BOOLEAN, False)
         self.check_attribute_value(object_uid, lines_list, 'DisplayFirstNote', ATTR_TYPE_INTEGER, False, 0, 127)
 
-        value = self.check_attribute_value(object_uid, lines_list, 'DisplayKeys', ATTR_TYPE_INTEGER, False, 1, accessible_keys_nb)
-        if value != None and value.isdigit() and int(value) > 0:
-            for idx in range(1, int(value)+1):
-                self.check_attribute_value(object_uid, lines_list, f'DisplayKey{str(idx).zfill(3)}', ATTR_TYPE_INTEGER, False, 0, 127)
-                self.check_attribute_value(object_uid, lines_list, f'DisplayKey{str(idx).zfill(3)}Note', ATTR_TYPE_INTEGER, False, 0, 127)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'DisplayKeys', ATTR_TYPE_INTEGER, False, 1, accessible_keys_nb), 0)
+        for idx in range(1, value + 1):
+            self.check_attribute_value(object_uid, lines_list, f'DisplayKey{str(idx).zfill(3)}', ATTR_TYPE_INTEGER, False, 0, 127)
+            self.check_attribute_value(object_uid, lines_list, f'DisplayKey{str(idx).zfill(3)}Note', ATTR_TYPE_INTEGER, False, 0, 127)
 
         # optional attributes with the KEYTYPE format
         ImageOn_First_keytype = None # variable to store if the first attribute have been already checked for the ImageOn key type
@@ -2398,19 +2368,19 @@ class C_ODF_DATA_CHECK:
             self.check_attribute_value(object_uid, lines_list, 'Name', ATTR_TYPE_STRING, is_additional_panel)
             self.check_attribute_value(object_uid, lines_list, 'HasPedals', ATTR_TYPE_BOOLEAN, True)
 
-            value = self.check_attribute_value(object_uid, lines_list, 'NumberOfGUIElements', ATTR_TYPE_INTEGER, True, 0, 999)
-            if value != None and value.isdigit() and int(value) >= 0:
+            value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfGUIElements', ATTR_TYPE_INTEGER, True, 0, 999))
+            if value != None:
                 count = self.objects_type_number_get(f'{object_uid}Element')
-                if count != int(value):
+                if count != value:
                     logs.add(f"ERROR in {object_uid} : NumberOfGUIElements={value} whereas {count} {object_uid}Element section(s) defined")
 
             # optional attributes (new panel format)
             self.check_attribute_value(object_uid, lines_list, 'Group', ATTR_TYPE_STRING, False)
 
-            value = self.check_attribute_value(object_uid, lines_list, 'NumberOfImages', ATTR_TYPE_INTEGER, False, 0, 999)
-            if value != None and value.isdigit() and int(value) >= 0:
+            value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfImages', ATTR_TYPE_INTEGER, False, 0, 999))
+            if value != None:
                 count = self.objects_type_number_get(f'{object_uid}Image')
-                if count != int(value):
+                if count != value:
                     logs.add(f"ERROR in {object_uid} : NumberOfImages={value} whereas {count} {object_uid}Image section(s) defined")
 
         elif is_additional_panel:  # additional panel in the old panel format (for the main panel, the non display metrics attributes are defined in the Organ object)
@@ -2419,107 +2389,105 @@ class C_ODF_DATA_CHECK:
             self.check_attribute_value(object_uid, lines_list, 'Name', ATTR_TYPE_STRING, True)
             self.check_attribute_value(object_uid, lines_list, 'HasPedals', ATTR_TYPE_BOOLEAN, True)
 
-            value = self.check_attribute_value(object_uid, lines_list, 'NumberOfCouplers', ATTR_TYPE_INTEGER, True, 0, 999)
-            if value != None and value.isdigit() and int(value) >= 0:
-                for idx in range(1, int(value)+1):
+            value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfCouplers', ATTR_TYPE_INTEGER, True, 0, 999))
+            if value != None:
+                for idx in range(1, value + 1):
                     self.check_attribute_value(object_uid, lines_list, f"Coupler{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
                     self.check_attribute_value(object_uid, lines_list, f"Coupler{str(idx).zfill(3)}Manual", ATTR_TYPE_OBJECT_REF, True)
                 count = self.objects_type_number_get(f'{object_uid}Coupler')
-                if count != int(value):
+                if count != value:
                     logs.add(f"ERROR in {object_uid} : NumberOfCouplers={value} whereas {count} {object_uid}Coupler section(s) defined")
 
-            value = self.check_attribute_value(object_uid, lines_list, 'NumberOfDivisionals', ATTR_TYPE_INTEGER, True, 0, 999)
-            if value != None and value.isdigit() and int(value) >= 0:
-                for idx in range(1, int(value)+1):
+            value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfDivisionals', ATTR_TYPE_INTEGER, True, 0, 999))
+            if value != None:
+                for idx in range(1, value + 1):
                     self.check_attribute_value(object_uid, lines_list, f"Divisional{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
                     self.check_attribute_value(object_uid, lines_list, f"Divisional{str(idx).zfill(3)}Manual", ATTR_TYPE_OBJECT_REF, True)
                 count = self.objects_type_number_get(f'{object_uid}Divisional')
-                if count != int(value):
+                if count != value:
                     logs.add(f"ERROR in {object_uid} : NumberOfDivisionals={value} whereas {count} {object_uid}Divisional section(s) defined")
 
-            value = self.check_attribute_value(object_uid, lines_list, 'NumberOfDivisionalCouplers', ATTR_TYPE_INTEGER, True, 0, 8)
-            if value != None and value.isdigit() and int(value) >= 0:
-                for idx in range(1, int(value)+1):
+            value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfDivisionalCouplers', ATTR_TYPE_INTEGER, True, 0, 8))
+            if value != None:
+                for idx in range(1, value + 1):
                     self.check_attribute_value(object_uid, lines_list, f"DivisionalCoupler{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
                 count = self.objects_type_number_get(f'{object_uid}DivisionalCoupler')
-                if count != int(value):
+                if count != value:
                     logs.add(f"ERROR in {object_uid} : NumberOfDivisionalCouplers={value} whereas {count} {object_uid}DivisionalCoupler section(s) defined")
 
-            value = self.check_attribute_value(object_uid, lines_list, 'NumberOfEnclosures', ATTR_TYPE_INTEGER, True, 0, 50)
-            if value != None and value.isdigit() and int(value) >= 0:
-                for idx in range(1, int(value)+1):
+            value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfEnclosures', ATTR_TYPE_INTEGER, True, 0, 50))
+            if value != None:
+                for idx in range(1, value + 1):
                     self.check_attribute_value(object_uid, lines_list, f"Enclosure{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
                 count = self.objects_type_number_get(f'{object_uid}Enclosure')
-                if count != int(value):
+                if count != value:
                     logs.add(f"ERROR in {object_uid} : NumberOfEnclosures={value} whereas {count} {object_uid}Enclosure section(s) defined")
 
-            value = self.check_attribute_value(object_uid, lines_list, 'NumberOfGenerals', ATTR_TYPE_INTEGER, True, 0, 99)
-            if value != None and value.isdigit() and int(value) >= 0:
-                for idx in range(1, int(value)+1):
+            value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfGenerals', ATTR_TYPE_INTEGER, True, 0, 99))
+            if value != None:
+                for idx in range(1, value + 1):
                     self.check_attribute_value(object_uid, lines_list, f"General{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
                 count = self.objects_type_number_get(f'{object_uid}General')
-                if count != int(value):
+                if count != value:
                     logs.add(f"ERROR in {object_uid} : NumberOfGenerals={value} whereas {count} {object_uid}General section(s) defined")
 
-            value = self.check_attribute_value(object_uid, lines_list, 'NumberOfImages', ATTR_TYPE_INTEGER, True, 0, 999)
-            if value != None and value.isdigit() and int(value) >= 0:
+            value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfImages', ATTR_TYPE_INTEGER, True, 0, 999))
+            if value != None:
                 count = self.objects_type_number_get(f'{object_uid}Image')
-                if count != int(value):
+                if count != value:
                     logs.add(f"ERROR in {object_uid} : NumberOfImages={value} whereas {count} {object_uid}Image section(s) defined")
 
-            value = self.check_attribute_value(object_uid, lines_list, 'NumberOfLabels', ATTR_TYPE_INTEGER, True, 0, 999)
-            if value != None and value.isdigit() and int(value) >= 0:
+            value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfLabels', ATTR_TYPE_INTEGER, True, 0, 999))
+            if value != None:
                 count = self.objects_type_number_get(f'{object_uid}Label')
-                if count != int(value):
+                if count != value:
                     logs.add(f"ERROR in {object_uid} : NumberOfLabels={value} whereas {count} {object_uid}Label section(s) defined")
 
-            value = self.check_attribute_value(object_uid, lines_list, 'NumberOfManuals', ATTR_TYPE_INTEGER, True, 0, 16)
-            if value != None and value.isdigit() and int(value) >= 0:
-                for idx in range(1, int(value)+1):
-                    self.check_attribute_value(object_uid, lines_list, f"Manual{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
+            value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfManuals', ATTR_TYPE_INTEGER, True, 0, 16), 0)
+            for idx in range(1, value + 1):
+                self.check_attribute_value(object_uid, lines_list, f"Manual{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
 
-            value = self.check_attribute_value(object_uid, lines_list, 'NumberOfReversiblePistons', ATTR_TYPE_INTEGER, True, 0, 32)
-            if value != None and value.isdigit() and int(value) >= 0:
-                for idx in range(1, int(value)+1):
+            value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfReversiblePistons', ATTR_TYPE_INTEGER, True, 0, 32))
+            if value != None:
+                for idx in range(1, value + 1):
                     self.check_attribute_value(object_uid, lines_list, f"ReversiblePiston{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
                 count = self.objects_type_number_get(f'{object_uid}ReversiblePiston')
-                if count != int(value):
+                if count != value:
                     logs.add(f"ERROR in {object_uid} : NumberOfReversiblePistons={value} whereas {count} {object_uid}ReversiblePiston section(s) defined")
 
-            value = self.check_attribute_value(object_uid, lines_list, 'NumberOfStops', ATTR_TYPE_INTEGER, True, 0, 999)
-            if value != None and value.isdigit() and int(value) >= 0:
-                for idx in range(1, int(value)+1):
+            value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfStops', ATTR_TYPE_INTEGER, True, 0, 999))
+            if value != None:
+                for idx in range(1, value + 1):
                     self.check_attribute_value(object_uid, lines_list, f"Stop{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
                     self.check_attribute_value(object_uid, lines_list, f"Stop{str(idx).zfill(3)}Manual", ATTR_TYPE_OBJECT_REF, True)
                 count = self.objects_type_number_get(f'{object_uid}Stop')
-                if count != int(value):
+                if count != value:
                     logs.add(f"ERROR in {object_uid} : NumberOfStops={value} whereas {count} {object_uid}Stop section(s) defined")
 
-            value = self.check_attribute_value(object_uid, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, True, 0, 10)
-            if value != None and value.isdigit() and int(value) >= 0:
-                for idx in range(1, int(value)+1):
+            value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, True, 0, 10))
+            if value != None:
+                for idx in range(1, value + 1):
                     self.check_attribute_value(object_uid, lines_list, f"Tremulant{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
                 count = self.objects_type_number_get(f'{object_uid}Tremulant')
-                if count != int(value):
+                if count != value:
                     logs.add(f"ERROR in {object_uid} : NumberOfTremulants={value} whereas {count} {object_uid}Tremulant section(s) defined")
 
             # optional attributes (old panel format, additional panel)
             self.check_attribute_value(object_uid, lines_list, 'Group', ATTR_TYPE_STRING, False)
 
-            value = self.check_attribute_value(object_uid, lines_list, 'NumberOfSetterElements', ATTR_TYPE_INTEGER, False, 0, 8)
-            if value != None and value.isdigit() and int(value) >= 0:
+            value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfSetterElements', ATTR_TYPE_INTEGER, False, 0, 8))
+            if value != None:
                 count = self.objects_type_number_get(f'{object_uid}SetterElement')
-                if count != int(value):
+                if count != value:
                     logs.add(f"ERROR in {object_uid} : NumberOfSetterElements={value} whereas {count} {object_uid}SetterElement section(s) defined")
 
             value = self.check_attribute_value(object_uid, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, 999)
-            if value != None and value.isdigit() and int(value) >= 0:
-                for idx in range(1, int(value)+1):
+            if value != None:
+                for idx in range(1, value + 1):
                     self.check_attribute_value(object_uid, lines_list, f"Switch{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
                 count = self.objects_type_number_get(f'{object_uid}Switch')
-                if count != int(value):
+                if count != value:
                     logs.add(f"ERROR in {object_uid} : NumberOfSwitches={value} whereas {count} {object_uid}Switch section(s) defined")
-
 
         # display metrics (common to old and new panel formats)
 
@@ -2575,12 +2543,18 @@ class C_ODF_DATA_CHECK:
         if elem_type == None:
             pass
         elif elem_type == 'Coupler':
-            self.check_attribute_value(object_uid, lines_list, 'Manual', ATTR_TYPE_OBJECT_REF, True)
-            self.check_attribute_value(object_uid, lines_list, 'Coupler', ATTR_TYPE_OBJECT_REF, True)
+            manual_id = self.check_attribute_value(object_uid, lines_list, 'Manual', ATTR_TYPE_OBJECT_REF, True)
+            if manual_id != '':
+                manual_uid = 'Manual' + manual_id.zfill(3)
+                elements_nb = myint(self.object_attr_value_get(manual_uid, 'NumberOfCouplers'), 0)
+                self.check_attribute_value(object_uid, lines_list, 'Coupler', ATTR_TYPE_INTEGER, True, 0, elements_nb)
             self.check_object_Coupler(object_uid, lines_list)
         elif elem_type == 'Divisional':
-            self.check_attribute_value(object_uid, lines_list, 'Manual', ATTR_TYPE_OBJECT_REF, True)
-            self.check_attribute_value(object_uid, lines_list, 'Divisional', ATTR_TYPE_OBJECT_REF, True)
+            manual_id = self.check_attribute_value(object_uid, lines_list, 'Manual', ATTR_TYPE_OBJECT_REF, True)
+            if manual_id != '':
+                manual_uid = 'Manual' + manual_id.zfill(3)
+                elements_nb = myint(self.object_attr_value_get(manual_uid, 'NumberOfDivisionals'), 0)
+                self.check_attribute_value(object_uid, lines_list, 'Divisional', ATTR_TYPE_INTEGER, True, 0, elements_nb)
             self.check_object_Divisional(object_uid, lines_list)
         elif elem_type == 'DivisionalCoupler':
             self.check_attribute_value(object_uid, lines_list, 'DivisionalCoupler', ATTR_TYPE_OBJECT_REF, True)
@@ -2600,8 +2574,11 @@ class C_ODF_DATA_CHECK:
             self.check_attribute_value(object_uid, lines_list, 'ReversiblePiston', ATTR_TYPE_OBJECT_REF, True)
             self.check_object_ReversiblePiston(object_uid, lines_list)
         elif elem_type == 'Stop':
-            self.check_attribute_value(object_uid, lines_list, 'Manual', ATTR_TYPE_OBJECT_REF, True)
-            self.check_attribute_value(object_uid, lines_list, 'Stop', ATTR_TYPE_OBJECT_REF, True)
+            manual_id = self.check_attribute_value(object_uid, lines_list, 'Manual', ATTR_TYPE_OBJECT_REF, True)
+            if manual_id != '':
+                manual_uid = 'Manual' + manual_id.zfill(3)
+                elements_nb = myint(self.object_attr_value_get(manual_uid, 'NumberOfStops'), 0)
+                self.check_attribute_value(object_uid, lines_list, 'Stop', ATTR_TYPE_INTEGER, True, 0, elements_nb)
             self.check_object_Button(object_uid, lines_list)
         elif elem_type == 'Swell':
             self.check_object_Enclosure(object_uid, lines_list)
@@ -2690,75 +2667,68 @@ class C_ODF_DATA_CHECK:
         self.check_attribute_value(object_uid, lines_list, 'MaxVelocityVolume', ATTR_TYPE_FLOAT, False, 0, 1000)
         self.check_attribute_value(object_uid, lines_list, 'AcceptsRetuning', ATTR_TYPE_BOOLEAN, False)
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfLogicalPipes', ATTR_TYPE_INTEGER, is_rank_obj, 1, 192)
-        if value != None and value.isdigit():
-            for idx in range(1, int(value)+1):  # Pipe999xxx attributes
-                pipe_id = f'Pipe{str(idx).zfill(3)}'
-                self.check_attribute_value(object_uid, lines_list, pipe_id, ATTR_TYPE_PIPE_WAVE, True)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'Percussive', ATTR_TYPE_BOOLEAN, False)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'HasIndependentRelease', ATTR_TYPE_BOOLEAN, False)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'AmplitudeLevel', ATTR_TYPE_FLOAT, False, 0, 1000)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'Gain', ATTR_TYPE_FLOAT, False, -120, 40)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'PitchTuning', ATTR_TYPE_FLOAT, False, -1800, 1800)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'TrackerDelay', ATTR_TYPE_FLOAT, False, 0, 10000)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'LoadRelease', ATTR_TYPE_BOOLEAN, False)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'AttackVelocity', ATTR_TYPE_INTEGER, False, 0, 127)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'MaxTimeSinceLastRelease', ATTR_TYPE_INTEGER, False, -1, 100000)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'IsTremulant', ATTR_TYPE_INTEGER, False, -1, 1)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'MaxKeyPressTime', ATTR_TYPE_INTEGER, False, -1, 100000)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'AttackStart', ATTR_TYPE_INTEGER, False, 0, 158760000)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'CuePoint', ATTR_TYPE_INTEGER, False, -1, 158760000)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'ReleaseEnd', ATTR_TYPE_INTEGER, False, -1, 158760000)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'HarmonicNumber', ATTR_TYPE_FLOAT, False, 1, 1024)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'MIDIKeyNumber', ATTR_TYPE_INTEGER, False, -1, 127)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'PitchCorrection', ATTR_TYPE_FLOAT, False, -1800, 1800)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'AcceptsRetuning', ATTR_TYPE_BOOLEAN, False)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'WindchestGroup', ATTR_TYPE_OBJECT_REF, False)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'MinVelocityVolume', ATTR_TYPE_FLOAT, False, 0, 1000)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'MaxVelocityVolume', ATTR_TYPE_FLOAT, False, 0, 1000)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'LoopCrossfadeLength', ATTR_TYPE_INTEGER, False, 0, 3000)
-                self.check_attribute_value(object_uid, lines_list, pipe_id + 'ReleaseCrossfadeLength', ATTR_TYPE_INTEGER, False, 0, 3000)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfLogicalPipes', ATTR_TYPE_INTEGER, is_rank_obj, 1, 192))
+        for idx in range(1, value + 1):  # Pipe999xxx attributes
+            pipe_id = f'Pipe{str(idx).zfill(3)}'
+            self.check_attribute_value(object_uid, lines_list, pipe_id, ATTR_TYPE_PIPE_WAVE, True)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'Percussive', ATTR_TYPE_BOOLEAN, False)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'HasIndependentRelease', ATTR_TYPE_BOOLEAN, False)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'AmplitudeLevel', ATTR_TYPE_FLOAT, False, 0, 1000)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'Gain', ATTR_TYPE_FLOAT, False, -120, 40)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'PitchTuning', ATTR_TYPE_FLOAT, False, -1800, 1800)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'TrackerDelay', ATTR_TYPE_FLOAT, False, 0, 10000)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'LoadRelease', ATTR_TYPE_BOOLEAN, False)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'AttackVelocity', ATTR_TYPE_INTEGER, False, 0, 127)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'MaxTimeSinceLastRelease', ATTR_TYPE_INTEGER, False, -1, 100000)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'IsTremulant', ATTR_TYPE_INTEGER, False, -1, 1)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'MaxKeyPressTime', ATTR_TYPE_INTEGER, False, -1, 100000)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'AttackStart', ATTR_TYPE_INTEGER, False, 0, 158760000)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'CuePoint', ATTR_TYPE_INTEGER, False, -1, 158760000)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'ReleaseEnd', ATTR_TYPE_INTEGER, False, -1, 158760000)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'HarmonicNumber', ATTR_TYPE_FLOAT, False, 1, 1024)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'MIDIKeyNumber', ATTR_TYPE_INTEGER, False, -1, 127)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'PitchCorrection', ATTR_TYPE_FLOAT, False, -1800, 1800)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'AcceptsRetuning', ATTR_TYPE_BOOLEAN, False)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'WindchestGroup', ATTR_TYPE_OBJECT_REF, False)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'MinVelocityVolume', ATTR_TYPE_FLOAT, False, 0, 1000)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'MaxVelocityVolume', ATTR_TYPE_FLOAT, False, 0, 1000)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'LoopCrossfadeLength', ATTR_TYPE_INTEGER, False, 0, 3000)
+            self.check_attribute_value(object_uid, lines_list, pipe_id + 'ReleaseCrossfadeLength', ATTR_TYPE_INTEGER, False, 0, 3000)
 
-                ret1 = self.check_attribute_value(object_uid, lines_list, pipe_id + 'LoopCount', ATTR_TYPE_INTEGER, False, 1, 100)
-                if ret1 != None and ret1.isdigit():
-                    for idx1 in range(1, int(ret1)+1):  # Pipe999Loop999xxx attributes
-                        value = self.check_attribute_value(object_uid, lines_list, pipe_id + f'Loop{str(idx1).zfill(3)}Start', ATTR_TYPE_INTEGER, False, 0, 158760000)
-                        loop_start = int(value) if value.isdigit() else 1
-                        self.check_attribute_value(object_uid, lines_list, pipe_id + f'Loop{str(idx1).zfill(3)}End', ATTR_TYPE_INTEGER, False, loop_start + 1, 158760000)
+            count = myint(self.check_attribute_value(object_uid, lines_list, pipe_id + 'LoopCount', ATTR_TYPE_INTEGER, False, 1, 100), 0)
+            for idx1 in range(1, count + 1):  # Pipe999Loop999xxx attributes
+                loop_start = myint(self.check_attribute_value(object_uid, lines_list, pipe_id + f'Loop{str(idx1).zfill(3)}Start', ATTR_TYPE_INTEGER, False, 0, 158760000), 1)
+                self.check_attribute_value(object_uid, lines_list, pipe_id + f'Loop{str(idx1).zfill(3)}End', ATTR_TYPE_INTEGER, False, loop_start + 1, 158760000)
 
-                ret1 = self.check_attribute_value(object_uid, lines_list, pipe_id + 'AttackCount', ATTR_TYPE_INTEGER, False, 1, 100)
-                if ret1 != None and ret1.isdigit():
-                    for idx1 in range(1, int(ret1)+1):  # Pipe999Attack999xxx attributes
-                        pipe_atk_id = pipe_id + f'Attack{str(idx1).zfill(3)}'
-                        self.check_attribute_value(object_uid, lines_list, pipe_atk_id, ATTR_TYPE_FILE_NAME, True)
-                        self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'LoadRelease', ATTR_TYPE_BOOLEAN, False)
-                        self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'AttackVelocity', ATTR_TYPE_INTEGER, False, 0, 127)
-                        self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'MaxTimeSinceLastRelease', ATTR_TYPE_INTEGER, False, -1, 100000)
-                        self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'IsTremulant', ATTR_TYPE_INTEGER, False, -1, 1)
-                        self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'MaxKeyPressTime', ATTR_TYPE_INTEGER, False, -1, 100000)
-                        self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'AttackStart', ATTR_TYPE_INTEGER, False, 0, 158760000)
-                        self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'CuePoint', ATTR_TYPE_INTEGER, False, -1, 158760000)
-                        self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'ReleaseEnd', ATTR_TYPE_INTEGER, False, -1, 158760000)
-                        self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'LoopCrossfadeLength', ATTR_TYPE_INTEGER, False, 0, 3000)
-                        self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'ReleaseCrossfadeLength', ATTR_TYPE_INTEGER, False, 0, 3000)
+            count = myint(self.check_attribute_value(object_uid, lines_list, pipe_id + 'AttackCount', ATTR_TYPE_INTEGER, False, 1, 100), 0)
+            for idx1 in range(1, count + 1):  # Pipe999Attack999xxx attributes
+                pipe_atk_id = pipe_id + f'Attack{str(idx1).zfill(3)}'
+                self.check_attribute_value(object_uid, lines_list, pipe_atk_id, ATTR_TYPE_FILE_NAME, True)
+                self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'LoadRelease', ATTR_TYPE_BOOLEAN, False)
+                self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'AttackVelocity', ATTR_TYPE_INTEGER, False, 0, 127)
+                self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'MaxTimeSinceLastRelease', ATTR_TYPE_INTEGER, False, -1, 100000)
+                self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'IsTremulant', ATTR_TYPE_INTEGER, False, -1, 1)
+                self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'MaxKeyPressTime', ATTR_TYPE_INTEGER, False, -1, 100000)
+                self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'AttackStart', ATTR_TYPE_INTEGER, False, 0, 158760000)
+                self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'CuePoint', ATTR_TYPE_INTEGER, False, -1, 158760000)
+                self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'ReleaseEnd', ATTR_TYPE_INTEGER, False, -1, 158760000)
+                self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'LoopCrossfadeLength', ATTR_TYPE_INTEGER, False, 0, 3000)
+                self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'ReleaseCrossfadeLength', ATTR_TYPE_INTEGER, False, 0, 3000)
 
-                        ret2 = self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'LoopCount', ATTR_TYPE_INTEGER, False, 1, 100)
-                        if ret2 != None and ret2.isdigit():
-                            for idx2 in range(1, int(ret2)+1):  # Pipe999Attack999Loop999xxx attributes
-                                value = self.check_attribute_value(object_uid, lines_list, pipe_atk_id + f'Loop{str(idx2).zfill(3)}Start', ATTR_TYPE_INTEGER, True, 0, 158760000)
-                                loop_start = int(value) if value != None and value.isdigit() else 1
-                                self.check_attribute_value(object_uid, lines_list, pipe_atk_id + f'Loop{str(idx2).zfill(3)}End', ATTR_TYPE_INTEGER, True, loop_start + 1, 158760000)
+                loop_count = myint(self.check_attribute_value(object_uid, lines_list, pipe_atk_id + 'LoopCount', ATTR_TYPE_INTEGER, False, 1, 100), 0)
+                for idx2 in range(1, loop_count + 1):  # Pipe999Attack999Loop999xxx attributes
+                    loop_start = myint(self.check_attribute_value(object_uid, lines_list, pipe_atk_id + f'Loop{str(idx2).zfill(3)}Start', ATTR_TYPE_INTEGER, True, 0, 158760000), 1)
+                    self.check_attribute_value(object_uid, lines_list, pipe_atk_id + f'Loop{str(idx2).zfill(3)}End', ATTR_TYPE_INTEGER, True, loop_start + 1, 158760000)
 
-                ret1 = self.check_attribute_value(object_uid, lines_list, f'Pipe{str(idx).zfill(3)}ReleaseCount', ATTR_TYPE_INTEGER, False, 1, 100)
-                if ret1 != None and ret1.isdigit():
-                    for idx1 in range(1, int(ret1)+1):  # Pipe999Release999xxx attributes
-                        pipe_rel_id = pipe_id + f'Release{str(idx1).zfill(3)}'
-                        self.check_attribute_value(object_uid, lines_list, pipe_rel_id, ATTR_TYPE_FILE_NAME, True)
-                        self.check_attribute_value(object_uid, lines_list, pipe_rel_id + 'IsTremulant', ATTR_TYPE_INTEGER, False, -1, 1)
-                        self.check_attribute_value(object_uid, lines_list, pipe_rel_id + 'MaxKeyPressTime', ATTR_TYPE_INTEGER, False, -1, 100000)
-                        self.check_attribute_value(object_uid, lines_list, pipe_rel_id + 'CuePoint', ATTR_TYPE_INTEGER, False, -1, 158760000)
-                        self.check_attribute_value(object_uid, lines_list, pipe_rel_id + 'ReleaseEnd', ATTR_TYPE_INTEGER, False, -1, 158760000)
-                        self.check_attribute_value(object_uid, lines_list, pipe_rel_id + 'ReleaseCrossfadeLength', ATTR_TYPE_INTEGER, False, 0, 3000)
+            count = myint(self.check_attribute_value(object_uid, lines_list, f'Pipe{str(idx).zfill(3)}ReleaseCount', ATTR_TYPE_INTEGER, False, 0, 100), 0)
+            for idx1 in range(1, count + 1):  # Pipe999Release999xxx attributes
+                pipe_rel_id = pipe_id + f'Release{str(idx1).zfill(3)}'
+                self.check_attribute_value(object_uid, lines_list, pipe_rel_id, ATTR_TYPE_FILE_NAME, True)
+                self.check_attribute_value(object_uid, lines_list, pipe_rel_id + 'IsTremulant', ATTR_TYPE_INTEGER, False, -1, 1)
+                self.check_attribute_value(object_uid, lines_list, pipe_rel_id + 'MaxKeyPressTime', ATTR_TYPE_INTEGER, False, -1, 100000)
+                self.check_attribute_value(object_uid, lines_list, pipe_rel_id + 'CuePoint', ATTR_TYPE_INTEGER, False, -1, 158760000)
+                self.check_attribute_value(object_uid, lines_list, pipe_rel_id + 'ReleaseEnd', ATTR_TYPE_INTEGER, False, -1, 158760000)
+                self.check_attribute_value(object_uid, lines_list, pipe_rel_id + 'ReleaseCrossfadeLength', ATTR_TYPE_INTEGER, False, 0, 3000)
 
     #-------------------------------------------------------------------------------------------------
     def check_object_ReversiblePiston(self, object_uid, lines_list):
@@ -2820,31 +2790,31 @@ class C_ODF_DATA_CHECK:
         is_stop_obj = self.object_type_get(object_uid) == 'Stop' # some mandatory attributes are not mandatory for objects which inherit the Stop attributes
 
         # optional attribute
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfRanks', ATTR_TYPE_INTEGER, False, 0, 999)
-        if value == None or (value != None and not value.isdigit()):
-            # number of ranks not defined or not a number
-            nb_ranks = 0
-        else:
-            nb_ranks = int(value)
+        nb_ranks = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfRanks', ATTR_TYPE_INTEGER, False, 0, 999))
 
         # required attributes
         self.check_attribute_value(object_uid, lines_list, 'FirstAccessiblePipeLogicalKeyNumber', ATTR_TYPE_INTEGER, is_stop_obj, 1, 128)
         self.check_attribute_value(object_uid, lines_list, 'FirstAccessiblePipeLogicalPipeNumber', ATTR_TYPE_INTEGER, is_stop_obj and nb_ranks == 0, 1, 192)
 
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfAccessiblePipes', ATTR_TYPE_INTEGER, is_stop_obj, 1, 192)
-        nb_pipes = int(value) if value != None and value.isdigit() else 192
+        nb_pipes = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfAccessiblePipes', ATTR_TYPE_INTEGER, is_stop_obj, 1, 192), 192)
 
         # optional attributes
-        if nb_ranks > 0:
-            for idx in range(1, nb_ranks+1):
-                rank_id = f'Rank{str(idx).zfill(3)}'
-                self.check_attribute_value(object_uid, lines_list, rank_id, ATTR_TYPE_OBJECT_REF, True)
-                self.check_attribute_value(object_uid, lines_list, rank_id + 'FirstPipeNumber', ATTR_TYPE_INTEGER, False, 1, nb_pipes)
-                self.check_attribute_value(object_uid, lines_list, rank_id + 'PipeCount', ATTR_TYPE_INTEGER, False, 0, nb_pipes)
-                self.check_attribute_value(object_uid, lines_list, rank_id + 'FirstAccessibleKeyNumber', ATTR_TYPE_INTEGER, False, 1, nb_pipes)
-        elif nb_ranks == 0:
-            # number of ranks set at 0, the Stop must contain rank attributes
+        if nb_ranks in (None, 0):
+            # number of ranks not defined or defined at 0 or not defined as an integer, the Stop must contain rank attributes
             self.check_object_Rank(object_uid, lines_list)
+        else:
+            for idx in range(0, nb_ranks):
+                rank_attr = f'Rank{str(idx + 1).zfill(3)}'
+                rank_id = self.check_attribute_value(object_uid, lines_list, rank_attr, ATTR_TYPE_OBJECT_REF, True)
+
+                if rank_id != None:
+                    rank_pipes_nb = myint(self.object_attr_value_get('Rank' + str(int(rank_id)).zfill(3), 'NumberOfLogicalPipes'), 100)
+                else:
+                    rank_pipes_nb = 100  # fake value to have a maximum allow value in next checks
+
+                first_pipe_nb = myint(self.check_attribute_value(object_uid, lines_list, rank_attr + 'FirstPipeNumber', ATTR_TYPE_INTEGER, False, 1, rank_pipes_nb), 1)
+                self.check_attribute_value(object_uid, lines_list, rank_attr + 'PipeCount', ATTR_TYPE_INTEGER, False, 0, rank_pipes_nb - first_pipe_nb + 1)
+                self.check_attribute_value(object_uid, lines_list, rank_attr + 'FirstAccessibleKeyNumber', ATTR_TYPE_INTEGER, False, 1, nb_pipes)
 
         # a Stop has also the attributes of a Drawstop
         self.check_object_DrawStop(object_uid, lines_list)
@@ -2876,17 +2846,13 @@ class C_ODF_DATA_CHECK:
         # check the data of a WindChest Group object section which the lines are in the given lines list
 
         # required attributes
-        max_val = self.objects_type_number_get('Enclosure')
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfEnclosures', ATTR_TYPE_INTEGER, True, 0, max_val)
-        if value != None and value.isdigit():
-            for idx in range(1, int(value)+1):
-                self.check_attribute_value(object_uid, lines_list, f'Enclosure{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfEnclosures', ATTR_TYPE_INTEGER, True, 0, self.objects_type_number_get('Enclosure')), 0)
+        for idx in range(1, value + 1):
+            self.check_attribute_value(object_uid, lines_list, f'Enclosure{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
-        max_val = self.objects_type_number_get('Tremulant')
-        value = self.check_attribute_value(object_uid, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, True, 0, max_val)
-        if value != None and value.isdigit():
-            for idx in range(1, int(value)+1):
-                self.check_attribute_value(object_uid, lines_list, f'Tremulant{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, True, 0, self.objects_type_number_get('Tremulant')), 0)
+        for idx in range(1, value + 1):
+            self.check_attribute_value(object_uid, lines_list, f'Tremulant{str(idx).zfill(3)}', ATTR_TYPE_OBJECT_REF, True)
 
         # optional attributes
         self.check_attribute_value(object_uid, lines_list, 'Name', ATTR_TYPE_STRING, False)
@@ -2903,7 +2869,7 @@ class C_ODF_DATA_CHECK:
         # check if the given attribute name is present in the given object lines list (sorted)
         # and if its value is correct for its value type and min/max values
         # the min and max values are ignored if max <= min. The given lines list is considered to be sorted
-        # returns the value of the attribute if it has been found and without error, else return None
+        # returns the string value of the attribute if it has been found and without error, else return an empty string
 
         # search in the given lines list the line with the attribute to check
         attr_value = None
@@ -2930,7 +2896,7 @@ class C_ODF_DATA_CHECK:
             # check that the given max value is higher or equal to the min value (this should never happen)
             if attribute_value_max < attribute_value_min:
                 logs.add(f"ERROR in {object_uid} {line} : for attribute {attribute_name} the mininum value {attribute_value_min} is higher than the maximum value {attribute_value_max}")
-                return None
+                return ''
 
             # check the attribute value according to the given type
 
@@ -2985,7 +2951,10 @@ class C_ODF_DATA_CHECK:
 
                 attr_value = attr_value.lstrip("+-") # remove possible + or - at the beginning of the value, used in General or Divisional objects
 
-                if attribute_name + attr_value.zfill(3) not in self.odf_data_dic:
+                if myint(attr_value) == None:
+                    logs.add(f"ERROR in {object_uid} {line} : the attribute value can be a number only")
+                    attr_value = ''
+                elif attribute_name + attr_value.zfill(3) not in self.odf_data_dic:
                     logs.add(f"ERROR in {object_uid} {line} : the object {attribute_name + attr_value.zfill(3)} does not exist")
                     attr_value = ''
 
@@ -3059,7 +3028,7 @@ class C_ODF_DATA_CHECK:
         for line in lines_list:
             pos = line.find('=', 1)
             if pos != -1 and line[0] != ';':
-                # line with an attribute
+                # line with an attribute, recover it
                 attributes_list.append(line[:pos])
 
         # sort the attributes list
@@ -3373,7 +3342,7 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
         # attribute name = 'uid' if the given line contains an object UID between brackets, the UID is in the attribute value
         # error message = an error description message in case a syntax error has been detected in the given line, or None if no error found
 
-        return self.check_object_line(line)
+        return self.check_object_line(line, False)
 
     #-------------------------------------------------------------------------------------------------
     def object_line_join(self, attr_name, attr_value, comment=None):
@@ -3672,9 +3641,9 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
         return ret_object_uid
 
     #-------------------------------------------------------------------------------------------------
-    def object_rename(self, object_uid, new_object_uid, update_links_bool=True, same_uid_shift=0):
+    def object_rename(self, object_uid, new_object_uid, do_kinship_links_update=True, same_uid_shift=0):
         # rename in the ODF data the object having the given UID to the given new UID (only the three ending digits of the UID can be changed)
-        # if same_uid_shift is is not 0 and an object already has the same UID as the given new UID,
+        # if same_uid_shift is not 0 and an object has already the same UID as the given new UID,
         #       its UID is shifted by the given shift value to permit the given UID to have the new UID
         # return the new UID of the object, or None if failure
 
@@ -3699,7 +3668,7 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
                 # the object having already the new UID has to be renamed to the UID + same_uid_shift value
                 # apply recursively the UID renaming to next/previous consecutive objects
                 shifted_object_uid = new_object_uid[:-3] + str(int(new_object_uid[-3:]) + same_uid_shift).zfill(3)
-                self.object_rename(new_object_uid, shifted_object_uid, update_links_bool, same_uid_shift)
+                self.object_rename(new_object_uid, shifted_object_uid, False, same_uid_shift)
             else:
                 logs.add(f"Warning : cannot rename {object_uid} in {new_object_uid} which is already used")
                 return None
@@ -3810,12 +3779,11 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
 
         logs.add(f"{object_uid} : renamed to {new_object_uid}")
 
-        # update in the Organ object the number of objects type corresponding to the renamed object if applicable
-        self.object_organ_numbers_update(new_object_uid)
-
-        if update_links_bool:
+        if do_kinship_links_update:
             # update the kinship links between the objects
             self.objects_kinship_update()
+            # update in the Organ object the number of objects type corresponding to the renamed object if applicable
+            self.object_organ_numbers_update(new_object_uid)
 
         return new_object_uid
 
@@ -4464,88 +4432,83 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
                     # the attribute has a name and a value
 
                     # get possible names to display in the objects list/tree
-                    if attr_name in ['Name', 'ChurchName', 'Comment'] or attr_name[-4:] == 'Text':
-                        object_name = attr_value
+                    if attr_name in ['Name', 'ChurchName', 'DispLabelText']:
+                        object_dic['names'].insert(0, attr_value)
                     elif object_type == 'PanelImage' and attr_name == 'Image':
-                        # image attribute, the value is the path of the image : keep from the image path only the file name (string after the last separator character)
-                        object_name = path2ospath(attr_value)
-                        path_elements_list = object_name.split(os.path.sep)
-                        object_name = path_elements_list[len(path_elements_list)-1]
-                    else:
-                        object_name = None
-                    # add the found name in the names list of the current object
-                    if object_name != None:
-                        object_dic['names'].append(object_name)
+                        # image attribute, the value is the path of the image : keep from the image path only the file name
+                        object_dic['names'].insert(0, os.path.split(attr_value)[1])
 
-                    if (attr_name[-3:].isdigit() and (attr_value.isdigit() or (len(attr_value) > 0 and attr_value[0] == '-' and attr_value[1:].isdigit())) and
-                        object_type not in ('General', 'Divisional')):
-                        # attribute which ends with 3 digits (like Coupler999) : it contains in its value the reference to another object
-                        # link the current object to the referenced object as child
-                        ref_object_type = attr_name[:-3]
-                        if ref_object_type not in (None, 'MIDIKey', 'DisplayKey'):
-                            ref_object_uid = ref_object_type + str(abs(int(attr_value))).zfill(3)
+                    if myint(attr_value) != None:
+                        # the attribute value is an integer which may refer to the ID of another object
+                        if object_type not in ('General', 'Divisional') and myint(attr_name[-3:]) != None:
+                            # attribute name ending with 3 digits (like Coupler999)
+                            ref_object_type = attr_name[:-3]
+                            if ref_object_type not in ('MIDIKey', 'DisplayKey'):
+                                ref_object_uid = ref_object_type + attr_value.zfill(3)
+                                self.object_kinship_list_add(object_uid, ref_object_uid, TO_CHILD)
+
+                        elif object_type == 'Rank' and attr_name == 'WindchestGroup':
+                            # attribute WindchestGroup in a Rank object referencing a WindchestGroup object
+                            ref_object_uid = attr_name + attr_value.zfill(3)
+                            self.object_kinship_list_add(object_uid, ref_object_uid, TO_PARENT)
+                            if len(object_dic['names']) > 0:
+                                # no need to continue to parse the lines of the rank object if it has already its name recovered, to gain time
+                                break
+
+                        elif object_type == 'Coupler' and attr_name == 'DestinationManual':
+                            # attribute of a coupler object referencing its destination manual
+                            ref_object_uid = 'Manual' + attr_value.zfill(3)
                             self.object_kinship_list_add(object_uid, ref_object_uid, TO_CHILD)
 
-                    elif attr_name == 'WindchestGroup' and attr_value.isdigit():
-                        # attribute WindchestGroup : it contains in its value the reference to a WindchestGroup
-                        # link the current object to the referenced WindchestGroup as parent
-                        ref_object_uid = attr_name + str(int(attr_value)).zfill(3)
-                        self.object_kinship_list_add(object_uid, ref_object_uid, TO_PARENT)
+                        elif object_type == 'PanelElement':
+                            if attr_name in self.go_objects_parents_dic['PanelElement']:
+                                # attribute referencing a parent object of a PanelElement
+                                ref_object_uid = None
+                                if attr_name in ('Coupler', 'Divisional', 'Stop'):
+                                    # the attribute value is the index of the referenced object in the manual given in the attribute Manual of the PanelElement
+                                    # recover the ID of the referenced Manual object
+                                    manual_id = myint(self.object_attr_value_get(object_dic, 'Manual'))
+                                    if manual_id != None:
+                                        manual_uid = 'Manual' + str(manual_id).zfill(3)
+                                        # recover the sorted list of children of the manual which the type is equal to the attribute name
+                                        manual_children_list = sorted(self.object_kinship_list_get(manual_uid, TO_CHILD, attr_name))
+                                        ref_object_index = int(attr_value)
+                                        if 0 < ref_object_index <= len(manual_children_list):
+                                            # recover the object UID at the referenced index in the children of the manual
+                                            ref_object_uid = manual_children_list[ref_object_index - 1]
+                                            self.object_kinship_list_add(object_uid, ref_object_uid, TO_PARENT)
+                                elif attr_name != 'Manual' or self.object_attr_value_get(object_dic, 'Type') == 'Manual':
+                                    # it is not the attribute Manual or it is a PanelElement of the Manual type (having also the attribute name = Manual)
+                                    # to ignore the Manual attribute of PanelElement objects referencing to Coupler, Divisional or Stop already managed above
+                                    ref_object_uid = attr_name + attr_value.zfill(3)
+                                    self.object_kinship_list_add(object_uid, ref_object_uid, TO_PARENT)
 
-                    elif object_type == 'PanelElement' and attr_name in self.go_objects_parents_dic['PanelElement']:
-                        # Panel999Element999 object with a reference to a parent object
-                        element_type = self.object_attr_value_get(object_dic, 'Type')
-                        # link the current object to the parent object
-                        if attr_name in ('Coupler', 'Divisional', 'Stop'):
-                            # the reference is the number of the referenced object on the manual given in the Manual attribute
-                            ref_object_nb = int(attr_value)
-                            manual_id = myint(self.object_attr_value_get(object_dic, 'Manual'))
-                            if manual_id != None:
-                                manual_uid = 'Manual' + str(manual_id).zfill(3)
-                                manual_children_list = sorted(self.object_kinship_list_get(manual_uid, TO_CHILD, attr_name))
-                                if 0 < ref_object_nb <= len(manual_children_list):
-                                    ref_object_uid = manual_children_list[ref_object_nb - 1]
-                                else:
-                                    ref_object_uid = attr_name  # to display in the error message in the logs
-                                self.object_kinship_list_add(object_uid, ref_object_uid, TO_PARENT)
-                        elif not (attr_name == 'Manual' and element_type != 'Manual'):
-                            ref_object_uid = attr_name + str(int(attr_value)).zfill(3)
-                            self.object_kinship_list_add(object_uid, ref_object_uid, TO_PARENT)
-
-                    elif object_type == 'Coupler' and attr_name == 'DestinationManual':
-                        # link the coupler to the destination manual as child
-                        ref_object_uid = 'Manual' + str(int(attr_value)).zfill(3)
-                        self.object_kinship_list_add(object_uid, ref_object_uid, TO_CHILD)
+                                if ref_object_uid != None:
+                                    # add to the object's names the UID and name of the referenced object
+                                    ref_object_name = self.object_attr_value_get(ref_object_uid, 'Name')
+                                    if ref_object_name != None:
+                                        # add the name of the referenced object UID to the PanelElement names list
+                                        object_dic['names'].append(ref_object_name)
+                                    # add the referenced object UID to the PanelElement names list
+                                    object_dic['names'].append(ref_object_uid)
 
             if object_type.startswith('Panel') and len(object_type) > 5:
                 # Panel999xxxx object type
-                # link the current object to its Panel parent
                 panel_uid = object_uid[:8]
+                # link the object to its Panel parent
                 self.object_kinship_list_add(object_uid, panel_uid, TO_PARENT)
 
-                # add to the object names the name of its parent panel
-                panel_dic = self.object_dic_get(panel_uid)
-                if panel_dic != None:
-                    name = self.object_attr_value_get(panel_dic, 'Name')
-                    if name not in (None, ''):
-                        object_dic['names'].append(name)
-
-                # add to the object names the UID and name of the referenced child object element if any or the type of the element
                 if object_type == 'PanelElement':
-                    ref_object_type = self.object_attr_value_get(object_dic, 'Type')
-                    ref_object_id = self.object_attr_value_get(object_dic, ref_object_type)
-                    if ref_object_id not in (None, ''):
-                        # there is a referenced object ID, recover the UID and name of this object
-                        ref_object_uid = ref_object_type + str(int(ref_object_id)).zfill(3)
-                        ref_object_dic = self.object_dic_get(ref_object_uid)
-                        ref_object_name = self.object_attr_value_get(ref_object_dic, 'Name')
-                        if ref_object_name != None:
-                            # add the referenced object name to the PanelElement names list
-                            object_dic['names'].insert(0, ref_object_name)
-                        # add the referenced object UID to the PanelElement names list
-                        object_dic['names'].insert(0, ref_object_uid)
-                    else:
-                        object_dic['names'].insert(0, ref_object_type)
+                    if len(object_dic['parents']) == 1:
+                        # there is only the parent Panel in the parents list, add the object type in the names
+                        ref_object_type = self.object_attr_value_get(object_dic, 'Type')
+                        if ref_object_type != None:
+                            object_dic['names'].append(ref_object_type)
+
+                # add to the object's names the name of its parent panel
+                name = self.object_attr_value_get(panel_uid, 'Name')
+                if name not in (None, ''):
+                    object_dic['names'].append(name)
 
     #-------------------------------------------------------------------------------------------------
     def object_organ_numbers_update(self, object_uid):
@@ -4679,7 +4642,7 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
             if obj_type in parent_types_list and obj_uid != object_uid:
                 # the current object has a type which can be parent of the given object
                 if object_type == 'PanelElement':
-                    if self.object_attr_value_get(object_uid, 'Type') == obj_type:
+                    if self.object_attr_value_get(object_uid, 'Type') == obj_type or obj_type == 'Panel':
                         parents_uid_list.append(obj_uid)
                 else:
                     parents_uid_list.append(obj_uid)
@@ -4712,6 +4675,41 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
             if 'PanelImage'   in child_types_list: child_types_list.remove('PanelImage')
 
         return child_types_list
+
+    #-------------------------------------------------------------------------------------------------
+    def object_main_parent_type_get(self, object_uid):
+        # return the object type which is the main parent type of the given object
+        # it can return None for objects having none main parent type
+
+        parent_object_type = None
+
+        if object_uid != None:
+            object_type = self.object_type_get(object_uid)
+
+            if object_type in ('Coupler', 'Divisional', 'DivisionalCoupler', 'Stop', 'Switch'):
+                parent_object_type = 'Manual'
+            elif object_type in ('Enclosure', 'Tremulant'):
+                parent_object_type = 'WindchestGroup'
+            elif object_type in ('Rank'):
+                parent_object_type = 'Stop'
+            elif object_type.startswith('Panel') and object_type != 'Panel':
+                parent_object_type = 'Panel'
+
+        return parent_object_type
+
+    #-------------------------------------------------------------------------------------------------
+    def is_image_attribute(self, attr_name):
+        # return True if the given attribute name defines an image file, else return False
+        # if it is contains ImageOn or ImageOff or MaskOn or MaskOff or it is equal to Image or Mask or Bitmap999 or Mask999
+
+        return re.search(r'^((Image|Mask)(On|Off)|Image|Mask|Bitmap\d{3}|Mask\d{3})$', attr_name)
+
+    #-------------------------------------------------------------------------------------------------
+    def is_sample_attribute(self, attr_name):
+        # return True if the given attribute name defines a sample file, else return False
+        # if it is equal to Pipe999 or Pipe999Attack999 or Pipe999Release999
+
+        return re.search(r'^(Pipe\d{3}$|(Pipe\d{3})((Attack|Release)\d{3}))$', attr_name)
 
 #-------------------------------------------------------------------------------------------------
 class C_ODF_HW2GO():
@@ -5591,10 +5589,7 @@ class C_ODF_HW2GO():
 
         # recover the bitmap file of the transparency image if any
         file_name = self.HW_ODF_get_attribute_value(HW_image_set_dic, 'TransparencyMaskBitmapFilename')
-        if file_name != None:
-            HW_image_attr_dic['TransparencyMaskBitmapFilename'] = self.convert_HW2GO_file_name(file_name, HW_image_attr_dic['InstallationPackageID'])
-        else:
-            HW_image_attr_dic['TransparencyMaskBitmapFilename'] = None
+        HW_image_attr_dic['TransparencyMaskBitmapFilename'] = self.convert_HW2GO_file_name(file_name, HW_image_attr_dic['InstallationPackageID'])
 
         # recover the bitmap file corresponding to the given or default image index
         HW_image_attr_dic['BitmapFilename'] = None
@@ -5604,10 +5599,7 @@ class C_ODF_HW2GO():
             if image_index == HW_image_index_in_set:
                 # it is the expected index of ImageSetElement object
                 file_name = self.HW_ODF_get_attribute_value(image_set_elem_dic, 'BitmapFilename')
-                if file_name != None:
-                    HW_image_attr_dic['BitmapFilename'] = self.convert_HW2GO_file_name(file_name, HW_image_attr_dic['InstallationPackageID'])
-                else:
-                    HW_image_attr_dic['BitmapFilename'] = None
+                HW_image_attr_dic['BitmapFilename'] = self.convert_HW2GO_file_name(file_name, HW_image_attr_dic['InstallationPackageID'])
                 break
 
         return True
@@ -6242,7 +6234,7 @@ class C_ODF_HW2GO():
         # recover the ID of the HW default display page (used in GO_ODF_build_Panel_object function)
         self.HW_default_display_page_dic = self.HW_ODF_get_object_dic_by_ref_id('DisplayPage', self.HW_general_dic, 'SpecialObjects_DefaultDisplayPageID')
         if self.HW_default_display_page_dic == None:
-            # cannot continue the convertion if there is no default display page defined
+            # cannot continue the conversion if there is no default display page defined
             logs.add('ERROR : no default display page defined in the HW ODF')
             return None
 
@@ -6925,16 +6917,19 @@ class C_ODF_HW2GO():
 
         # define the manual graphical attributes in Panel999Element999 objects with Type = Manual
 
-        # get the HW DisplayPage ID in which is displayed the keyboard
+        # get the HW DisplayPage in which is displayed the keyboard
         if keyboard_disp_mode == 1:
             # recover the display page ID from the HW ImageSetInstance of the first key of the keyboard
             HW_image_set_inst_id = myint(self.HW_ODF_get_attribute_value(keys_switch_dic[access_key_midi_first], 'Disp_ImageSetInstanceID', MANDATORY))
             HW_image_set_inst_dic = self.HW_ODF_get_object_dic_from_id('ImageSetInstance', HW_image_set_inst_id)
             keyboard_disp_page_id = myint(self.HW_ODF_get_attribute_value(HW_image_set_inst_dic, 'DisplayPageID'))
+            HW_display_page_dic = self.HW_ODF_get_object_dic_from_id('DisplayPage', keyboard_disp_page_id)
         elif keyboard_disp_mode == 2:
             # recover the display page ID from the HW Keyboard object
             keyboard_disp_page_id = myint(self.HW_ODF_get_attribute_value(HW_keyboard_img_dic, 'KeyGen_DisplayPageID'))
-        HW_display_page_dic = self.HW_ODF_get_object_dic_from_id('DisplayPage', keyboard_disp_page_id)
+            HW_display_page_dic = self.HW_ODF_get_object_dic_from_id('DisplayPage', keyboard_disp_page_id)
+        else:
+            HW_display_page_dic = None
 
         if HW_display_page_dic == None:
             # the HW display page is not found, stop here the building of the GO Manual
@@ -8918,6 +8913,8 @@ class C_ODF_HW2GO():
                             else:
                                 GO_attr_dic[pipe_id + 'AttackCount'] = attacks_count - 1
                                 GO_attr_dic[pipe_id + 'Attack' + str(attacks_count - 1).zfill(3)] = sample_file_name
+                        else:
+                            GO_attr_dic[pipe_id] = f"DUMMY  ; in package ID {HW_install_package_id}, file not found : {self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename')}"
 
                 # define the release pipes
                 if len(HW_pipe_release_samples_list) > 0:
@@ -8932,6 +8929,8 @@ class C_ODF_HW2GO():
                                 releases_count += 1
                                 GO_attr_dic[pipe_id + 'ReleaseCount'] = releases_count
                                 GO_attr_dic[pipe_id + 'Release' + str(releases_count).zfill(3)] = sample_file_name
+                            else:
+                                GO_attr_dic[pipe_id] = f"DUMMY  ; in package ID {HW_install_package_id}, file not found : {self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename')}"
 
             else:  # HW_pipe_dic is None
                 GO_attr_dic[pipe_id] = 'DUMMY'
@@ -8965,6 +8964,7 @@ class C_ODF_HW2GO():
 
         # recover the GO manual in which is acting the GO Stop
         HW_division_dic = self.HW_ODF_get_object_dic_by_ref_id('Division', HW_stop_dic, 'DivisionID')
+        manual_first_midi_note = 0
         if HW_division_dic != None:
             GO_manual_uid = HW_division_dic['_GO_uid']
             if GO_manual_uid != '':
@@ -9243,12 +9243,12 @@ class C_ODF_HW2GO():
         starting_time = time.time()
 
         # set which HW ranks and pipes layer to use for main pipes (rank1) and for secondary pipes (rank2)
+        HW_rank1_dic = HW_rank2_dic = None
+        HW_rank1_layer_nb = HW_rank2_layer_nb = 0
         if is_trem_mode in (None, 0):
             # rank1 with no IsTremulant or IsTremulant=0 (non tremmed samples)
             HW_rank1_dic = HW_rank_dic
-            HW_rank1_layer_nb = 0
             # rank2 not needed
-            HW_rank2_dic = None
 
         elif is_trem_mode == 1:
             # rank1 with IsTremulant=1 (tremmed samples)
@@ -9259,14 +9259,11 @@ class C_ODF_HW2GO():
             else:
                 # using samples of an alternate rank
                 HW_rank1_dic = HW_alt_rank_dic
-                HW_rank1_layer_nb = 0
             # rank2 not needed
-            HW_rank2_dic = None
 
         elif is_trem_mode == 10:
             # rank1 with IsTremulant=0 (non tremmed samples)
             HW_rank1_dic = HW_rank_dic
-            HW_rank1_layer_nb = 0
             # rank2 with IsTremulant=1 (tremmed samples)
             if HW_alt_layer_nb != None:
                 # using samples of an alternate pipes layer
@@ -9275,7 +9272,6 @@ class C_ODF_HW2GO():
             else:
                 # using samples of an alternate rank
                 HW_rank2_dic = HW_alt_rank_dic
-                HW_rank2_layer_nb = 0
 
         if LOG_HW2GO_rank: print(f"Building GO Rank from {HW_rank1_dic['_uid']} '{HW_rank1_dic['Name']}' layer {HW_rank1_layer_nb} with is_trem_mode = {is_trem_mode}")
         if HW_rank2_dic != None:
@@ -9333,7 +9329,7 @@ class C_ODF_HW2GO():
 
             # set the rank compass
             GO_rank_dic['FirstMidiNoteNumber'] = first_midi_note_nb
-            GO_rank_dic['NumberOfLogicalPipes'] = last_midi_note_nb - first_midi_note_nb + 1
+            GO_rank_dic['NumberOfLogicalPipes'] = len(HW_pipes1_dic)
 
             if LOG_HW2GO_rank: print(f"   building GO {GO_rank_uid} with {GO_rank_dic['NumberOfLogicalPipes']} pipes from MIDI note {first_midi_note_nb} to {last_midi_note_nb}")
 
@@ -9354,362 +9350,358 @@ class C_ODF_HW2GO():
             GO_rank_dic['Percussive'] = 'N'
             GO_rank_dic['HarmonicNumber'] = 0  # is set later with the first pipe
 
-            for pipe_midi_note_nb in range(first_midi_note_nb, last_midi_note_nb + 1):
+            for pipe_nb, pipe_midi_note_nb in enumerate(sorted(HW_pipes1_dic.keys())):
                 # scan the MIDI notes range of the HW rank by increasing MIDI note number to build the GO pipe attributes of this MIDI note
 
                 # set the GO pipe ID corresponding to the current MIDI note (for example Pipe001, Pipe002, ...)
-                pipe_id = 'Pipe' + str(pipe_midi_note_nb - first_midi_note_nb + 1).zfill(3)
+                pipe_id = 'Pipe' + str(pipe_nb + 1).zfill(3)
 
-                if pipe_midi_note_nb in HW_pipes1_dic.keys():
-                    # there is a HW Pipe_SoundEngine01 object defined for the current MIDI note in the Rank 1
-                    HW_pipe1_dic = HW_pipes1_dic[pipe_midi_note_nb]
+                # there is a HW Pipe_SoundEngine01 object defined for the current MIDI note in the Rank 1
+                HW_pipe1_dic = HW_pipes1_dic[pipe_midi_note_nb]
 
-                    # get the HW Pipe_SoundEngine01_Layer of the current HW Pipe_SoundEngine01_Layer in the Rank 1
-                    # corresponding to the defined pipe layer number
-                    HW_pipe1_layers_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe1_dic, 'Pipe_SoundEngine01_Layer', TO_CHILD, sorted_by='ID')
-                    if HW_rank1_layer_nb < len(HW_pipe1_layers_dic_list):
-                        HW_pipe1_layer_dic = HW_pipe1_layers_dic_list[HW_rank1_layer_nb]
+                # get the HW Pipe_SoundEngine01_Layer of the current HW Pipe_SoundEngine01_Layer in the Rank 1
+                # corresponding to the defined pipe layer number
+                HW_pipe1_layers_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe1_dic, 'Pipe_SoundEngine01_Layer', TO_CHILD, sorted_by='ID')
+                if HW_rank1_layer_nb < len(HW_pipe1_layers_dic_list):
+                    HW_pipe1_layer_dic = HW_pipe1_layers_dic_list[HW_rank1_layer_nb]
+
+                    # add in the HW Pipe_SoundEngine01_Layer the ID of the corresponding GO rank object
+                    HW_pipe1_layer_dic['_GO_uid'] = GO_rank_uid
+                else:
+                    HW_pipe1_layer_dic = None
+
+                # do the same with the HW Pipe_SoundEngine01 in the Rank 2 if existing
+                if pipe_midi_note_nb in HW_pipes2_dic.keys():
+                    # there is a HW Pipe_SoundEngine01 object defined for the current MIDI note in the Rank 2
+                    HW_pipe2_dic = HW_pipes2_dic[pipe_midi_note_nb]
+
+                    HW_pipe2_layers_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe2_dic, 'Pipe_SoundEngine01_Layer', TO_CHILD, sorted_by='ID')
+                    if HW_rank2_layer_nb < len(HW_pipe2_layers_dic_list):
+                        HW_pipe2_layer_dic = HW_pipe2_layers_dic_list[HW_rank2_layer_nb]
 
                         # add in the HW Pipe_SoundEngine01_Layer the ID of the corresponding GO rank object
-                        HW_pipe1_layer_dic['_GO_uid'] = GO_rank_uid
-                    else:
-                        HW_pipe1_layer_dic = None
-
-                    # do the same with the HW Pipe_SoundEngine01 in the Rank 2 if existing
-                    if pipe_midi_note_nb in HW_pipes2_dic.keys():
-                        # there is a HW Pipe_SoundEngine01 object defined for the current MIDI note in the Rank 2
-                        HW_pipe2_dic = HW_pipes2_dic[pipe_midi_note_nb]
-
-                        HW_pipe2_layers_dic_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe2_dic, 'Pipe_SoundEngine01_Layer', TO_CHILD, sorted_by='ID')
-                        if HW_rank2_layer_nb < len(HW_pipe2_layers_dic_list):
-                            HW_pipe2_layer_dic = HW_pipe2_layers_dic_list[HW_rank2_layer_nb]
-
-                            # add in the HW Pipe_SoundEngine01_Layer the ID of the corresponding GO rank object
-                            HW_pipe2_layer_dic['_GO_uid'] = GO_rank_uid
-                        else:
-                            HW_pipe2_layer_dic = None
+                        HW_pipe2_layer_dic['_GO_uid'] = GO_rank_uid
                     else:
                         HW_pipe2_layer_dic = None
-                        HW_pipe2_dic = None
+                else:
+                    HW_pipe2_layer_dic = None
+                    HW_pipe2_dic = None
 
-                    # recover the expected pitch in Hertz of the current Rank 1 pipe if defined
-                    HW_pipe1_pitch_hz = myfloat(self.HW_ODF_get_attribute_value(HW_pipe1_dic, 'Pitch_OriginalOrgan_PitchHz'), 0)
+                # recover the expected pitch in Hertz of the current Rank 1 pipe if defined
+                HW_pipe1_pitch_hz = myfloat(self.HW_ODF_get_attribute_value(HW_pipe1_dic, 'Pitch_OriginalOrgan_PitchHz'), 0)
 
-                    # get the list of the attack samples of the current Rank 1 pipe layer
-                    if HW_pipe1_layer_dic != None:
-                        HW_pipe1_attack_samples_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe1_layer_dic, 'Pipe_SoundEngine01_AttackSample', TO_CHILD, sorted_by='ID')
-                    else:
-                        HW_pipe1_attack_samples_list = []
-                    attacks_count = len(HW_pipe1_attack_samples_list)
+                # get the list of the attack samples of the current Rank 1 pipe layer
+                if HW_pipe1_layer_dic != None:
+                    HW_pipe1_attack_samples_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe1_layer_dic, 'Pipe_SoundEngine01_AttackSample', TO_CHILD, sorted_by='ID')
+                else:
+                    HW_pipe1_attack_samples_list = []
+                attacks_count = len(HW_pipe1_attack_samples_list)
 
-                    # get the list of the attack samples of the current Rank 2 pipe layer
-                    if HW_pipe2_layer_dic != None and attacks_count > 0:
-                        # ignore the Rank 2 pipe layer if there is no attack defined for the current Rank 1 pipe layer
-                        HW_pipe2_attack_samples_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe2_layer_dic, 'Pipe_SoundEngine01_AttackSample', TO_CHILD, sorted_by='ID')
-                    else:
-                        HW_pipe2_attack_samples_list = []
-                    # add the Rank 2 pipe layer attacks number to the total attacks number
-                    attacks_count += len(HW_pipe2_attack_samples_list)
+                # get the list of the attack samples of the current Rank 2 pipe layer
+                if HW_pipe2_layer_dic != None and attacks_count > 0:
+                    # ignore the Rank 2 pipe layer if there is no attack defined for the current Rank 1 pipe layer
+                    HW_pipe2_attack_samples_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe2_layer_dic, 'Pipe_SoundEngine01_AttackSample', TO_CHILD, sorted_by='ID')
+                else:
+                    HW_pipe2_attack_samples_list = []
+                # add the Rank 2 pipe layer attacks number to the total attacks number
+                attacks_count += len(HW_pipe2_attack_samples_list)
 
-                    # get the pipe harmonic number, 0 means undefined
-                    HW_pipe_harmonic_nb = myint(self.HW_ODF_get_attribute_value(HW_pipe1_dic, 'Pitch_Tempered_RankBasePitch64ftHarmonicNum'), 0)
+                # get the pipe harmonic number, 0 means undefined
+                HW_pipe_harmonic_nb = myint(self.HW_ODF_get_attribute_value(HW_pipe1_dic, 'Pitch_Tempered_RankBasePitch64ftHarmonicNum'), 0)
 
-                    if attacks_count > 0:
+                if attacks_count > 0:
 
-                        # get the first attack sample of the current Rank 1 pipe layer to recover its properties, assuming that other attacks and releases will have the same
-                        HW_pipe_attack_sample_dic = HW_pipe1_attack_samples_list[0]
-                        HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_attack_sample_dic, 'Sample', TO_CHILD, FIRST_ONE)
+                    # get the first attack sample of the current Rank 1 pipe layer to recover its properties, assuming that other attacks and releases will have the same
+                    HW_pipe_attack_sample_dic = HW_pipe1_attack_samples_list[0]
+                    HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_attack_sample_dic, 'Sample', TO_CHILD, FIRST_ONE)
 
-                        # get the sample pitch specification method code if defined
-                        #   0 = no pitch tuning to apply
-                        #   1 = pitch tuning to apply using the MIDI note defined in the metadata of the sample file
-                        #   2 = for tremulant waveform, ignored
-                        #   3 = pitch tuning to apply using the MIDI note defined in the attributes Pitch_NormalMIDINoteNumber and Pitch_RankBasePitch64ftHarmonicNum
-                        #   4 = pitch tuning to apply using the exact sample frequency defined in the attribute Pitch_ExactSamplePitch
-                        #       in case of noise sample, Pitch_ExactSamplePitch can be 100 or the value of AudioEngine_BasePitchHz
-                        #   5 = for tremulant waveform, ignored
-                        HW_pitch_spec_method = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'Pitch_SpecificationMethodCode'), 0)
+                    # get the sample pitch specification method code if defined
+                    #   0 = no pitch tuning to apply
+                    #   1 = pitch tuning to apply using the MIDI note defined in the metadata of the sample file
+                    #   2 = for tremulant waveform, ignored
+                    #   3 = pitch tuning to apply using the MIDI note defined in the attributes Pitch_NormalMIDINoteNumber and Pitch_RankBasePitch64ftHarmonicNum
+                    #   4 = pitch tuning to apply using the exact sample frequency defined in the attribute Pitch_ExactSamplePitch
+                    #       in case of noise sample, Pitch_ExactSamplePitch can be 100 or the value of AudioEngine_BasePitchHz
+                    #   5 = for tremulant waveform, ignored
+                    HW_pitch_spec_method = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'Pitch_SpecificationMethodCode'), 0)
 
-                        # get the MIDI note of the sample, 0 means undefined (when Pitch_SpecificationMethodCode = 3)
-                        HW_sample_midi_note = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'Pitch_NormalMIDINoteNumber'), 0)
+                    # get the MIDI note of the sample, 0 means undefined (when Pitch_SpecificationMethodCode = 3)
+                    HW_sample_midi_note = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'Pitch_NormalMIDINoteNumber'), 0)
 
-                        # get the harmonic number of the sample, 0 means undefined (when Pitch_SpecificationMethodCode = 3)
-                        HW_sample_harmonic_nb = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'Pitch_RankBasePitch64ftHarmonicNum'), 0)
+                    # get the harmonic number of the sample, 0 means undefined (when Pitch_SpecificationMethodCode = 3)
+                    HW_sample_harmonic_nb = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'Pitch_RankBasePitch64ftHarmonicNum'), 0)
 
-                        # get the exact pitch of the sample, 0 means undefined (in Hertz, when Pitch_SpecificationMethodCode = 4)
-                        HW_sample_pitch_hz = myfloat(self.HW_ODF_get_attribute_value(HW_sample_dic, 'Pitch_ExactSamplePitch'), 0)
+                    # get the exact pitch of the sample, 0 means undefined (in Hertz, when Pitch_SpecificationMethodCode = 4)
+                    HW_sample_pitch_hz = myfloat(self.HW_ODF_get_attribute_value(HW_sample_dic, 'Pitch_ExactSamplePitch'), 0)
 
-                        # get the MIDI note of the sample from the first 3 digits of its file name if requested by the user
-                        if self.tune_pitch_from_sample_filename:
-                            file_name = self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename')
-                            if file_name != None:
-                                file_name_midi_note = file_name.split('/')[-1][:3]  # get first 3 digits of the string after the last '/' character
-                                if file_name_midi_note.isdigit():
-                                    file_name_midi_note = int(file_name_midi_note)
-                                    if file_name_midi_note in range(1, 129):
-                                        # it is a MIDI note value
-                                        HW_sample_midi_note = file_name_midi_note
+                    # get the MIDI note of the sample from the first 3 digits of its file name if requested by the user
+                    if self.tune_pitch_from_sample_filename:
+                        file_name = self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename')
+                        if file_name != None:
+                            file_name_midi_note = file_name.split('/')[-1][:3]  # get first 3 digits of the string after the last '/' character
+                            if file_name_midi_note.isdigit():
+                                file_name_midi_note = int(file_name_midi_note)
+                                if file_name_midi_note in range(1, 129):
+                                    # it is a MIDI note value
+                                    HW_sample_midi_note = file_name_midi_note
 
-                        # get the MIDI note of the sample from its metadata if requested by the user or if the specifiction method code is 1
-                        metadata_midi_note = None
-                        if self.tune_pitch_from_sample_metadata or HW_pitch_spec_method == 1:
-                            # the metadata recovery can increase a lot the rank conversion time, so inform the user if the rank conversion started more than 1 second ago
-                            if not message_shown and time.time() - starting_time > 0.5:
-                                self.progress_status_update('+ reading samples pitch in metadata...')
-                                message_shown = True
+                    # get the MIDI note of the sample from its metadata if requested by the user or if the specifiction method code is 1
+                    metadata_midi_note = None
+                    if self.tune_pitch_from_sample_metadata or HW_pitch_spec_method == 1:
+                        # the metadata recovery can increase a lot the rank conversion time, so inform the user if the rank conversion started more than 1 second ago
+                        if not message_shown and time.time() - starting_time > 0.5:
+                            self.progress_status_update('+ reading samples pitch in metadata...')
+                            message_shown = True
 
-                            HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
-                            file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
-                            if file_name != None:
-                                full_file_name = self.HW_sample_set_odf_path + os.path.sep + file_name
-                                metadata_dic = audio_player.wav_data_get(full_file_name, pitch_only=True)
-                                if metadata_dic['error_msg'] == '' and 'midi_note' in metadata_dic.keys():
-                                    metadata_midi_note = metadata_dic['midi_note']
-                                    if metadata_dic['midi_pitch_fract'] > 50:
-                                        # if the pitch fraction is higher than 50, increase the MIDI note by 1
-                                        metadata_midi_note += 1
+                        HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
+                        file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
+                        if file_name != None:
+                            full_file_name = self.HW_sample_set_odf_path + os.path.sep + file_name
+                            metadata_dic = audio_player.wav_data_get(full_file_name, pitch_only=True)
+                            if metadata_dic['error_msg'] == '' and 'midi_note' in metadata_dic.keys():
+                                metadata_midi_note = metadata_dic['midi_note']
+                                if metadata_dic['midi_pitch_fract'] > 50:
+                                    # if the pitch fraction is higher than 50, increase the MIDI note by 1
+                                    metadata_midi_note += 1
 
-                                    # shift the MIDI note of the sample according to the sample or pipe harmonic number to have a MIDI note at pipe level
-                                    if HW_pipe_harmonic_nb not in (0, 8):
-                                        # shift needed only if the pipe harmonic number if not 8 and 0 (not defined)
-                                        f1 = midi_nb_to_freq(metadata_midi_note, self.organ_base_pitch_hz)
-                                        f2 = f1 * 8 / HW_pipe_harmonic_nb
-                                        metadata_midi_note = freq_to_midi_nb(f2, self.organ_base_pitch_hz)
-                                    HW_sample_midi_note = metadata_midi_note
+                                # shift the MIDI note of the sample according to the sample or pipe harmonic number to have a MIDI note at pipe level
+                                if HW_pipe_harmonic_nb not in (0, 8):
+                                    # shift needed only if the pipe harmonic number if not 8 and 0 (not defined)
+                                    f1 = midi_nb_to_freq(metadata_midi_note, self.organ_base_pitch_hz)
+                                    f2 = f1 * 8 / HW_pipe_harmonic_nb
+                                    metadata_midi_note = freq_to_midi_nb(f2, self.organ_base_pitch_hz)
+                                HW_sample_midi_note = metadata_midi_note
 
-                        # apply if necessary a pitch tuning to the current pipe
-                        pitch_tuning = 0
-                        if HW_sample_pitch_hz != 0 and HW_pipe1_pitch_hz != 0 and HW_sample_pitch_hz != HW_pipe1_pitch_hz:
-                            # the sample has a pitch in Hz different from the one of the current pipe
-                            delta_cents = freq_diff_to_cents(HW_sample_pitch_hz, HW_pipe1_pitch_hz)
-                            if abs(delta_cents) > 10:
-                                # apply a pitch tuning to the samples of the current pipe if it is higher than 10
-                                pitch_tuning = delta_cents
-                                if LOG_HW2GO_rank: print(f"      {GO_rank_uid} {pipe_id} MIDI note {pipe_midi_note_nb} : pitch tuning {pitch_tuning} applied (pitch frequency diff.)")
+                    # apply if necessary a pitch tuning to the current pipe
+                    pitch_tuning = 0
+                    if HW_sample_pitch_hz != 0 and HW_pipe1_pitch_hz != 0 and HW_sample_pitch_hz != HW_pipe1_pitch_hz:
+                        # the sample has a pitch in Hz different from the one of the current pipe
+                        delta_cents = freq_diff_to_cents(HW_sample_pitch_hz, HW_pipe1_pitch_hz)
+                        if abs(delta_cents) > 10:
+                            # apply a pitch tuning to the samples of the current pipe if it is higher than 10
+                            pitch_tuning = delta_cents
+                            if LOG_HW2GO_rank: print(f"      {GO_rank_uid} {pipe_id} MIDI note {pipe_midi_note_nb} : pitch tuning {pitch_tuning} applied (pitch frequency diff.)")
 
-                        elif HW_sample_midi_note not in (0, pipe_midi_note_nb):
-                            # the sample has a MIDI note different from the one of the current pipe
-                            pitch_tuning = (pipe_midi_note_nb - HW_sample_midi_note) * 100
-                            if self.tune_pitch_from_sample_filename or self.tune_pitch_from_sample_metadata:
-                                # if the user has enabled a pitch correction option based on MIDI note, show in the logs the done correction
-                                logs.add(f"{GO_rank_uid} {pipe_id} MIDI note {pipe_midi_note_nb} : pitch tuning {pitch_tuning} applied (from MIDI note {HW_sample_midi_note})")
-                            if LOG_HW2GO_rank: print(f"      {GO_rank_uid} {pipe_id} MIDI note {pipe_midi_note_nb} : pitch tuning {pitch_tuning} applied (from MIDI note {HW_sample_midi_note})")
+                    elif HW_sample_midi_note not in (0, pipe_midi_note_nb):
+                        # the sample has a MIDI note different from the one of the current pipe
+                        pitch_tuning = (pipe_midi_note_nb - HW_sample_midi_note) * 100
+                        if self.tune_pitch_from_sample_filename or self.tune_pitch_from_sample_metadata:
+                            # if the user has enabled a pitch correction option based on MIDI note, show in the logs the done correction
+                            logs.add(f"{GO_rank_uid} {pipe_id} MIDI note {pipe_midi_note_nb} : pitch tuning {pitch_tuning} applied (from MIDI note {HW_sample_midi_note})")
+                        if LOG_HW2GO_rank: print(f"      {GO_rank_uid} {pipe_id} MIDI note {pipe_midi_note_nb} : pitch tuning {pitch_tuning} applied (from MIDI note {HW_sample_midi_note})")
 
 
-                        if abs(pitch_tuning) <= 1800:
-                            # the pitch tuning to apply, if any, is in the allowed range
+                    if abs(pitch_tuning) <= 1800:
+                        # the pitch tuning to apply, if any, is in the allowed range
 
-                            # get/set the pipe gain if not null
-                            pipe_gain = myfloat(self.HW_ODF_get_attribute_value(HW_pipe1_layer_dic, 'AmpLvl_LevelAdjustDecibels'), 0)
-                            if pipe_gain != 0:  # 0 is the default value in GO ODF, so need to define it
-                                GO_rank_dic[pipe_id + 'Gain'] = pipe_gain
+                        # get/set the pipe gain if not null
+                        pipe_gain = myfloat(self.HW_ODF_get_attribute_value(HW_pipe1_layer_dic, 'AmpLvl_LevelAdjustDecibels'), 0)
+                        if pipe_gain != 0:  # 0 is the default value in GO ODF, so need to define it
+                            GO_rank_dic[pipe_id + 'Gain'] = pipe_gain
 
-                            if HW_rank_harmonic_nb == 0:
-                                # the rank harmonic number is not yet known, take the one of the current pipe
-                                HW_rank_harmonic_nb = HW_pipe_harmonic_nb
+                        if HW_rank_harmonic_nb == 0:
+                            # the rank harmonic number is not yet known, take the one of the current pipe
+                            HW_rank_harmonic_nb = HW_pipe_harmonic_nb
 
-                            # set the pipe harmonic number if defined and different from the rank harmonic number
-                            if HW_pipe_harmonic_nb not in (0, HW_rank_harmonic_nb):
-                                GO_rank_dic[pipe_id + 'HarmonicNumber'] = HW_pipe_harmonic_nb
+                        # set the pipe harmonic number if defined and different from the rank harmonic number
+                        if HW_pipe_harmonic_nb not in (0, HW_rank_harmonic_nb):
+                            GO_rank_dic[pipe_id + 'HarmonicNumber'] = HW_pipe_harmonic_nb
 
-                            # set the pipe pitch tuning if not null
-                            if pitch_tuning != 0:
-                                GO_rank_dic[pipe_id + 'PitchTuning'] = pitch_tuning
+                        # set the pipe pitch tuning if not null
+                        if pitch_tuning != 0:
+                            GO_rank_dic[pipe_id + 'PitchTuning'] = pitch_tuning
 
-                            # build the attack samples attributes of the current Rank 1 pipe layer
-                            attack_nb = 0
-                            for HW_pipe_attack_sample_dic in HW_pipe1_attack_samples_list:
-                                # scan the HW Pipe_SoundEngine01_AttackSample objects of the current Rank 1 pipe layer
+                        # build the attack samples attributes of the current Rank 1 pipe layer
+                        attack_nb = 0
+                        for HW_pipe_attack_sample_dic in HW_pipe1_attack_samples_list:
+                            # scan the HW Pipe_SoundEngine01_AttackSample objects of the current Rank 1 pipe layer
 
-                                # get the dictionary of the first Sample child of the current Pipe_SoundEngine01_AttackSample object
-                                HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_attack_sample_dic, 'Sample', TO_CHILD, FIRST_ONE)
-                                attack_sel_highest_cont_contrl_val = myint(self.HW_ODF_get_attribute_value(HW_pipe_attack_sample_dic, 'AttackSelCriteria_HighestCtsCtrlValue'), 127)
-                                if HW_sample_dic != None and attack_sel_highest_cont_contrl_val == 127:
-                                    # a sample is defined and its selection is not conditioned to a continuous control value
+                            # get the dictionary of the first Sample child of the current Pipe_SoundEngine01_AttackSample object
+                            HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_attack_sample_dic, 'Sample', TO_CHILD, FIRST_ONE)
+                            attack_sel_highest_cont_contrl_val = myint(self.HW_ODF_get_attribute_value(HW_pipe_attack_sample_dic, 'AttackSelCriteria_HighestCtsCtrlValue'), 127)
+                            if HW_sample_dic != None and attack_sel_highest_cont_contrl_val == 127:
+                                # a sample is defined and its selection is not conditioned to a continuous control value
+                                # recover the file name of the current sample
+                                HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
+                                sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
+                                if sample_file_name != None:
+                                    attack_nb += 1
+                                    if attack_nb == 2:
+                                        # if there are more than one attack sample, set the additional attacks count attribute before the second attack sample
+                                        GO_rank_dic[pipe_id + 'AttackCount'] = attacks_count - 1
+                                    # define the string starting the current pipe attack attribute name
+                                    if attack_nb == 1:
+                                        pipe_atk_id = pipe_id
+                                    else:
+                                        pipe_atk_id = pipe_id + 'Attack' + str(attack_nb - 1).zfill(3)
+                                    # write the current attack sample file and properties
+                                    GO_rank_dic[pipe_atk_id] = sample_file_name
+                                    GO_rank_dic[pipe_atk_id + 'LoadRelease'] = 'N'
+
+                                    # set the IsTremulant attribute is needed
+                                    if is_trem_mode in (0, 10):
+                                        GO_rank_dic[pipe_atk_id + 'IsTremulant'] = 0
+                                    elif is_trem_mode == 1:
+                                        GO_rank_dic[pipe_atk_id + 'IsTremulant'] = 1
+
+                                    # write the minimum velocity to use this attack sample if defined
+                                    attack_sel_highest_velocity = myint(self.HW_ODF_get_attribute_value(HW_pipe_attack_sample_dic, 'AttackSelCriteria_HighestVelocity'), 127)
+                                    if attack_sel_highest_velocity < 127:
+                                        GO_rank_dic[pipe_atk_id + 'AttackVelocity'] = 127 - attack_sel_highest_velocity
+
+                                    # write the attack loop cross fade length if defined
+                                    attack_loop_cross_fade_length = myint(self.HW_ODF_get_attribute_value(HW_pipe_attack_sample_dic, 'LoopCrossfadeLengthInSrcSampleMs'), 0)
+                                    if attack_loop_cross_fade_length != 0:
+                                        GO_rank_dic[pipe_atk_id + 'LoopCrossfadeLength'] = min(attack_loop_cross_fade_length, 3000)
+                                else:
+                                    # sample file not found
+                                    GO_rank_dic[pipe_id] = f"DUMMY  ; in package ID {HW_install_package_id}, file not found : {self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename')}"
+
+                        # build the attack samples attributes of the current Rank 2 pipe layer (there is necessarily at least one attack sample defined before for Rank 1)
+                        for HW_pipe_attack_sample_dic in HW_pipe2_attack_samples_list:
+                            # scan the HW Pipe_SoundEngine01_AttackSample objects of the current Rank 2 pipe layer
+
+                            # get the dictionary of the first alternate Sample child object of the current Pipe_SoundEngine01_AttackSample object
+                            HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_attack_sample_dic, 'Sample', TO_CHILD, FIRST_ONE)
+                            attack_sel_highest_cont_contrl_val = myint(self.HW_ODF_get_attribute_value(HW_pipe_attack_sample_dic, 'AttackSelCriteria_HighestCtsCtrlValue'), 127)
+                            if HW_sample_dic != None and attack_sel_highest_cont_contrl_val == 127:
+                                # a sample is defined and its selection is not conditioned to a continuous control value
+                                # recover the file name of the current alternate sample
+                                HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
+                                sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
+                                if sample_file_name != None:
+                                    attack_nb += 1
+                                    if attack_nb == 2:
+                                        # if there are more than one attack sample, set the additional attacks count attribute before the second attack sample
+                                        GO_rank_dic[pipe_id + 'AttackCount'] = attacks_count - 1
+                                    pipe_atk_id = pipe_id + 'Attack' + str(attack_nb - 1).zfill(3)
+                                    # write the current attack sample file and properties
+                                    GO_rank_dic[pipe_atk_id] = sample_file_name
+                                    GO_rank_dic[pipe_atk_id + 'LoadRelease'] = 'N'
+
+                                    # set the IsTremulant attribute if needed
+                                    if is_trem_mode == 10:
+                                        GO_rank_dic[pipe_atk_id + 'IsTremulant'] = 1
+
+                                    # write the minimum velocity to use this attack sample if defined
+                                    pipe_attack_highest_velocity = myint(self.HW_ODF_get_attribute_value(HW_pipe_attack_sample_dic, 'AttackSelCriteria_HighestVelocity'), 127)
+                                    if pipe_attack_highest_velocity < 127:
+                                        GO_rank_dic[pipe_atk_id + 'AttackVelocity'] = 127 - pipe_attack_highest_velocity
+
+                                    # write the attack loop crossfade length if defined
+                                    attack_loop_cross_fade_length = myint(self.HW_ODF_get_attribute_value(HW_pipe_attack_sample_dic, 'LoopCrossfadeLengthInSrcSampleMs'), 0)
+                                    if attack_loop_cross_fade_length != 0:
+                                        GO_rank_dic[pipe_atk_id + 'LoopCrossfadeLength'] = min(attack_loop_cross_fade_length, 3000)
+                                else:
+                                    # sample file not found
+                                    GO_rank_dic[pipe_id] = f"DUMMY  ; in package ID {HW_install_package_id}, file not found : {self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename')}"
+
+                        # update the attack count attribute in case some samples have not been actually written (missing sample file)
+                        if 1 < attack_nb < attacks_count:
+                            GO_rank_dic[pipe_id + 'AttackCount'] = attack_nb - 1
+
+                        # --------------------------------------------
+                        # build the release samples attributes
+
+                        # get the list of the release samples of the current Rank 1 pipe layer
+                        if HW_pipe1_layer_dic != None:
+                            HW_pipe1_release_samples_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe1_layer_dic, 'Pipe_SoundEngine01_ReleaseSample', TO_CHILD, sorted_by='ID')
+                        else:
+                            HW_pipe1_release_samples_list = []
+                        releases_count = len(HW_pipe1_release_samples_list)
+
+                        # get the list of the release samples of the current Rank 2 pipe layer
+                        if HW_pipe2_layer_dic != None and releases_count > 0:
+                            # ignore the Rank 2 pipe layer if there is no release defined for the current Rank 1 pipe layer
+                            HW_pipe2_release_samples_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe2_layer_dic, 'Pipe_SoundEngine01_ReleaseSample', TO_CHILD, sorted_by='ID')
+                        else:
+                            HW_pipe2_release_samples_list = []
+                        # add the Rank 2 pipe layer releases number to the total releases number
+                        releases_count += len(HW_pipe2_release_samples_list)
+
+                        if releases_count > 0:
+                            # there are release samples
+                            release_nb = 0
+
+                            GO_rank_dic[pipe_id + 'ReleaseCount'] = releases_count
+
+                            # build the release samples attributes of the current Rank 1 pipe layer
+                            for HW_pipe_release_sample_dic in HW_pipe1_release_samples_list:
+                                # scan the HW Pipe_SoundEngine01_ReleaseSample objects of the current Rank 1 pipe layer
+
+                                # get the dictionary of the first Sample child object of the current Pipe_SoundEngine01_ReleaseSample object
+                                HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_release_sample_dic, 'Sample', TO_CHILD, FIRST_ONE)
+                                if HW_sample_dic != None:
                                     # recover the file name of the current sample
                                     HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
                                     sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
                                     if sample_file_name != None:
-                                        attack_nb += 1
-                                        if attack_nb == 2:
-                                            # if there are more than one attack sample, set the additional attacks count attribute before the second attack sample
-                                            GO_rank_dic[pipe_id + 'AttackCount'] = attacks_count - 1
-                                        # define the string starting the current pipe attack attribute name
-                                        if attack_nb == 1:
-                                            pipe_atk_id = pipe_id
-                                        else:
-                                            pipe_atk_id = pipe_id + 'Attack' + str(attack_nb - 1).zfill(3)
-                                        # write the current attack sample file and properties
-                                        GO_rank_dic[pipe_atk_id] = sample_file_name
-                                        GO_rank_dic[pipe_atk_id + 'LoadRelease'] = 'N'
+                                        release_nb += 1
+                                        pipe_rel_id = pipe_id + 'Release' + str(release_nb).zfill(3)
+                                        # write the current release sample file
+                                        GO_rank_dic[pipe_rel_id] = sample_file_name
 
                                         # set the IsTremulant attribute is needed
                                         if is_trem_mode in (0, 10):
-                                            GO_rank_dic[pipe_atk_id + 'IsTremulant'] = 0
+                                            GO_rank_dic[pipe_rel_id + 'IsTremulant'] = 0
                                         elif is_trem_mode == 1:
-                                            GO_rank_dic[pipe_atk_id + 'IsTremulant'] = 1
+                                            GO_rank_dic[pipe_rel_id + 'IsTremulant'] = 1
 
-                                        # write the minimum velocity to use this attack sample if defined
-                                        attack_sel_highest_velocity = myint(self.HW_ODF_get_attribute_value(HW_pipe_attack_sample_dic, 'AttackSelCriteria_HighestVelocity'), 127)
-                                        if attack_sel_highest_velocity < 127:
-                                            GO_rank_dic[pipe_atk_id + 'AttackVelocity'] = 127 - attack_sel_highest_velocity
+                                        # get the max key release time for the current release sample (-1 by default)
+                                        HW_max_key_release_time_int = myint(self.HW_ODF_get_attribute_value(HW_pipe_release_sample_dic, 'ReleaseSelCriteria_LatestKeyReleaseTimeMs'), -1)
+                                        if HW_max_key_release_time_int not in (-1, 99999):
+                                            # not the default or infinite time which does not need to be indicated in the rank
+                                            GO_rank_dic[pipe_rel_id + 'MaxKeyPressTime'] = HW_max_key_release_time_int
 
-                                        # write the attack loop cross fade length if defined
-                                        attack_loop_cross_fade_length = myint(self.HW_ODF_get_attribute_value(HW_pipe_attack_sample_dic, 'LoopCrossfadeLengthInSrcSampleMs'), 0)
-                                        if attack_loop_cross_fade_length != 0:
-                                            GO_rank_dic[pipe_atk_id + 'LoopCrossfadeLength'] = min(attack_loop_cross_fade_length, 3000)
+                                        # write the release crossfade length if defined
+                                        release_cross_fade_length = myint(self.HW_ODF_get_attribute_value(HW_pipe_release_sample_dic, 'ReleaseCrossfadeLengthMs'), 0)
+                                        if release_cross_fade_length != 0:
+                                            GO_rank_dic[pipe_rel_id + 'ReleaseCrossfadeLength'] = min(release_cross_fade_length, 3000)
                                     else:
                                         # sample file not found
                                         GO_rank_dic[pipe_id] = f"DUMMY  ; in package ID {HW_install_package_id}, file not found : {self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename')}"
 
-                            # build the attack samples attributes of the current Rank 2 pipe layer (there is necessarily at least one attack sample defined before for Rank 1)
-                            for HW_pipe_attack_sample_dic in HW_pipe2_attack_samples_list:
-                                # scan the HW Pipe_SoundEngine01_AttackSample objects of the current Rank 2 pipe layer
+                            # build the release samples attributes of the current Rank 2 pipe layer
+                            for HW_pipe_release_sample_dic in HW_pipe2_release_samples_list:
+                                # scan the HW Pipe_SoundEngine01_ReleaseSample objects of the current Rank 2 pipe layer
 
-                                # get the dictionary of the first alternate Sample child object of the current Pipe_SoundEngine01_AttackSample object
-                                HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_attack_sample_dic, 'Sample', TO_CHILD, FIRST_ONE)
-                                attack_sel_highest_cont_contrl_val = myint(self.HW_ODF_get_attribute_value(HW_pipe_attack_sample_dic, 'AttackSelCriteria_HighestCtsCtrlValue'), 127)
-                                if HW_sample_dic != None and attack_sel_highest_cont_contrl_val == 127:
-                                    # a sample is defined and its selection is not conditioned to a continuous control value
-                                    # recover the file name of the current alternate sample
+                                # get the dictionary of the first Sample child object of the current Pipe_SoundEngine01_ReleaseSample object
+                                HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_release_sample_dic, 'Sample', TO_CHILD, FIRST_ONE)
+                                if HW_sample_dic != None:
+                                    # recover the file name of the current sample
                                     HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
                                     sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
                                     if sample_file_name != None:
-                                        attack_nb += 1
-                                        if attack_nb == 2:
-                                            # if there are more than one attack sample, set the additional attacks count attribute before the second attack sample
-                                            GO_rank_dic[pipe_id + 'AttackCount'] = attacks_count - 1
-                                        pipe_atk_id = pipe_id + 'Attack' + str(attack_nb - 1).zfill(3)
-                                        # write the current attack sample file and properties
-                                        GO_rank_dic[pipe_atk_id] = sample_file_name
-                                        GO_rank_dic[pipe_atk_id + 'LoadRelease'] = 'N'
+                                        release_nb += 1
+                                        pipe_rel_id = pipe_id + 'Release' + str(release_nb).zfill(3)
+                                        # write the current release sample file and properties
+                                        GO_rank_dic[pipe_rel_id] = sample_file_name
 
                                         # set the IsTremulant attribute if needed
                                         if is_trem_mode == 10:
-                                            GO_rank_dic[pipe_atk_id + 'IsTremulant'] = 1
+                                            GO_rank_dic[pipe_rel_id + 'IsTremulant'] = 1
 
-                                        # write the minimum velocity to use this attack sample if defined
-                                        pipe_attack_highest_velocity = myint(self.HW_ODF_get_attribute_value(HW_pipe_attack_sample_dic, 'AttackSelCriteria_HighestVelocity'), 127)
-                                        if pipe_attack_highest_velocity < 127:
-                                            GO_rank_dic[pipe_atk_id + 'AttackVelocity'] = 127 - pipe_attack_highest_velocity
+                                        # get the max key release time for the current release sample (-1 by default)
+                                        HW_max_key_release_time_int = myint(self.HW_ODF_get_attribute_value(HW_pipe_release_sample_dic, 'ReleaseSelCriteria_LatestKeyReleaseTimeMs'), -1)
+                                        if HW_max_key_release_time_int not in (-1, 99999):
+                                            # not the default or infinite time which does not need to be indicated in the rank
+                                            GO_rank_dic[pipe_rel_id + 'MaxKeyPressTime'] = HW_max_key_release_time_int
 
-                                        # write the attack loop crossfade length if defined
-                                        attack_loop_cross_fade_length = myint(self.HW_ODF_get_attribute_value(HW_pipe_attack_sample_dic, 'LoopCrossfadeLengthInSrcSampleMs'), 0)
-                                        if attack_loop_cross_fade_length != 0:
-                                            GO_rank_dic[pipe_atk_id + 'LoopCrossfadeLength'] = min(attack_loop_cross_fade_length, 3000)
+                                        # write the release crossfade length if defined
+                                        release_cross_fade_length = myint(self.HW_ODF_get_attribute_value(HW_pipe_release_sample_dic, 'ReleaseCrossfadeLengthMs'), 0)
+                                        if release_cross_fade_length != 0:
+                                            GO_rank_dic[pipe_rel_id + 'ReleaseCrossfadeLength'] = min(release_cross_fade_length, 3000)
                                     else:
                                         # sample file not found
                                         GO_rank_dic[pipe_id] = f"DUMMY  ; in package ID {HW_install_package_id}, file not found : {self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename')}"
 
-                            # update the attack count attribute in case some samples have not been actually written (missing sample file)
-                            if 1 < attack_nb < attacks_count:
-                                GO_rank_dic[pipe_id + 'AttackCount'] = attack_nb - 1
+                            # update the release count attribute in case some samples have not been actually written (missing sample file)
+                            if release_nb < releases_count:
+                                GO_rank_dic[pipe_id + 'ReleaseCount'] = release_nb
 
-                            # --------------------------------------------
-                            # build the release samples attributes
-
-                            # get the list of the release samples of the current Rank 1 pipe layer
-                            if HW_pipe1_layer_dic != None:
-                                HW_pipe1_release_samples_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe1_layer_dic, 'Pipe_SoundEngine01_ReleaseSample', TO_CHILD, sorted_by='ID')
-                            else:
-                                HW_pipe1_release_samples_list = []
-                            releases_count = len(HW_pipe1_release_samples_list)
-
-                            # get the list of the release samples of the current Rank 2 pipe layer
-                            if HW_pipe2_layer_dic != None and releases_count > 0:
-                                # ignore the Rank 2 pipe layer if there is no release defined for the current Rank 1 pipe layer
-                                HW_pipe2_release_samples_list = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe2_layer_dic, 'Pipe_SoundEngine01_ReleaseSample', TO_CHILD, sorted_by='ID')
-                            else:
-                                HW_pipe2_release_samples_list = []
-                            # add the Rank 2 pipe layer releases number to the total releases number
-                            releases_count += len(HW_pipe2_release_samples_list)
-
-                            if releases_count > 0:
-                                # there are release samples
-                                release_nb = 0
-
-                                GO_rank_dic[pipe_id + 'ReleaseCount'] = releases_count
-
-                                # build the release samples attributes of the current Rank 1 pipe layer
-                                for HW_pipe_release_sample_dic in HW_pipe1_release_samples_list:
-                                    # scan the HW Pipe_SoundEngine01_ReleaseSample objects of the current Rank 1 pipe layer
-
-                                    # get the dictionary of the first Sample child object of the current Pipe_SoundEngine01_ReleaseSample object
-                                    HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_release_sample_dic, 'Sample', TO_CHILD, FIRST_ONE)
-                                    if HW_sample_dic != None:
-                                        # recover the file name of the current sample
-                                        HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
-                                        sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
-                                        if sample_file_name != None:
-                                            release_nb += 1
-                                            pipe_rel_id = pipe_id + 'Release' + str(release_nb).zfill(3)
-                                            # write the current release sample file
-                                            GO_rank_dic[pipe_rel_id] = sample_file_name
-
-                                            # set the IsTremulant attribute is needed
-                                            if is_trem_mode in (0, 10):
-                                                GO_rank_dic[pipe_rel_id + 'IsTremulant'] = 0
-                                            elif is_trem_mode == 1:
-                                                GO_rank_dic[pipe_rel_id + 'IsTremulant'] = 1
-
-                                            # get the max key release time for the current release sample (-1 by default)
-                                            HW_max_key_release_time_int = myint(self.HW_ODF_get_attribute_value(HW_pipe_release_sample_dic, 'ReleaseSelCriteria_LatestKeyReleaseTimeMs'), -1)
-                                            if HW_max_key_release_time_int not in (-1, 99999):
-                                                # not the default or infinite time which does not need to be indicated in the rank
-                                                GO_rank_dic[pipe_rel_id + 'MaxKeyPressTime'] = HW_max_key_release_time_int
-
-                                            # write the release crossfade length if defined
-                                            release_cross_fade_length = myint(self.HW_ODF_get_attribute_value(HW_pipe_release_sample_dic, 'ReleaseCrossfadeLengthMs'), 0)
-                                            if release_cross_fade_length != 0:
-                                                GO_rank_dic[pipe_rel_id + 'ReleaseCrossfadeLength'] = min(release_cross_fade_length, 3000)
-                                        else:
-                                            # sample file not found
-                                            GO_rank_dic[pipe_id] = f"DUMMY  ; in package ID {HW_install_package_id}, file not found : {self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename')}"
-
-                                # build the release samples attributes of the current Rank 2 pipe layer
-                                for HW_pipe_release_sample_dic in HW_pipe2_release_samples_list:
-                                    # scan the HW Pipe_SoundEngine01_ReleaseSample objects of the current Rank 2 pipe layer
-
-                                    # get the dictionary of the first Sample child object of the current Pipe_SoundEngine01_ReleaseSample object
-                                    HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_release_sample_dic, 'Sample', TO_CHILD, FIRST_ONE)
-                                    if HW_sample_dic != None:
-                                        # recover the file name of the current sample
-                                        HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
-                                        sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
-                                        if sample_file_name != None:
-                                            release_nb += 1
-                                            pipe_rel_id = pipe_id + 'Release' + str(release_nb).zfill(3)
-                                            # write the current release sample file and properties
-                                            GO_rank_dic[pipe_rel_id] = sample_file_name
-
-                                            # set the IsTremulant attribute if needed
-                                            if is_trem_mode == 10:
-                                                GO_rank_dic[pipe_rel_id + 'IsTremulant'] = 1
-
-                                            # get the max key release time for the current release sample (-1 by default)
-                                            HW_max_key_release_time_int = myint(self.HW_ODF_get_attribute_value(HW_pipe_release_sample_dic, 'ReleaseSelCriteria_LatestKeyReleaseTimeMs'), -1)
-                                            if HW_max_key_release_time_int not in (-1, 99999):
-                                                # not the default or infinite time which does not need to be indicated in the rank
-                                                GO_rank_dic[pipe_rel_id + 'MaxKeyPressTime'] = HW_max_key_release_time_int
-
-                                            # write the release crossfade length if defined
-                                            release_cross_fade_length = myint(self.HW_ODF_get_attribute_value(HW_pipe_release_sample_dic, 'ReleaseCrossfadeLengthMs'), 0)
-                                            if release_cross_fade_length != 0:
-                                                GO_rank_dic[pipe_rel_id + 'ReleaseCrossfadeLength'] = min(release_cross_fade_length, 3000)
-                                        else:
-                                            # sample file not found
-                                            GO_rank_dic[pipe_id] = f"DUMMY  ; in package ID {HW_install_package_id}, file not found : {self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename')}"
-
-                                # update the release count attribute in case some samples have not been actually written (missing sample file)
-                                if release_nb < releases_count:
-                                    GO_rank_dic[pipe_id + 'ReleaseCount'] = release_nb
-
-                        else:
-                            # there is a pitch tuning to apply which is outside the allowed range
-                            GO_rank_dic[pipe_id] = f"DUMMY  ; MIDI note {pipe_midi_note_nb}, not possible to apply a pitch tuning of {pitch_tuning} for the sample : {self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename')}"
                     else:
-                        # there is none Pipe_SoundEngine01_AttackSample object defined
-                        GO_rank_dic[pipe_id] = 'DUMMY  ; MIDI note {pipe_midi_note_nb}, there is none defined attack sample'
+                        # there is a pitch tuning to apply which is outside the allowed range
+                        GO_rank_dic[pipe_id] = f"DUMMY  ; MIDI note {pipe_midi_note_nb}, not possible to apply a pitch tuning of {pitch_tuning} for the sample : {self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename')}"
                 else:
                     # there is none HW Pipe_SoundEngine01 object defined for the current MIDI note
                     GO_rank_dic[pipe_id] = f'DUMMY  ; MIDI note {pipe_midi_note_nb}, there is none defined pipe'
@@ -10105,16 +10097,24 @@ class C_ODF_HW2GO():
         # in HW format the files path starts from the root package folder (named with 6 digits) and the folders separator is either / or \
         # in GO format the files path starts from the ODF location (in the HW folder OrganDefinitions) and the folders separator is \ (it can be / as well)
 
+        if HW_file_name == None:
+            return None
+
+        # replace in the file name the path separators by the one of the OS where OdfEdit is running
         os_file_name = path2ospath(HW_file_name)
 
         if os_file_name[0] == os.path.sep:
             # the HW file name must not start by a path separator (seen on some sample sets), remove it
             os_file_name = os_file_name[1:]
 
+        # compose the full HW file path + name
         os_file_name = os.path.join(self.HW_sample_set_path, 'OrganInstallationPackages', str(HW_install_package_id).zfill(6), os_file_name)
         if DEV_MODE:
+            # actual path not recovered in dev mode to make fastest the processing
             actual_file_name_str = os_file_name
         else:
+            # get the actual path and name matching with what is actually present in the sample set files, expecially for the characters case
+            # None is returned if the file has not been found in the sample set files
             actual_file_name_str = get_actual_file_name(os_file_name)
 
         # return the GO file path/name relative to the folder where is located the ODF and with the \ folders separator
@@ -10122,15 +10122,15 @@ class C_ODF_HW2GO():
             return '..' + actual_file_name_str[len(self.HW_sample_set_path):].replace(os.path.sep,'\\')
 
         # file not found in the sample set files
-        if DEV_MODE:
-            # return the given file name which comes from the HW ODF
-            # permits to test HW ODF conversion without having all the files of the sample set on the computer
-            return '..' + os_file_name[len(self.HW_sample_set_path):].replace(os.path.sep,'\\')
+        logs.add(f'WARNING : in package ID {HW_install_package_id}, file not found : {HW_file_name}')
 
-        if HW_install_package_id > 10:  #in self.available_HW_packages_id_list:
-            # it may be a non standard package of Hauptwerk
-            logs.add(f'WARNING : in package ID {HW_install_package_id}, file not found : {HW_file_name}')
-        return None
+        if HW_install_package_id < 10:
+            # it is a standard package of Hauptwerk (like built-in images), it is normal to not have found the file
+            # return None to not add this file name in the GO ODF
+            return None
+
+        # return the given file name which comes from the HW ODF, even if it has not been found
+        return '..' + os_file_name[len(self.HW_sample_set_path):].replace(os.path.sep,'\\')
 
     #-------------------------------------------------------------------------------------------------
     def build_keyboard_octave_disp_attr_dic(self):
@@ -10232,14 +10232,14 @@ class C_GUI_NOTEBOOK():
     # class to manage the graphical user interface of the application for the notebook area
 
 
-    # variables used for the file viewer tab
+    # variables used for the Viewer tab
     viewer_is_visible = False
 
     viewer_object_uid = None   # object UID given to the viewer
     viewer_object_line = None  # object line given to the viewer
     viewer_object_app = None   # object application given to the viewer (GO or HW)
 
-    viewer_file_type = None    # file type found in the given object line if any : None, sample, image
+    viewer_content_type = None # type of content displayed in the viewer : None, 'sample' or 'image'
     viewer_file_name = None    # valid file name found in the given object line if any
     viewer_frame_dim = None    # tuple with the width and height of the panel or parent panel of the given object UID
 
@@ -10247,13 +10247,24 @@ class C_GUI_NOTEBOOK():
     viewer_prev_file_type = None    # previous found file type
     viewer_prev_file_name = None    # previous found file name
 
+    viewer_displays_image = False
     viewer_images_list = []        # list of native images which has to be displayed
-    viewer_scaled_images_list = [] # list of scaled native images which has to be displayed
-
+    viewer_disp_images_list = []   # list of images which are displayed (native images scaled according to the zoom value)
     viewer_text = ''       # text to display at the top of the viewer
-    canvas_zoom_factor = 1 # zoom factor at which is displayed the images in the canvas
 
-    text_to_search = ''    # text to search in the Search tab
+    canvas_zoom_factor = 1.0 # zoom factor at which is displayed the images in the canvas
+    canvas_outer_margin = 10
+
+    dragged_object_id_list = {}
+    dragged_object_uid = None
+
+    # variables used for the search in the Help
+    search_in_help_last_text = ''      # last searched text
+    search_in_help_case_sens = False  # last status of the case sensitive check box
+    search_in_help_regex = False  # last status of the regex check box
+    search_in_help_found_nb = 0   # number of found occurrences of the searched text
+    search_in_help_focus_idx = 0  # index of the currently focused found occurrence (between 0 and search_in_help_found_nb - 1)
+    search_matches_list = []      # list containing the position in the help of the found occurrences in a tuple (line nb, start character number, end character number)
 
     #-----------------------------------------------------------------------------------------------
     def wnd_notebook_build(self, wnd_parent):
@@ -10282,29 +10293,50 @@ class C_GUI_NOTEBOOK():
         scrollbarv.config(command=self.txt_events_log.yview)
         scrollbarh.config(command=self.txt_events_log.xview)
 
+        # create a context menu
+        self.txt_events_log.bind("<Button-3>", self.logs_context_menu)
+        self.logs_menu = tk.Menu(self.txt_events_log, tearoff=0)
+        self.logs_menu.add_command(label="a section name", command=self.logs_select_object)
+        self.logs_menu.add_command(label="Clear logs", command=self.logs_clear)
 
         # TAB Help
         # text box to display the help in the notebook, with vertical scroll bar and search widgets
         # a main frame is used to encapsulate two other frames, one for the search widgets, one for the text box and his scroll bar
         self.frm_help = ttk.Frame(self.notebook)
         self.frm_help.pack(fill=tk.BOTH, expand=True)
-        # widgets to search a text
+
+        # widgets to search a text in the help
         self.frm_help_top = ttk.Frame(self.frm_help)
         self.frm_help_top.pack(side=tk.TOP, fill=tk.X)
+
         self.lab_search = ttk.Label(self.frm_help_top, text='Search :', borderwidth=0, relief=tk.SOLID, anchor=tk.E)
         self.lab_search.pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X)
+
         self.cmb_search_text = ttk.Combobox(self.frm_help_top, height=24, width=20, values=['[Organ]', '[Button]', '[Coupler999]', '[Divisional999]', '[DivisionalCoupler999]', '[DrawStop]', '[Enclosure999]', '[General999]', '[Image999]', '[Label999]', '[Manual999]', '[Panel999]', '[Panel999Element999]', '[Panel999Image999]', '[Panel999xxxxx999]', '[Piston]', '[PushButton]', '[Rank999]', '[ReversiblePiston999]', '[SetterElement999]', '[Stop999]', '[Switch999]', '[Tremulant999]', '[WindchestGroup999]'])
         self.cmb_search_text.pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X)
-        self.cmb_search_text.bind('<KeyRelease>', self.help_search_text_key_pressed)
-        self.cmb_search_text.bind('<<ComboboxSelected>>', self.help_search_text_key_pressed)
-        self.btn_search_prev = ttk.Button(self.frm_help_top, text='<', width=5, state=tk.NORMAL, command=self.help_search_previous)
-        self.btn_search_prev.pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X)
-        self.btn_search_next = ttk.Button(self.frm_help_top, text='>', width=5, state=tk.NORMAL, command=self.help_search_next)
-        self.btn_search_next.pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X)
-        self.btn_search_clear = ttk.Button(self.frm_help_top, text='Clear', width=10, state=tk.NORMAL, command=self.help_search_clear)
+        self.cmb_search_text.bind('<KeyRelease>', self.help_search_key_pressed)
+        self.cmb_search_text.bind('<<ComboboxSelected>>', self.help_search_key_pressed)
+
+        self.btn_search_clear = ttk.Button(self.frm_help_top, text='Clear', width=6, state=tk.NORMAL, command=self.help_search_clear)
         self.btn_search_clear.pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X)
+
+        self.btn_search_prev = ttk.Button(self.frm_help_top, text='<', width=3, state=tk.NORMAL, command=self.help_search_previous)
+        self.btn_search_prev.pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X)
+
         self.lab_search_occur_nb = ttk.Label(self.frm_help_top, text='', borderwidth=0, relief=tk.SOLID, anchor=tk.W)
         self.lab_search_occur_nb.pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X)
+
+        self.btn_search_next = ttk.Button(self.frm_help_top, text='>', width=3, state=tk.NORMAL, command=self.help_search_next)
+        self.btn_search_next.pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X)
+
+        self.help_search_regex = tk.BooleanVar(self.wnd_main)
+        self.btn_help_search_regex = ttk.Checkbutton(self.frm_help_top, text='RegEx', variable=self.help_search_regex, command=self.help_search_next)
+        self.btn_help_search_regex.pack(side=tk.LEFT, padx=2, pady=1, fill=tk.X)
+
+        self.help_search_case_sensitive = tk.BooleanVar(self.wnd_main)
+        self.btn_help_search_case_sens = ttk.Checkbutton(self.frm_help_top, text='Case sensitive', variable=self.help_search_case_sensitive, command=self.help_search_next)
+        self.btn_help_search_case_sens.pack(side=tk.LEFT, padx=2, pady=1, fill=tk.X)
+
         # help text box
         self.frm_help_bottom = ttk.Frame(self.frm_help)
         self.frm_help_bottom.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
@@ -10314,11 +10346,13 @@ class C_GUI_NOTEBOOK():
         self.txt_help.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
         self.txt_help.config(yscrollcommand=scrollbarv.set)
         scrollbarv.config(command=self.txt_help.yview)
-        # define the tags for the syntax highlighting
+        # define the tags for the syntax highlighting and the text search
         self.txt_help.tag_config(TAG_FIELD, foreground=COLOR_TAG_FIELD)
         self.txt_help.tag_config(TAG_COMMENT, foreground=COLOR_TAG_COMMENT)
         self.txt_help.tag_config(TAG_OBJ_UID, foreground=COLOR_TAG_OBJ_UID, font=TEXT_FONT_BOLD)
         self.txt_help.tag_config(TAG_TITLE, foreground=COLOR_TAG_TITLE, font=TEXT_FONT_BOLD)
+        self.txt_help.tag_config(TAG_FOUND, foreground=TEXT_COLOR, background=COLOR_TAG_FOUND, font=TEXT_FONT)
+        self.txt_help.tag_config(TAG_FOUND2, foreground=TEXT_COLOR, background=COLOR_TAG_FOUND2, font=TEXT_FONT)
 
 
         # TAB Search & replace
@@ -10344,17 +10378,17 @@ class C_GUI_NOTEBOOK():
         radiobutton.pack(side=tk.LEFT, padx=5, pady=1, fill=tk.X)
         self.odf_search_range.set('odf')
 
-        # row 2 (check buttons for regular expression or case sensitive selection)
+        # row 2 (check buttons for regular expression and case sensitive selection)
         self.frm_search_top1 = ttk.Frame(self.frm_search)
         self.frm_search_top1.pack(side=tk.TOP, fill=tk.X)
 
         self.odf_search_regex = tk.BooleanVar(self.wnd_main)
-        self.btn_odf_search_regex = ttk.Checkbutton(self.frm_search_top1, text='Regular expression', width=18, variable=self.odf_search_regex, command=self.gui_status_update_notebook)
+        self.btn_odf_search_regex = ttk.Checkbutton(self.frm_search_top1, text='RegEx (regular expression)', variable=self.odf_search_regex, command=self.gui_status_update_notebook)
         self.btn_odf_search_regex.pack(side=tk.LEFT, padx=2, pady=1, fill=tk.X)
 
         self.odf_search_case_sensitive = tk.BooleanVar(self.wnd_main)
-        self.btn_odf_search_case_ins = ttk.Checkbutton(self.frm_search_top1, text='Case sensitive', width=16, variable=self.odf_search_case_sensitive)
-        self.btn_odf_search_case_ins.pack(side=tk.LEFT, padx=2, pady=1, fill=tk.X)
+        self.btn_odf_search_case_sens = ttk.Checkbutton(self.frm_search_top1, text='Case sensitive', variable=self.odf_search_case_sensitive)
+        self.btn_odf_search_case_sens.pack(side=tk.LEFT, padx=2, pady=1, fill=tk.X)
 
         self.btn_odf_search_hw = ttk.Button(self.frm_search_top1, text='HW search', state=tk.NORMAL, command=self.odf_search_text_hw)
 
@@ -10411,17 +10445,20 @@ class C_GUI_NOTEBOOK():
         self.frm_viewer = ttk.Frame(self.notebook)
         self.frm_viewer.pack(fill=tk.BOTH, expand=True)
 
-        self.lab_viewer = ttk.Label(self.frm_viewer, text='', borderwidth=0, relief=tk.SOLID)
-        self.lab_viewer.pack(side=tk.TOP, padx=10, pady=10, fill=tk.X)
+        self.lab_viewer = ttk.Label(self.frm_viewer, text='', borderwidth=2)
+        self.lab_viewer.pack(side=tk.TOP, padx=10, pady=5, fill=tk.X)
 
         self.view_canvas = tk.Canvas(self.frm_viewer, bg=COLOR_BACKGROUND0, highlightthickness=0, xscrollincrement=1, yscrollincrement=1) # 1 pixel increments
         self.view_canvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self.view_canvas.bind('<MouseWheel>', self.viewer_draw)  # for Windows
+        self.view_canvas.bind('<Button-1>', self.viewer_click_left)
+        self.view_canvas.bind('<Double-1>', self.viewer_dblclick_left)
+        self.view_canvas.bind('<B1-Motion>', self.viewer_drag_left)
+        self.view_canvas.bind('<Button-3>', self.viewer_click_right)
+        self.view_canvas.bind('<ButtonRelease-3>', self.viewer_clickrel_right)
+        self.view_canvas.bind('<B3-Motion>', self.viewer_drag_right)
         self.view_canvas.bind('<Button-4>', self.viewer_draw)    # MouseWheel up in Linux
         self.view_canvas.bind('<Button-5>', self.viewer_draw)    # MouseWheel down in Linux
-        self.view_canvas.bind('<ButtonPress-1>', lambda event: self.view_canvas.scan_mark(event.x, event.y))
-        self.view_canvas.bind('<B1-Motion>', self.viewer_drag)
-        self.view_canvas.bind('<Double-1>', self.viewer_double_click)
+        self.view_canvas.bind('<MouseWheel>', self.viewer_draw)  # for Windows
 
 
         # TAB HW sections
@@ -10455,7 +10492,7 @@ class C_GUI_NOTEBOOK():
         # create the notebook tabs, and attach the frames to them
         self.notebook.add(self.frm_logs, text='  Logs  ')
         self.notebook.add(self.frm_help, text='  Help  ')
-        self.notebook.add(self.frm_search, text='  Search&replace  ')
+        self.notebook.add(self.frm_search, text='  Search & replace  ')
         self.notebook.add(self.frm_viewer, text='  Viewer  ')
         self.notebook.add(self.frm_hw_browser, text='  HW sections  ')
         self.notebook.hide(self.frm_hw_browser)  # will be visible only if a Hauptwerk ODF is loaded
@@ -10467,22 +10504,28 @@ class C_GUI_NOTEBOOK():
     def tab_changed(self, event):
         # the selected tab of the notebook has been changed
 
-        # check if the tab of the viewer is selected or not
-        self.viewer_is_visible = self.notebook.index("current") == 3
+        if self.notebook.index("current") == 2:
+            self.cmb_search_text.focus_set()
 
-        # update the viewer (action = 3 to force a refresh of the viewer)
-        self.viewer_update('previous')
+        if self.notebook.index("current") == 3 and self.viewer_is_visible == False:
+            # the Viewer tab is selected and this is not yet known
+            self.viewer_is_visible = True
+            # update the viewer with previous given data
+            self.viewer_update('previous')
+        else:
+            self.viewer_is_visible = False
 
     #-------------------------------------------------------------------------------------------------
     def gui_status_update_notebook(self):
         # update the status of GUI widgets of the search function in the notebook
 
         # buttons to search previous or next or clear the search in the help
-        is_search_text = self.cmb_search_text.get() != ''
-        self.btn_search_prev['state']  = tk.NORMAL if is_search_text else tk.DISABLED
-        self.btn_search_next['state']  = tk.NORMAL if is_search_text else tk.DISABLED
-        self.btn_search_clear['state'] = tk.NORMAL if is_search_text else tk.DISABLED
-        self.btn_odf_search_case_ins['state']  = tk.NORMAL if (not self.odf_search_regex.get()) else tk.DISABLED
+        self.btn_search_prev['state']  = tk.NORMAL if self.search_in_help_found_nb > 1 else tk.DISABLED
+        self.btn_search_next['state']  = tk.NORMAL if self.search_in_help_found_nb > 1 else tk.DISABLED
+        self.btn_search_clear['state'] = tk.NORMAL if self.cmb_search_text.get() != '' else tk.DISABLED
+
+        self.btn_help_search_case_sens['state']  = tk.NORMAL if (not self.help_search_regex.get()) else tk.DISABLED
+        self.btn_odf_search_case_sens['state']  = tk.NORMAL if (not self.odf_search_regex.get()) else tk.DISABLED
 
         if self.is_loaded_hw_odf:
             self.btn_odf_search_hw.pack(side=tk.LEFT, padx=0, pady=5, fill=tk.X)
@@ -10516,8 +10559,52 @@ class C_GUI_NOTEBOOK():
         return 'break'  # do not process further the event in the widget
 
     #-------------------------------------------------------------------------------------------------
+    def logs_context_menu(self, event):
+        # (GUI event callback) the user has made a right click in the logs text box : open the contextual menu
+
+        # recover the index of the text which is under the mouse cursor
+        index = self.txt_events_log.index(f'@{event.x},{event.y}')
+        # recover the word which is at this index
+        word = self.txt_events_log.get(index + " wordstart", index + " wordend")
+        if word[0] == '\n': word = word[1:]
+        if len(word) > 0 and word in self.odf_data.odf_data_dic.keys() :
+            # the word is a valid object UID
+            self.logs_menu_object_name = word
+            self.logs_menu.entryconfigure(0, label='Select section ' + word)
+            self.logs_menu.entryconfigure(0, state=tk.ACTIVE)
+        else:
+            self.logs_menu_object_name = None
+            self.logs_menu.entryconfigure(0, label='No section name under the cursor')
+            self.logs_menu.entryconfigure(0, state=tk.DISABLED)
+
+        # open the contextual menu
+        self.logs_menu.tk_popup(event.x_root, event.y_root)
+
+    #-------------------------------------------------------------------------------------------------
+    def logs_select_object(self):
+        # (GUI event callback) the user has selected "Select section xxx" in the context menu of the logs text box
+
+        if self.logs_menu_object_name != None and self.can_i_make_change():
+            # the user has saved his modifications if he wanted and has not canceled the operation
+            # select the object clicked in the logs
+
+            self.selected_object_uid = self.logs_menu_object_name
+            self.selected_linked_uid = None
+            self.edited_object_uid = self.selected_object_uid
+            self.focused_objects_widget = None
+            self.selected_object_app = 'GO'
+
+            # update the object text box and links list
+            self.object_text_update()
+            self.object_links_list_update()
+
+            # update the status of GUI widgets
+            self.gui_status_update_lists(True)
+            self.gui_status_update_buttons()
+
+    #-------------------------------------------------------------------------------------------------
     def logs_clear(self):
-        # (GUI event callback) the user has selected 'Clear all' in the context menu of the logs text box
+        # (GUI event callback) the user has selected ""Clear logs" in the context menu of the logs text box
 
         # clear the content of the logs text box
         self.txt_events_log.delete(1.0, "end")
@@ -10566,6 +10653,18 @@ class C_GUI_NOTEBOOK():
         self.help_search_text(self.cmb_search_text.get(), False)
 
     #-------------------------------------------------------------------------------------------------
+    def help_search_key_pressed(self, event):
+        # (GUI event callback) the user has pressed a keyboard key in the help text search box
+
+        if event.char != '' or event.keysym in ('Delete', 'BackSpace'):
+            # not a control key or Delete / Backspace keys has been pressed
+            # display the occurrences of the search string if any
+            self.help_search_text(self.cmb_search_text.get(), True)
+
+        # update the status of GUI widgets
+        self.gui_status_update_notebook()
+
+    #-------------------------------------------------------------------------------------------------
     def help_search_clear(self):
         # (GUI event callback) the user has clicked on the button 'Clear'
         # clear the text to search (text box and highlighting)
@@ -10573,6 +10672,8 @@ class C_GUI_NOTEBOOK():
         self.cmb_search_text.delete(0, tk.END)
         self.help_search_text('', False)
         self.lab_search_occur_nb.config(text='')
+        self.search_in_help_last_text = ''
+        self.cmb_search_text.focus_set()
 
         # update the status of some GUI widgets
         self.gui_status_update_notebook()
@@ -10592,95 +10693,101 @@ class C_GUI_NOTEBOOK():
             self.cmb_search_text.delete(0, tk.END)
             self.cmb_search_text.insert(0, gen_object_UID)
 
-            # update the status of GUI widgets
-            self.gui_status_update_notebook()
-
             # search the first occurence of the generic object ID
             self.help_search_next()
 
             # select the Help tab of the notebook
             self.notebook.select(self.frm_help)
 
+            # update the status of GUI widgets
+            self.gui_status_update_notebook()
+
     #-------------------------------------------------------------------------------------------------
-    def help_search_text(self, text_to_find, search_next = True):
+    def help_search_text(self, text_to_search, search_next = True):
         # show in the help the next occurence (or previous if search_next=False) of the given text to find
         # highlight in yellow all the occurences of this text
 
-        if text_to_find != '':
-            text_len = len(text_to_find)
-        else:
-            text_to_find = None
-            text_len = 0
+        if (text_to_search != self.search_in_help_last_text
+            or self.search_in_help_case_sens != self.help_search_case_sensitive.get()
+            or self.search_in_help_regex != self.help_search_regex.get()):
+            # a new text has to be searched or a search option has changed
 
-        if text_to_find != self.text_to_search:
-            # a new text has to be searched, highlight all its occurences in the entire help text
+            # store the new text to search and the last status of the case sensitive option
+            self.search_in_help_last_text = text_to_search
+            self.search_in_help_case_sens = self.help_search_case_sensitive.get()
+            self.search_in_help_regex = self.help_search_regex.get()
 
-            # store the new text to search
-            self.text_to_search = text_to_find
-
-            # remove the highlight of the previous searched text occurences
+            # remove the highlight of all previous found text occurences and the focused occurence
             self.txt_help.tag_remove(TAG_FOUND, '1.0', tk.END)
             self.txt_help.tag_remove(TAG_FOUND2, '1.0', tk.END)
-            nb_occurences = 0
 
-            if text_to_find != None:
-                # highlight the all occurences of the text to find in the entire help
-                # configure the tag for the found text
-                self.txt_help.tag_config(TAG_FOUND, foreground=TEXT_COLOR, background=COLOR_TAG_FOUND, font=TEXT_FONT)
+            self.search_matches_list.clear()
+            self.search_in_help_found_nb = 0
+            self.search_in_help_focus_idx = None
+
+            if len(text_to_search) > 2:
+                # highlight all occurences of the text to find in the entire help if it has at least three characters
+
+                # prepare the regex search pattern
+                if self.search_in_help_regex:
+                    # regex search to do
+                    pattern = re.compile(text_to_search)
+                else:
+                    # non regex search to do, escape the special characters in the text to find
+                    text_to_search = re.escape(text_to_search)
+                    if self.search_in_help_case_sens:
+                        # case sensitive search to do
+                        pattern = re.compile(text_to_search)
+                    else:
+                        pattern = re.compile(text_to_search, re.IGNORECASE)
+
                 # get the lines of the text widget
                 lines = self.txt_help.get('1.0', tk.END).splitlines()
-                # scan all the lines
-                for l, line in enumerate(lines):
-                    idx = 0
-                    while idx != -1:
-                        # check the various occurences of the searched text in the current line (if any)
-                        idx = line.find(text_to_find, idx)
-                        if idx != -1:
-                            # highlight the found occurence in the line
-                            self.txt_help.tag_add(TAG_FOUND, f'{l+1}.{idx}', f'{l+1}.{idx} + {text_len} chars')
-                            # move the search index after the found occurence
-                            idx += text_len
-                            nb_occurences += 1
+                # search the pattern in all lines of the help text, store their position and highlight them in the help
+                for line_nb, line in enumerate(lines):
+                    for match in re.finditer(pattern, line):
+                        self.search_in_help_found_nb += 1
+                        # add in a list the position of the found occurence : tupple (line nb, start position, end position)
+                        self.search_matches_list.append((line_nb+1, match.start(), match.end()))
+                        # highlight the found occurence in the help
+                        self.txt_help.tag_add(TAG_FOUND, f'{line_nb+1}.{match.start()}', f'{line_nb+1}.{match.end()}')
 
-                # display the number of occurences of the searched text
-                if nb_occurences == 0:
-                    self.lab_search_occur_nb.config(text='None occurence')
-                elif nb_occurences == 1:
-                    self.lab_search_occur_nb.config(text='1 occurence')
+        if self.search_in_help_found_nb > 0:
+            # there are occurrences found in the help
+            # put a focus on the next/previous occurence in the help
+
+            if self.search_in_help_focus_idx != None:
+                # remove the highlight of the previous occurence focus
+                match = self.search_matches_list[self.search_in_help_focus_idx]
+                self.txt_help.tag_remove(TAG_FOUND2, f'{match[0]}.{match[1]}', f'{match[0]}.{match[2]}')
+
+                # move the focus index according to the requested direction (next or previous)
+                if search_next:
+                    self.search_in_help_focus_idx += 1
+                    if self.search_in_help_focus_idx >= self.search_in_help_found_nb:
+                        self.search_in_help_focus_idx = 0
                 else:
-                    self.lab_search_occur_nb.config(text=f'{nb_occurences} occurences')
+                    self.search_in_help_focus_idx -= 1
+                    if self.search_in_help_focus_idx < 0:
+                        self.search_in_help_focus_idx = self.search_in_help_found_nb - 1
+            else:
+                self.search_in_help_focus_idx = 0
 
-        if text_to_find != None:
-            # search for the next/previous occurence of the text in the help
+            # show and highlight the focused found occurrence
+            match = self.search_matches_list[self.search_in_help_focus_idx]
+            self.txt_help.tag_add(TAG_FOUND2, f'{match[0]}.{match[1]}',  f'{match[0]}.{match[2]}')
+            self.txt_help.see(f'{match[0]}.{match[1]}')
 
-            # remove the highlight of the previous searched text occurence
-            self.txt_help.tag_remove(TAG_FOUND2, '1.0', tk.END)
-            # configure the tag for the highlighted found text
-            self.txt_help.tag_config(TAG_FOUND2, foreground=TEXT_COLOR, background=COLOR_TAG_FOUND2, font=TEXT_FONT)
+        # display the number of occurences of the searched text and the index of the current focused one
+        if len(text_to_search) > 2:
+            if self.search_in_help_found_nb == 0:
+                self.lab_search_occur_nb.config(text='Unfound')
+            else:
+                self.lab_search_occur_nb.config(text=f'{self.search_in_help_focus_idx + 1} / {self.search_in_help_found_nb}')
+        else:
+            self.lab_search_occur_nb.config(text='')
 
-            if search_next and self.search_index != None:
-                # if search upward, move the current search position after the previous found position
-                self.search_index = f'{self.search_index} + {text_len} chars'
-
-            # search for the next/previous occurence
-            if self.search_index == None: self.search_index = '1.0'
-            self.search_index = self.txt_help.search(text_to_find, self.search_index, backwards = not search_next)
-            if self.search_index == '': self.search_index = None
-
-            if self.search_index != None:
-                # show and highlight the found text
-                self.txt_help.see(self.search_index)
-                self.txt_help.tag_add(TAG_FOUND2, self.search_index, f'{self.search_index} + {text_len} chars')
-
-    #-------------------------------------------------------------------------------------------------
-    def help_search_text_key_pressed(self, event):
-        # (GUI event callback) the user has pressed a keyboard key in the help text search box
-
-        # update the status of GUI widgets
         self.gui_status_update_notebook()
-
-        self.search_index = None  # restart the search at the beginning of the help text
-        self.help_search_text(self.cmb_search_text.get(), True)
 
     #-------------------------------------------------------------------------------------------------
     def odf_search_text(self, event=None, text_to_replace=None):
@@ -10724,28 +10831,33 @@ class C_GUI_NOTEBOOK():
                     self.lst_odf_sresults.insert(tk.END, 'There is none selected object to search in.')
                     return False
 
+            # prepare the regex search pattern
+            if self.odf_search_regex.get():
+                # regex search to do
+                pattern = re.compile(text_to_search)
+            else:
+                # non regex search to do, escape the special characters in the text to find
+                text_to_search = re.escape(text_to_search)
+                if self.odf_search_case_sensitive.get():
+                    # case sensitive search to do
+                    pattern = re.compile(text_to_search)
+                else:
+                    pattern = re.compile(text_to_search, re.IGNORECASE)
+
             results_list = []
-            reg_ex = self.odf_search_regex.get()
-            case_sens = self.odf_search_case_sensitive.get()
-            text_to_search_up = text_to_search.upper()
             for object_uid in objects_uid_search_list:
-                # scan the objects to search in
+                # scan the objects to search an occurrence in their text lines
                 object_dic = self.odf_data.object_dic_get(object_uid)
-                for i, line in enumerate(object_dic['lines']):
+                for line_nb, line in enumerate(object_dic['lines']):
                     # scan the lines of the current object
-                    if ((reg_ex and re.search(text_to_search, line)) or
-                        (not reg_ex and ((not case_sens and text_to_search_up in line.upper()) or
-                                         (case_sens and text_to_search in line)))):
+                    if re.search(pattern, line):
                         # text found in the current line
                         if text_to_replace != None:
                             # the found text has to be replaced
-                            if reg_ex:
-                                line = re.sub(text_to_search, text_to_replace, line)
-                            else:
-                                line = line.replace(text_to_search, text_to_replace)
-                            # update the current line of the current object
-                            object_dic['lines'][i] = line
-                        # add the found (and replaced) line to the search results list
+                            line = re.sub(pattern, text_to_replace, line)
+                            # update the current line of the current object with the replaced text
+                            object_dic['lines'][line_nb] = line
+                        # add the found (and maybe replaced) line to the search results list
                         results_list.append(f'{object_uid} : {line}')
             results_list.sort()
 
@@ -10765,10 +10877,7 @@ class C_GUI_NOTEBOOK():
                         logs.add(f'"{text_to_search}" has been replaced by "{text_to_replace}" in children of {self.edited_object_uid}')
                 return True
 
-            if case_sens:
-                self.lst_odf_sresults.insert(tk.END, f'"{text_to_search}" is not found in the ODF (the search is case sensitive)')
-            else:
-                self.lst_odf_sresults.insert(tk.END, f'"{text_to_search}" is not found in the ODF')
+            self.lst_odf_sresults.insert(tk.END, f'"{text_to_search}" is not found in the ODF with defined search criteria.')
 
         return False
 
@@ -10921,6 +11030,7 @@ class C_GUI_NOTEBOOK():
             self.selected_object_uid = selected_text.split(' ')[0]
             self.selected_linked_uid = None
             self.edited_object_uid = self.selected_object_uid
+            self.focused_objects_widget = None
 
             if self.selected_object_uid == '_General' or self.selected_object_uid[-6:].isdigit():
                 # the results are concerning HW UID
@@ -10962,11 +11072,12 @@ class C_GUI_NOTEBOOK():
             self.notebook.select(self.frm_hw_browser)
 
     #-------------------------------------------------------------------------------------------------
-    def viewer_update(self, object_uid=None, line=None, app='GO'):
-        # update the content of the viewer with the provided parameters if needed and if the viewer if visible
+    def viewer_update(self, object_uid=None, line=None, app='GO', position_x=None, position_y=None):
+        # update the content of the viewer with provided parameters if needed and if the viewer if visible
         # object_uid is the object UID of the selected object. If equal to "previous", the viewer is forced to refresh with previous given parameters
-        # line is the selected line in the object if any is selected
-        # app can be 'GO' or 'HW', it indicates which kind of ODF object is selected (GrandOrgue or Hauptwerk)
+        # line is one line of the selected object to manage in priority over other lines of the object
+        # position_x and position_y can be given to display the image defined in line at a specific position
+        # app can be 'GO' or 'HW', it indicates which kind of ODF object is given (GrandOrgue or Hauptwerk)
 
         if object_uid != 'previous':
             # the parameters of the function have to be taken into account to refresh the content of the viewer
@@ -10976,14 +11087,13 @@ class C_GUI_NOTEBOOK():
 
         if not self.viewer_is_visible:
             # the viewer is not visible (its tab is not selected), do not update the viewer
-            # stop the audio playback if one is in progress
+            # only stop the audio playback if one is in progress
             audio_player.stop()
             return
 
-        self.viewer_file_type = None
+        self.viewer_content_type = None
         self.viewer_file_name = None
         pipe_pitch_tuning = None
-        label_text = None
 
         if self.viewer_object_line != None:
             # an object text line has been given, read in it if a supported and present audio or image file is defined
@@ -10991,23 +11101,23 @@ class C_GUI_NOTEBOOK():
             (error_msg, attr_name, attr_value, comment) = self.odf_data.object_line_split(self.viewer_object_line)
             if error_msg == None and attr_value != None and len(attr_value) > 0:
                 # the line has been split with success and there is an attribute value defined
-                if any(x in attr_name for x in ['Image', 'Mask', 'Bitmap']) and (attr_value.upper()[-4:] in ('.BMP', '.GIF', '.JPG', '.ICO', '.PNG')):
-                    # it is a supported image file extension
-                    self.viewer_file_type = 'image'
+                if re.search(r'(Image|Mask|Bitmap)', attr_name) and re.search(r'(?i)(\.BMP|\.JPG|\.GIF|\.ICO|\.PNG)$', attr_value):
+                    # it is an attribute defining a supported image file format
+                    self.viewer_content_type = 'image'
                     file_name = attr_value
 
-                elif any(x in attr_name for x in ['Pipe', 'SampleFilename']):
+                elif re.search(r'(Pipe\d{3})|((Pipe\d{3})((Attack|Release)\d{3}))', attr_name):
                     # it is an attribute defining an audio sample file
                     if attr_value.upper()[-4:] == '.WAV':
                         # it is a wave file
-                        self.viewer_file_type = 'sample'
+                        self.viewer_content_type = 'sample'
                         file_name = attr_value
                     elif attr_value[:4] == 'REF:':
                         # it is the referencing REF:xx:xx:xx to borrow the wave file of another manual/stop/pipe
                         # read the three references
                         refs_list = attr_value[4:].split(':')
                         if len(refs_list) < 3 or not (refs_list[0].isdigit() and refs_list[1].isdigit() and refs_list[2].isdigit()):
-                            label_text = f'ERROR : three numerical references are expected in the pipe referencing {attr_value}, at the format REF:aa:bb:cc'
+                            self.viewer_text = f'ERROR : three numerical references are expected in the pipe referencing {attr_value}, at the format REF:aa:bb:cc'
                         else:
                             # recover the manual UID, the stop number in the manual, the pipe number in the stop or fist rank of the stop
                             manual_nb = int(refs_list[0])
@@ -11015,20 +11125,20 @@ class C_GUI_NOTEBOOK():
                             stop_nb = int(refs_list[1])
                             pipe_nb = int(refs_list[2])
                             if self.odf_data.object_dic_get(manual_uid) == None:
-                                label_text = f'ERROR : the section {manual_uid} does not exist'
+                                self.viewer_text = f'ERROR : the section {manual_uid} does not exist'
                             elif stop_nb < 1:
-                                label_text = f'ERROR : the stop number cannot be lower than 1, it is set at {stop_nb}'
+                                self.viewer_text = f'ERROR : the stop number cannot be lower than 1, it is set at {stop_nb}'
                             elif pipe_nb < 1:
-                                label_text = f'ERROR : the pipe number cannot be lower than 1, it is set at {pipe_nb}'
+                                self.viewer_text = f'ERROR : the pipe number cannot be lower than 1, it is set at {pipe_nb}'
                             else:
                                 # search for the appropriate stop UID in the list of the child stops of the manual
                                 manual_stops_list = sorted(self.odf_data.object_kinship_list_get(manual_uid, TO_CHILD, 'Stop'))
                                 if len(manual_stops_list) < stop_nb:
-                                    label_text = f'ERROR : there is no stop number {stop_nb} in the manual {manual_nb}'
+                                    self.viewer_text = f'ERROR : there is no stop number {stop_nb} in the manual {manual_nb}'
                                 else:
                                     stop_uid = manual_stops_list[stop_nb - 1]
                                     if self.odf_data.object_dic_get(stop_uid) == None:
-                                        label_text = f'ERROR : there is no section {stop_uid} defined'
+                                        self.viewer_text = f'ERROR : there is no section {stop_uid} defined'
                                     else:
                                         # proper stop object is found, recover the sample file in the stop object if defined
                                         pipe_id = 'Pipe' + str(pipe_nb).zfill(3)
@@ -11038,17 +11148,17 @@ class C_GUI_NOTEBOOK():
                                             # there is no Pipe attribute in the stop, recover the sample file in the first rank
                                             rank_id = myint(self.odf_data.object_attr_value_get(stop_uid, 'Rank001'))
                                             if rank_id == None:
-                                                label_text = f'ERROR : there is neither attribute {pipe_id} nor attribute Rank001 defined in the section {stop_uid}'
+                                                self.viewer_text = f'ERROR : there is neither attribute {pipe_id} nor attribute Rank001 defined in the section {stop_uid}'
                                             else:
                                                 # recover the sample file in the rank object if defined
                                                 rank_uid = 'Rank' + str(rank_id).zfill(3)
                                                 sample_file = self.odf_data.object_attr_value_get(rank_uid, pipe_id)
                                                 pipe_pitch_tuning = myint(self.odf_data.object_attr_value_get(rank_uid, pipe_id + 'PitchTuning'))
                                         if sample_file != None:
-                                            self.viewer_file_type = 'sample'
+                                            self.viewer_content_type = 'sample'
                                             file_name = sample_file
 
-            if self.viewer_file_type != None:
+            if self.viewer_content_type != None:
                 # a file name with supported file type has been found in the given line, check if the file actually exists
                 file_name = path2ospath(file_name)
                 if self.viewer_object_app == 'GO':
@@ -11079,12 +11189,12 @@ class C_GUI_NOTEBOOK():
                 if self.viewer_file_name == None or not os.path.isfile(self.viewer_file_name):
                     # the file is not present at the defined path
                     if self.viewer_file_name != None:
-                        label_text = f'File not found : {self.viewer_file_name}'
+                        self.viewer_text = f'File not found : {self.viewer_file_name}'
                     else:
-                        label_text = f'File not found : {file_name}'
-                    self.viewer_file_type = None
+                        self.viewer_text = f'File not found : {file_name}'
+                    self.viewer_content_type = None
 
-        if self.viewer_file_type == 'sample':
+        if self.viewer_content_type == 'sample':
             # a supported and existing audio sample file is present in the given line
             if self.viewer_prev_file_name == self.viewer_file_name and object_uid != 'previous':
                 # the found file name has been already managed, pause/resume the audio file playback, no need to update the viewer
@@ -11095,66 +11205,66 @@ class C_GUI_NOTEBOOK():
             # start the playback of the sample and recover its metadata
             metadata_dic = audio_player.start(self.viewer_file_name)
             # prepare the text to display the audio file name and metadata
-            label_text  = f'File : {file_name}\n'
+            self.viewer_text  = f'File : {file_name}\n'
 
             if pipe_pitch_tuning != None:
-                label_text += 'with pitch tuning ' + str(pipe_pitch_tuning) + '\n'
+                self.viewer_text += 'with pitch tuning ' + str(pipe_pitch_tuning) + '\n'
 
             if metadata_dic['file_format'] == 'wave':
-                label_text += "Wav format\n"
+                self.viewer_text += "Wav format\n"
             elif metadata_dic['file_format'] == 'wavpack':
                 if is_audio_player_lib_present:
-                    label_text += "WavPack format\n"
+                    self.viewer_text += "WavPack format\n"
                 else:
-                    label_text += "WavPack format (audio file not played when using the OdfEdit executable file in Linux)\n"
+                    self.viewer_text += "WavPack format (audio file not played when using the OdfEdit executable file in Linux)\n"
 
             if metadata_dic['error_msg'] != '':
-                label_text += f"ERROR : {metadata_dic['error_msg']}\n"
+                self.viewer_text += f"ERROR : {metadata_dic['error_msg']}\n"
 
             if metadata_dic['metadata_recovered']:
-                label_text += "Mono" if metadata_dic['nb_of_channels'] == 1 else "Stereo"
-                label_text += f", sampling {metadata_dic['sampling_rate']} Hz"
-                label_text += f", resolution {metadata_dic['bits_per_sample']} bits"
-                label_text += f", duration {metadata_dic['audio_duration']:0.3f} sec. ({metadata_dic['nb_of_samples']} samples)"
-                label_text += '\n'
+                self.viewer_text += "Mono" if metadata_dic['nb_of_channels'] == 1 else "Stereo"
+                self.viewer_text += f", sampling {metadata_dic['sampling_rate']} Hz"
+                self.viewer_text += f", resolution {metadata_dic['bits_per_sample']} bits"
+                self.viewer_text += f", duration {metadata_dic['audio_duration']:0.3f} sec. ({metadata_dic['nb_of_samples']} samples)"
+                self.viewer_text += '\n'
 
                 if 'midi_note' in metadata_dic.keys():
                     if metadata_dic['midi_note'] == 0 and metadata_dic['midi_note'] == 0:
-                        label_text += 'Actual pitch : no pitch information provided.'
+                        self.viewer_text += 'Actual pitch : no pitch information provided.'
                     else:
-                        label_text += f"Actual pitch : MIDI note {metadata_dic['midi_note']} + {metadata_dic['midi_pitch_fract']:0.2f} cents"
-                        label_text += f" ({midi_nb_plus_cents_to_freq(metadata_dic['midi_note'], metadata_dic['midi_pitch_fract']):0.2f} Hz)"
-                    label_text += '\n'
+                        self.viewer_text += f"Actual pitch : MIDI note {metadata_dic['midi_note']} + {metadata_dic['midi_pitch_fract']:0.2f} cents"
+                        self.viewer_text += f" ({midi_nb_plus_cents_to_freq(metadata_dic['midi_note'], metadata_dic['midi_pitch_fract']):0.2f} Hz)"
+                    self.viewer_text += '\n'
 
                 if 'info' in metadata_dic.keys():
-                    label_text += '\n'
+                    self.viewer_text += '\n'
                     for key, value in metadata_dic['info'].items():
                         if key == 'IART':
-                            label_text += f"Artist : {value}\n"
+                            self.viewer_text += f"Artist : {value}\n"
                         elif key == 'ICOP':
-                            label_text += f"Copyright : {value}\n"
+                            self.viewer_text += f"Copyright : {value}\n"
                         elif key == 'ISFT':
-                            label_text += f"Software used : {value}\n"
+                            self.viewer_text += f"Software used : {value}\n"
                         elif key == 'ICMT':
-                            label_text += f"Comments : {value}\n"
+                            self.viewer_text += f"Comments : {value}\n"
                         elif key == 'ICRD':
-                            label_text += f"Date : {value}\n"
+                            self.viewer_text += f"Date : {value}\n"
                         else:
-                            label_text += f"{key} - {value}\n"
+                            self.viewer_text += f"{key} - {value}\n"
 
                 if 'loops_nb' in metadata_dic.keys():
-                    label_text += '\n'
+                    self.viewer_text += '\n'
                     for l in range(1, metadata_dic['loops_nb']+1):
-                        label_text += f"Loop {l} : {metadata_dic['loop'+str(l)+'_end_seconds'] - metadata_dic['loop'+str(l)+'_start_seconds']:0.3f} sec."
-                        label_text += f" ({metadata_dic['loop'+str(l)+'_start_seconds']:0.3f} -> {metadata_dic['loop'+str(l)+'_end_seconds']:0.3f})"
-                        label_text += f", {metadata_dic['loop'+str(l)+'_end_sample'] - metadata_dic['loop'+str(l)+'_start_sample']} samples"
-                        label_text += f" ({metadata_dic['loop'+str(l)+'_start_sample']} -> {metadata_dic['loop'+str(l)+'_end_sample']})"
-                        label_text += '\n'
+                        self.viewer_text += f"Loop {l} : {metadata_dic['loop'+str(l)+'_end_seconds'] - metadata_dic['loop'+str(l)+'_start_seconds']:0.3f} sec."
+                        self.viewer_text += f" ({metadata_dic['loop'+str(l)+'_start_seconds']:0.3f} -> {metadata_dic['loop'+str(l)+'_end_seconds']:0.3f})"
+                        self.viewer_text += f", {metadata_dic['loop'+str(l)+'_end_sample'] - metadata_dic['loop'+str(l)+'_start_sample']} samples"
+                        self.viewer_text += f" ({metadata_dic['loop'+str(l)+'_start_sample']} -> {metadata_dic['loop'+str(l)+'_end_sample']})"
+                        self.viewer_text += '\n'
 
                 if 'cue_points_nb' in metadata_dic.keys():
-                    label_text += '\n'
+                    self.viewer_text += '\n'
                     for c in range(1, metadata_dic['cue_points_nb']+1):
-                        label_text += f"Cue {c} : ID {metadata_dic['cue'+str(c)+'_id']}"
+                        self.viewer_text += f"Cue {c} : ID {metadata_dic['cue'+str(c)+'_id']}"
                         sample_nb = None
                         if metadata_dic['cue'+str(c)+'_sample_start'] > 0:
                             sample_nb = metadata_dic['cue'+str(c)+'_sample_start']
@@ -11162,82 +11272,81 @@ class C_GUI_NOTEBOOK():
                             sample_nb = metadata_dic['cue'+str(c)+'_position']
                         if sample_nb != None:
                             sample_sec = int(sample_nb * 1000 / metadata_dic['sampling_rate']) / 1000
-                            label_text += f", at {sample_sec} sec. (sample {sample_nb})"
+                            self.viewer_text += f", at {sample_sec} sec. (sample {sample_nb})"
 
-                        label_text += '\n'
+                        self.viewer_text += '\n'
 
-            label_text = label_text[:-1] # remove the ending carriage return
+            self.viewer_text = self.viewer_text[:-1] # remove the ending carriage return
 
         else:
             # it is not an audio sample file, stop the audio playback if one is in progress
             audio_player.stop()
 
-        if self.viewer_object_app == 'GO' and self.viewer_file_type != 'sample' and self.viewer_object_uid != None:
-            # a supported and existing image file is present in the given line of a GO object
-            # or a GO object is selected but no image file is selected in it
+        if self.viewer_object_app == 'GO' and self.viewer_content_type != 'sample' and self.viewer_object_uid != None:
+            # it is not an audio sample which has been given, and a GO object has been given, display images which are related to this object
 
             if (self.viewer_prev_object_uid == self.viewer_object_uid and
                 self.viewer_prev_file_name == self.viewer_file_name and
                 object_uid != 'previous'):
-                # there are no changes requiring an update of the images viewer
+                # there are no changes requiring an update of the images viewer and a force refresh is not requested by "previous"
                 return
 
-            self.viewer_images_list.clear()  # list which each element contains a tuple with (image object, image x, image y)
+            self.viewer_images_list.clear()  # list which each element contains a tuple with (object_uid, image object, image x, image y, image width, image height, is prio image flag)
             self.viewer_frame_dim = None
 
             object_type = self.odf_data.object_type_get(self.viewer_object_uid)
             parent_panel_uid = self.odf_data.object_parent_panel_get(self.viewer_object_uid)
 
             if object_type == 'Panel':
-                # recover images of PanelImage then other Panelxxx objects which are children of the given Panel object
-                # images of PanelImage objects are recovered first because usually they are used as background image, so they must be drawn first
+                # recover images of PanelImage object then images of Panelxxx objects which are children of the given Panel object
+                # images of PanelImage objects are recovered first because usually they are used as background images, so they must be drawn first
 
                 self.mouse_cursor_processing(True)
                 for child_obj_uid in self.odf_data.object_kinship_list_get(self.viewer_object_uid, TO_CHILD, 'PanelImage'):
-                    self.viewer_add_images(child_obj_uid, self.viewer_file_name)
+                    self.viewer_add_images(child_obj_uid, self.viewer_file_name, position_x, position_y, 1)
 
                 for child_obj_uid in self.odf_data.object_kinship_list_get(self.viewer_object_uid, TO_CHILD):
                     child_obj_type = self.odf_data.object_type_get(child_obj_uid)
                     if child_obj_type != 'PanelImage' and child_obj_type.startswith('Panel') :
-                        self.viewer_add_images(child_obj_uid, self.viewer_file_name)
+                        # the current child is a PanelElement / PanelSwitch / PanelStop / ... object
+                        self.viewer_add_images(child_obj_uid, self.viewer_file_name, position_x, position_y, 1)
 
             elif parent_panel_uid != None:
                 # the given object is child of a Panel object
-                # recover images of all objects which are children of this Panel object
-                # images which are not in the given object are displayed with a lowered brightness
-                # images of PanelImage objects are recovered first because usually they are used as background image, so they must be drawn first
+                # recover images of all children objects of this Panel
+                # images which are not in the given object are displayed with a reduced brightness
 
                 self.mouse_cursor_processing(True)
                 for child_obj_uid in self.odf_data.object_kinship_list_get(parent_panel_uid, TO_CHILD, 'PanelImage'):
                     if child_obj_uid == self.viewer_object_uid:
-                        self.viewer_add_images(child_obj_uid, self.viewer_file_name)
+                        self.viewer_add_images(child_obj_uid, self.viewer_file_name, position_x, position_y, 1)
                     else:
-                        self.viewer_add_images(child_obj_uid, brightness=0.3)
+                        self.viewer_add_images(child_obj_uid, None, None, None, 0.5)
 
-##                if object_type != 'PanelImage':
-                # do not recover images of other objects if the given one is a PanelImage, this permits to not hide parts of the background image by foreground images
                 for child_obj_uid in self.odf_data.object_kinship_list_get(parent_panel_uid, TO_CHILD):
                     child_obj_type = self.odf_data.object_type_get(child_obj_uid)
                     if child_obj_type != 'PanelImage' and child_obj_type.startswith('Panel') :
                         if child_obj_uid == self.viewer_object_uid:
-                            self.viewer_add_images(child_obj_uid, self.viewer_file_name)
+                            self.viewer_add_images(child_obj_uid, self.viewer_file_name, position_x, position_y, 1)
                         else:
-                            self.viewer_add_images(child_obj_uid, brightness=0.3)
+                            self.viewer_add_images(child_obj_uid, None, None, None, 0.5)
             else:
                 # not a Panel or Panel child object, recover the image defined in the given object if any
-                self.viewer_add_images(self.viewer_object_uid, self.viewer_file_name)
+                self.viewer_add_images(self.viewer_object_uid, self.viewer_file_name, position_x, position_y, 1)
 
-            # prepare the text to display the number of images
-            if self.viewer_file_type == 'image':
+            # prepare the text to display information about the image(s)
+            if self.viewer_content_type == 'image':
                 # a line with a valid image has been given
                 image = Image.open(self.viewer_file_name)
-                label_text = f'Image size {image.size[0]} x {image.size[1]} pixels, format {image.format}, colors mode {image.mode} {", can have transparency data" if image.has_transparency_data else ""}'
+                self.viewer_text = f'Image size {image.size[0]} x {image.size[1]} pixels, format {image.format}, colors mode {image.mode} {", can have transparency data" if image.has_transparency_data else ""}'
             elif len(self.viewer_images_list) > 1:
-                label_text = f'{len(self.viewer_images_list)} images are displayed'
+                self.viewer_text = f'{len(self.viewer_images_list)} images are displayed'
+                self.viewer_content_type = 'image'
             elif len(self.viewer_images_list) == 1:
-                label_text = 'One image is displayed'
+                self.viewer_text = 'One image is displayed'
+                self.viewer_content_type = 'image'
 
-        elif self.viewer_object_app == 'HW' and self.viewer_file_type == 'image':
+        elif self.viewer_object_app == 'HW' and self.viewer_content_type == 'image':
             # a supported and existing image file is present in the given line of a HW object : display this image
 
             if self.viewer_prev_file_name == self.viewer_file_name:
@@ -11246,30 +11355,34 @@ class C_GUI_NOTEBOOK():
 
             self.viewer_images_list.clear()
             self.viewer_frame_dim = None
-            self.viewer_add_images(None, self.viewer_file_name)
+            self.viewer_add_images(None, self.viewer_file_name, position_x, position_y, 1)
             image = Image.open(self.viewer_file_name)
-            label_text = f'Image size {image.size[0]} x {image.size[1]} pixels, format {image.format}, colors mode {image.mode} {", can have transparency data" if image.has_transparency_data else ""}'
+            self.viewer_text = f'Image size {image.size[0]} x {image.size[1]} pixels, format {image.format}, colors mode {image.mode} {", can have transparency data" if image.has_transparency_data else ""}'
+            self.viewer_content_type = 'image'
 
         else:
             self.viewer_images_list.clear()
             self.viewer_frame_dim = None
 
-        self.viewer_text = label_text
+        if self.viewer_content_type == None:
+            self.viewer_text = None
 
-        # draw the content of the viewer with a reset of the display settings if the first 8 characters of the object UID has changed (to ignore the data after Panel999)
-        reset = ((self.viewer_object_uid != None and self.viewer_prev_object_uid == None) or
-                 (self.viewer_object_uid != None and self.viewer_prev_object_uid != None and
-                  ((self.viewer_object_uid[:5] != self.viewer_prev_object_uid[:5]) or
-                   (self.viewer_object_uid[:5] == 'Panel' and self.viewer_prev_object_uid[5:8] != self.viewer_object_uid[5:8]) or
-                   (self.viewer_object_uid[:5] != 'Panel' and self.viewer_object_uid != self.viewer_prev_object_uid))))
+        # draw the content of the viewer with a reset of the display settings if one of the conditions below is fulfilled
+        reset = ((self.viewer_object_uid != None and self.viewer_prev_object_uid == None)    # no more object UID is selected
+                 or (self.viewer_content_type != self.viewer_prev_file_type)                 # change from image to wave type or vice-versa
+                 or (self.viewer_object_uid != None and self.viewer_prev_object_uid != None  # object UID defined before and now
+                     and ((self.viewer_object_uid[:5] != self.viewer_prev_object_uid[:5])                                                 # object type change
+                          or (self.viewer_object_uid[:5] == 'Panel' and self.viewer_prev_object_uid[5:8] != self.viewer_object_uid[5:8])  # Panel UID change
+                          or (self.viewer_object_uid[:5] != 'Panel' and self.viewer_object_uid != self.viewer_prev_object_uid))))         # other kind of object UID change
         self.viewer_draw(reset_settings=reset)
 
+        # store current values for being previous values at the next call
         self.viewer_prev_object_uid = self.viewer_object_uid
-        self.viewer_prev_file_type = self.viewer_file_type
+        self.viewer_prev_file_type = self.viewer_content_type
         self.viewer_prev_file_name = self.viewer_file_name
 
     #-------------------------------------------------------------------------------------------------
-    def viewer_add_images(self, object_uid, prio_image_file=None, brightness=1):
+    def viewer_add_images(self, object_uid, prio_image_file=None, position_x=None, position_y=None, brightness=1):
         # add in the viewer images list the Image or ImageOff or Bitmap001 present in the given object UID if any
         # if a priority image file name is given (image with full path), add this image instead of the one mentioned above
         # if brightness is different from 1, its value modifies the brightness of the image (increase if > 1, decrease if < 1)
@@ -11299,16 +11412,21 @@ class C_GUI_NOTEBOOK():
 
             if object_type == 'Manual' or (object_type == 'PanelElement' and self.odf_data.object_attr_value_get(object_uid, 'Type') == 'Manual'):
                 # special way to recover the images in case of a Manual
-                self.viewer_add_manual_images(object_uid, file_full_path, brightness)
+                self.viewer_add_manual_images(object_uid, file_full_path, position_x, position_y, brightness)
 
                 file_full_path = None # to prevent the prio image to be added at the end of this function
 
             elif file_full_path == None:
                 # no prio image has been given in parameter of this function
 
-                # check if it has the image attribute of a Button object
-                image_file = self.odf_data.object_attr_value_get(object_uid, 'ImageOff')
-                mask_file = self.odf_data.object_attr_value_get(object_uid, 'MaskOff')
+                if object_uid == self.viewer_object_uid:
+                    # check if it has the image ON attribute of a Button object if it is the given object UID
+                    image_file = self.odf_data.object_attr_value_get(object_uid, 'ImageOn')
+                    mask_file = self.odf_data.object_attr_value_get(object_uid, 'MaskOn')
+                else:
+                    # check if it has the image OFF attribute of a Button object
+                    image_file = self.odf_data.object_attr_value_get(object_uid, 'ImageOff')
+                    mask_file = self.odf_data.object_attr_value_get(object_uid, 'MaskOff')
 
                 if image_file == None:
                     # check if the given object has the image attribute of an Image or Label object
@@ -11331,30 +11449,47 @@ class C_GUI_NOTEBOOK():
 
             image = Image.open(file_full_path)
 
+            if image.size[0] <= 1 or image.size[1] <= 1:
+                # some sample sets have images having width and height at 1 pixel
+                return
+
             if mask_full_path != None and not os.path.isfile(mask_full_path):
+                # the mask file does not exist
                 mask_full_path = None
 
-            if ((image.has_transparency_data and image.mode != 'RGBA') or
-                (not image.has_transparency_data and mask_full_path == None)):
-                # the main image has transparency data and is not in RGBA mode
-                # or it has no transparency data and there is no mask image defined
-                # convert it in RGBA mode
+            if ('A' not in image.mode and (image.has_transparency_data or (not image.has_transparency_data and mask_full_path == None))):
+                # the main image seems to have no transparency channel, but it has transparency data actually (seen in some sample sets)
+                # or it has no transparency data and it may have it all the same and there is no mask defined (seen in some sample sets)
+                # convert it in RGBA mode to be able to use transparency data possible present in the image
                 image = image.convert('RGBA')
 
-            elif not image.has_transparency_data and mask_full_path != None:
-                # the main image has no alpha transparency and a mask image is defined, apply the mask
-                # convert the mask image in L format and invert its colors (black to white and white to black to be compatible with PILLOW)
-                mask = ImageOps.invert(Image.open(mask_full_path).convert('L'))
-                # apply the mask to the main image
-                image.putalpha(mask)
+            if image.mode not in ('P', 'L'):
+                # with images in modes P or L PIL cannot apply a mask or change the brightness
+                if not image.has_transparency_data and mask_full_path != None:
+                    # the main image has no alpha transparency and a mask image is defined, apply the mask
+                    mask = Image.open(mask_full_path)
+                    if mask.mode != 'L' and image.size == mask.size:
+                        # masks in L mode are causing a crash of PIL in putalpha()
+                        # mask and image must have the same size
+                        # convert the mask in mode 1 (1-bit pixels, black and white) and invert it (blank for passthrough pixels, black for blocking pixels)
+                        # before to apply it to the image to add a transparency in it
+                        image.putalpha(ImageOps.invert(mask.convert('1')))
 
-            # apply a brightness change to the image if requested
-            if brightness != 1:
-                image = ImageEnhance.Brightness(image).enhance(brightness)
+                # apply a brightness change to the image if requested
+                if brightness != 1:
+                    image = ImageEnhance.Brightness(image).enhance(brightness)
 
             # recover the defined coordinates and size of the image
-            image_x = myint(self.odf_data.object_attr_value_get(object_uid, 'PositionX'), 0)
-            image_y = myint(self.odf_data.object_attr_value_get(object_uid, 'PositionY'), 0)
+            if position_x != None:
+                image_x = position_x
+            else:
+                image_x = myint(self.odf_data.object_attr_value_get(object_uid, 'PositionX'), 0)
+
+            if position_y != None:
+                image_y = position_y
+            else:
+                image_y = myint(self.odf_data.object_attr_value_get(object_uid, 'PositionY'), 0)
+
             image_width  = myint(self.odf_data.object_attr_value_get(object_uid, 'Width'), image.size[0])
             image_height = myint(self.odf_data.object_attr_value_get(object_uid, 'Height'), image.size[1])
 
@@ -11362,17 +11497,17 @@ class C_GUI_NOTEBOOK():
                 # if the defined image size is different from the actual image bitmap size, resize it to the defined values
                 image = image.resize((image_width, image_height))
 
-            # add the image to the viewer images list with other data in a tupple if the image has horizontal and vertical sizes > 1
-            if image.size[0] > 1 and image.size[1] > 1:
-                self.viewer_images_list.append((image, image_x, image_y, image_width, image_height, prio_image_file != None or brightness == 1))
+            # add the image to the viewer images list with other data in a tupple if the image has horizontal and vertical sizes > 1 (seen in some sample sets)
+            self.viewer_images_list.append((object_uid, image, image_x, image_y, image_width, image_height, prio_image_file != None or object_uid == self.viewer_object_uid))
 
     #-------------------------------------------------------------------------------------------------
-    def viewer_add_manual_images(self, object_uid, prio_image_file=None, brightness=1):
-        # add in the viewer images list the images present in the given object UID if any (when it is a Manual or PanelElement with manual type)
+    def viewer_add_manual_images(self, object_uid, prio_image_file=None, position_x=None, position_y=None, brightness=1):
+        # add in the viewer images list the images present in the given manual UID if any (can be Manual or PanelElement with manual type object)
 
         object_type = self.odf_data.object_type_get(object_uid)
 
         if object_type == 'PanelElement':
+            # get the Manuel UID object defined in the PanelElement
             manual_uid = self.odf_data.object_parent_manual_get(object_uid)
         else:
             manual_uid = object_uid
@@ -11384,15 +11519,22 @@ class C_GUI_NOTEBOOK():
             keys_nb = myint(self.odf_data.object_attr_value_get(object_uid, 'DisplayKeys'), keys_nb)
         else:
             keys_nb = 0
+            manual_type = None
 
         # recover the MIDI note of the first accessible key of the manual
         first_midi_note = myint(self.odf_data.object_attr_value_get(manual_uid, 'FirstAccessibleKeyMIDINoteNumber'), 0)
         first_midi_note = myint(self.odf_data.object_attr_value_get(object_uid, 'DisplayFirstNote'), first_midi_note)
-        last_midi_note = first_midi_note + keys_nb - 1
 
         # recover the position of the manual
-        manual_x = myint(self.odf_data.object_attr_value_get(object_uid, 'PositionX'))
-        manual_y = myint(self.odf_data.object_attr_value_get(object_uid, 'PositionY'))
+        if position_x != None:
+            manual_x = position_x
+        else:
+            manual_x = myint(self.odf_data.object_attr_value_get(object_uid, 'PositionX'))
+
+        if position_y != None:
+            manual_y = position_y
+        else:
+            manual_y = myint(self.odf_data.object_attr_value_get(object_uid, 'PositionY'))
 
         if keys_nb == 0 or first_midi_note == 0 or manual_x == None or manual_y == None:
             # data are missing to continue the function
@@ -11563,27 +11705,31 @@ class C_GUI_NOTEBOOK():
                 # open the main image
                 image = Image.open(key_dic['bitmap'])
 
-                if ((image.has_transparency_data and image.mode != 'RGBA') or
-                    (not image.has_transparency_data and key_dic['mask'] in (None, ''))):
-                    # the main image has transparency data and is not in RGBA mode
-                    # or it has no transparency data and there is no mask image defined
-                    # convert it in RGBA mode
-                    image = image.convert('RGBA')
-
-                elif not image.has_transparency_data and key_dic['mask'] not in (None, ''):
-                    # the main image has no alpha transparency and a mask image is defined, apply the mask
-                    # convert the mask image in L format and invert its colors (black to white and white to black to be compatible with PILLOW)
-                    mask = ImageOps.invert(Image.open(key_dic['mask']).convert('L'))
-                    # apply the mask to the main image
-                    image.putalpha(mask)
-
-                # apply a brightness change to the image if requested
-                if brightness != 1:
-                    image = ImageEnhance.Brightness(image).enhance(brightness)
-
-                # add the image to the viewer images list, in a tupple
                 if image.size[0] > 1 and image.size[1] > 1:
-                    self.viewer_images_list.append((image, manual_x + key_dic['x_offset'], manual_y + key_dic['y_offset'], image.size[0], image.size[1], key_dic['is_prio'] or brightness == 1))
+                    if ('A' not in image.mode and (image.has_transparency_data or (not image.has_transparency_data and key_dic['mask'] in (None, '')))):
+                        # the main image seems to have no transparency channel, but it has transparency data actually (seen in some sample sets)
+                        # or it has no transparency data and it may have it all the same and there is no mask defined (seen in some sample sets)
+                        # convert it in RGBA mode to be able to use transparency data possible present in the image
+                        image = image.convert('RGBA')
+
+                    if image.mode not in ('P', 'L'):
+                        # with images in modes P / L PIL cannot apply a mask or change the brightness
+                        if not image.has_transparency_data and key_dic['mask'] not in (None, ''):
+                            # the main image has no alpha transparency and a mask image is defined, apply the mask
+                            mask = Image.open(key_dic['mask'])
+                            if mask.mode != 'L' and image.size == mask.size:
+                                # masks in L mode are causing a crash of PIL in putalpha()
+                                # mask and image must have the same size
+                                # convert the mask in mode 1 (1-bit pixels, black and white) and invert it (blank for passthrough pixels, black for blocking pixels)
+                                # before to apply it to the image to add a transparency in it
+                                image.putalpha(ImageOps.invert(mask.convert('1')))
+
+                        # apply a brightness change to the image if requested
+                        if brightness != 1:
+                            image = ImageEnhance.Brightness(image).enhance(brightness)
+
+                    # add the image to the viewer images list, in a tupple
+                    self.viewer_images_list.append((object_uid, image, manual_x + key_dic['x_offset'], manual_y + key_dic['y_offset'], image.size[0], image.size[1], key_dic['is_prio'] or brightness == 1))
 
             if key_dic['width'] != None:
                 # use the key width to know the x position of the next key
@@ -11591,13 +11737,17 @@ class C_GUI_NOTEBOOK():
 
     #-------------------------------------------------------------------------------------------------
     def viewer_draw(self, event=None, reset_settings=False):
-        # (GUI event callback) the user has turned the mouse wheel inside the viewer canvas or the viewer content has to be (re)drawn
+        # (GUI event callback) the user has turned the mouse wheel inside the viewer canvas or the viewer content has to be (re)drawn for viewer update
         # the viewer is composed by a text area at the top, then below the text a canvas if images have to be displayed
 
-        if len(self.viewer_images_list) > 0:
-            # there is at least one image to display
+        # flag saying that the viewer has at least one image to display
+        self.viewer_displays_image = len(self.viewer_images_list) > 0
 
-            # manage a mouse scrolling event if any
+        if self.viewer_displays_image:
+
+            self.mouse_cursor_processing(True)
+
+            # manage a mouse scrolling event if provided
             zoom_changed = False
             if event != None and event.type in ('38', '4'):
                 # mouse wheel rotation : event.type = 38 (Windows) or 4 (Linux)
@@ -11606,11 +11756,13 @@ class C_GUI_NOTEBOOK():
                 if event.delta > 0 or event.num == 4:
                     # mouse wheel rotation up : event.delta > 0 (Windows) or event.num = 4 (Linux)
                     # images zoom-in
-                    self.canvas_zoom_factor = min(6, self.canvas_zoom_factor + 0.1)
+                    self.canvas_zoom_factor = min(6.0, self.canvas_zoom_factor + 0.3)
                 else:
                     # mouse wheel rotation down : event.delta < 0 (Windows) or event.num = 5 (Linux)
                     # images zoom-out
                     self.canvas_zoom_factor = max(0.2, self.canvas_zoom_factor - 0.1)
+                # round the zoom factor to one decimal place
+                self.canvas_zoom_factor = round(self.canvas_zoom_factor, 1)
 
                 # recover the coordinates in the canvas area where is placed the mouse cursor
                 x_canvas_mouse = self.view_canvas.canvasx(event.x)
@@ -11628,32 +11780,32 @@ class C_GUI_NOTEBOOK():
                 frame_width = self.viewer_images_list[0][3]
                 frame_height = self.viewer_images_list[0][4]
 
-            # reset the display settings (the display zoom and canvas position) if requested
+            # reset the display settings (zoom and canvas position) if requested
             if reset_settings:
-                # reset the canvas position and zoom
                 self.view_canvas.xview(tk.MOVETO, 0)
                 self.view_canvas.yview(tk.MOVETO, 0)
-                self.canvas_zoom_factor = 1
-                zoom_changed = False  # to not scroll the canvas position at the end of the function
+                self.canvas_zoom_factor = 1.0
+                zoom_changed = False  # to not scroll the canvas position at the end of this function
 
-                # if an outer frame is defined, set the zoom so that the frame is entirely visible in width and height in the viewer
+                # adjust the zoom factor so that the image(s) to display is touching the borders of the canvas area
                 if frame_width / frame_height > self.view_canvas.winfo_width() / self.view_canvas.winfo_height():
                     # the frame is more wide than high with respect to the canvas dimensions ratio
-                    if frame_width > self.view_canvas.winfo_width() - 20:
-                        self.canvas_zoom_factor = (self.view_canvas.winfo_width() - 20) / frame_width
+                    if frame_width > self.view_canvas.winfo_width() - VW_MARG*2:
+                        self.canvas_zoom_factor = (self.view_canvas.winfo_width() - VW_MARG*2) / frame_width
                 else:
-                    if frame_height > self.view_canvas.winfo_height() - 20:
-                        self.canvas_zoom_factor = (self.view_canvas.winfo_height() - 20) / frame_height
+                    if frame_height > self.view_canvas.winfo_height() - VW_MARG*2:
+                        self.canvas_zoom_factor = (self.view_canvas.winfo_height() - VW_MARG*2) / frame_height
 
         # prepare the text to display at the top of the viewer
         if self.viewer_text == None:
             displayed_text  = 'Click in the text editor on a line where is defined a valid image or audio sample file,'
-            displayed_text += '\nor select a section which has image(s) defined inside it or its children sections.'
-        elif len(self.viewer_images_list) > 0:
+            displayed_text += '\nor select a section which has valid image(s) defined inside it or its children sections.'
+        elif self.viewer_displays_image:
             # there are images to display, add to the text to display the images zoom factor and some instructions
-            displayed_text = f'Zoom x{self.canvas_zoom_factor:.2f} (use mouse drag/wheel to move/zoom the image, mouse double click to reset position and zoom)'
-            if len(self.viewer_text) > 0 :
-                displayed_text = self.viewer_text + '\n' + displayed_text
+            displayed_text = self.viewer_text
+            displayed_text += f'  -  Zoom x{self.canvas_zoom_factor:.2f} (use mouse wheel to change zoom)'
+            displayed_text += '\n(use mouse left drag to move all images, double click to reset images position and zoom)'
+            displayed_text += '\n(use mouse right click to select/unselect one image and its section, drag to move this image)'
         else:
             displayed_text = self.viewer_text
 
@@ -11663,24 +11815,29 @@ class C_GUI_NOTEBOOK():
         # clear the content of the canvas
         self.view_canvas.delete('all')
 
-        # show frame and the images in the canvas
-        if len(self.viewer_images_list) > 0:
+        if self.viewer_displays_image:
+
+            # show the frame and the images in the canvas
+
+            self.viewer_disp_images_list.clear()
 
             # show the frame in the canvas if its dimensions are defined
             if self.viewer_frame_dim != None:
-                self.view_canvas.create_rectangle(10, 10, 10 + frame_width * self.canvas_zoom_factor, 10 + frame_height * self.canvas_zoom_factor, outline='grey80', fill='grey80')
-
-            self.viewer_scaled_images_list = []
-
+                self.view_canvas.create_rectangle(VW_MARG, VW_MARG, VW_MARG + frame_width * self.canvas_zoom_factor,
+                                                                                VW_MARG + frame_height * self.canvas_zoom_factor, outline='grey80', fill='grey80', tag="frame")
             # add the images in the canvas, starting by the non prioritary one
             for is_prio in (False, True):
-                for image, image_x, image_y, width, height, is_prio_image in self.viewer_images_list:
+                for object_uid, image, image_x, image_y, width, height, is_prio_image in self.viewer_images_list:
                     # scan the images to display
                     if is_prio_image == is_prio:
-                        # scale the current image to match to the zoom factor
-                        self.viewer_scaled_images_list.append(ImageTk.PhotoImage(ImageOps.scale(image, self.canvas_zoom_factor)))
+                        if self.canvas_zoom_factor != 1:
+                            # scale the current image to match to the zoom factor
+                            self.viewer_disp_images_list.append(ImageTk.PhotoImage(ImageOps.scale(image, self.canvas_zoom_factor)))
+                        else:
+                            self.viewer_disp_images_list.append(ImageTk.PhotoImage(image))
                         # add the image to the canvas
-                        self.view_canvas.create_image(10 + image_x * self.canvas_zoom_factor, 10 + image_y * self.canvas_zoom_factor, anchor=tk.NW, image=self.viewer_scaled_images_list[-1])
+                        self.view_canvas.create_image(VW_MARG + image_x * self.canvas_zoom_factor, VW_MARG + image_y * self.canvas_zoom_factor,
+                                                                  anchor=tk.NW, image=self.viewer_disp_images_list[-1], tag=object_uid)
 
             # if the canvas display zoom has been changed, scroll the canvas position so that the mouse cursor is still on the same place in the canvas after the zoom change
             if zoom_changed:
@@ -11696,20 +11853,159 @@ class C_GUI_NOTEBOOK():
         self.mouse_cursor_processing(False)
 
     #-------------------------------------------------------------------------------------------------
-    def viewer_drag(self, event):
-        # (GUI event callback) the user has dragged the viewer content
+    def viewer_click_left(self, event):
+        # (GUI event callback) the user has clicked on the viewer with the mouse left button
 
-        if len(self.viewer_images_list) > 0:
+        # mark the current mouse coordinate as the start of the scan mode
+        self.view_canvas.scan_mark(event.x, event.y)
+
+    #-------------------------------------------------------------------------------------------------
+    def viewer_drag_left(self, event):
+        # (GUI event callback) the user has dragged the mouse in the viewer with the left button
+
+        if self.viewer_displays_image:
             # there are images displayed, drag them to follow the mouse move
             self.view_canvas.scan_dragto(event.x, event.y, gain=1)
 
     #-------------------------------------------------------------------------------------------------
-    def viewer_double_click(self, event):
-        # (GUI event callback) the user has double-clicked on the viewer
+    def viewer_dblclick_left(self, event):
+        # (GUI event callback) the user has double-clicked on the viewer with the left button
 
-        if len(self.viewer_images_list) > 0:
-            # redraw it with a reset of its display settings
+        if self.viewer_displays_image:
+            # redraw the viewer with a reset of its display settings
             self.viewer_draw(reset_settings=True)
+
+    #-------------------------------------------------------------------------------------------------
+    def viewer_click_right(self, event):
+        # (GUI event callback) the user has clicked on the viewer with the mouse right button
+
+        if self.viewer_displays_image and self.selected_object_app == 'GO':
+
+            # recover the coordinates in the canvas area where is placed the mouse cursor
+            x_canvas_mouse = self.view_canvas.canvasx(event.x)
+            y_canvas_mouse = self.view_canvas.canvasy(event.y)
+
+            self.object_drag_x0 = self.object_drag_x = x_canvas_mouse
+            self.object_drag_y0 = self.object_drag_y = y_canvas_mouse
+            self.object_dragged = False
+
+            # recover the canvas object ID of the objects displayed under the mouse cursor
+            object_uid = None
+            overlapping_ids_list = self.view_canvas.find_overlapping(x_canvas_mouse, y_canvas_mouse, x_canvas_mouse, y_canvas_mouse)
+            if len(overlapping_ids_list) > 0:
+                # get the ID of the object displayed at the highest level (last of the list)
+                object_id = overlapping_ids_list[-1]
+
+                # get the UID of this object
+                object_uid = self.view_canvas.gettags(object_id)[0]
+                if object_uid == 'frame':
+                    object_uid = None
+
+            if object_uid == None and self.viewer_object_uid.startswith('Panel'):
+                # in case of a click outside the images area, simulates a click on the parent panel if any
+                object_uid = self.viewer_object_uid[:8]
+
+            call_clickrel = False
+            if self.txt_object_text.edit_modified() and (object_uid != self.edited_object_uid or object_uid == None):
+                # the user has clicked on another object than the one currently edited which has been modified
+                # ask to the user if he wants to save his modifications
+                answer = AskUserAnswerQuestion(self.wnd_main, "OdfEdit", f"Do you want to apply changes made in {self.edited_object_uid} ?", ['Yes', 'No'], 'No')
+                if answer == 'Yes':
+                    self.object_text_changes_apply()
+                # set a flag to call viewer_clickrel_right to take into account the click on the new image once the dragged UID will have been set
+                call_clickrel = True
+
+            if object_uid != None:
+                # an image has been clicked, update the viewer to highlight this image
+                self.viewer_update(object_uid)
+                self.dragged_object_uid = object_uid
+                self.dragged_object_id_list = self.view_canvas.find_withtag(self.dragged_object_uid)
+            else:
+                self.dragged_object_uid = None
+                self.dragged_object_id_list.clear()
+
+            # start a timer to engage the image drag only after a certain time after the click press
+            self.click_right_start_time = time.time()
+
+            if call_clickrel:
+                self.viewer_clickrel_right(event)
+
+    #-------------------------------------------------------------------------------------------------
+    def viewer_drag_right(self, event):
+        # (GUI event callback) the user has dragged the mouse in the viewer with the left button
+
+        if self.dragged_object_uid != None and time.time() - self.click_right_start_time > 0.2:
+            # there are images to drag and the mouse unwanted move filtering time is passed
+
+            x_canvas_mouse = self.view_canvas.canvasx(event.x)
+            y_canvas_mouse = self.view_canvas.canvasy(event.y)
+
+            for object_id in self.dragged_object_id_list:
+                self.view_canvas.move(object_id, x_canvas_mouse - self.object_drag_x, y_canvas_mouse - self.object_drag_y)
+
+            self.object_drag_x = x_canvas_mouse
+            self.object_drag_y = y_canvas_mouse
+            self.object_dragged = True
+
+    #-------------------------------------------------------------------------------------------------
+    def viewer_clickrel_right(self, event):
+        # (GUI event callback) the user has released the click on the viewer with the mouse right button
+
+        if self.dragged_object_uid != None:
+            object_uid = self.dragged_object_uid  #self.view_canvas.gettags(self.dragged_object_id_list[0])
+
+            if self.object_dragged:
+                # recover the new position of the dragged object
+
+                # compute by how many pixels the image has been dragged
+                delta_x = int((self.object_drag_x - self.object_drag_x0) / self.canvas_zoom_factor)
+                delta_y = int((self.object_drag_y - self.object_drag_y0) / self.canvas_zoom_factor)
+
+                # compute the new coordinates of the image
+                image_x = myint(self.odf_data.object_attr_value_get(self.dragged_object_uid, 'PositionX'), 0)
+                image_y = myint(self.odf_data.object_attr_value_get(self.dragged_object_uid, 'PositionY'), 0)
+
+                # update the position of the image(s) of the object UID in the images list as viewer_update will not do it (object_uid unchanged)
+                for image_nb, image_descr in enumerate(self.viewer_images_list):
+                    if image_descr[0] == self.dragged_object_uid:
+                        self.viewer_images_list[image_nb] = (image_descr[0], image_descr[1], image_descr[2] + delta_x, image_descr[3] + delta_y, image_descr[4], image_descr[5], image_descr[6])
+                                                           # object_uid,     image,          image_x,                  image_y,                  width,          height,         is_prio_image
+
+            elif self.dragged_object_uid == self.edited_object_uid and self.viewer_object_uid.startswith('Panel'):
+                # image not dragged and already selected before the right click : unselect the current object and select instead its parent panel
+                object_uid = self.viewer_object_uid[:8]
+
+                if self.txt_object_text.edit_modified() and (object_uid != self.edited_object_uid):
+                    # the user has made modifications in the current object
+                    answer = AskUserAnswerQuestion(self.wnd_main, "OdfEdit", f"Do you want to apply changes made in {self.edited_object_uid} ?", ['Yes', 'No'], 'No')
+                    if answer == 'Yes':
+                        self.object_text_changes_apply()
+                    else:
+                        self.object_text_update()
+
+            # select the object UID in the editor
+            if self.selected_linked_uid == None or (object_uid != None and object_uid[:5] != 'Panel'):
+                self.selected_object_uid = object_uid
+                self.edited_object_uid = object_uid
+            else:
+                self.selected_object_uid = object_uid[:8]
+                self.edited_object_uid = object_uid
+                self.selected_linked_uid = object_uid
+            self.focused_sel_item_id = object_uid
+
+            # update the objects list / tree / text and buttons states
+            self.object_text_update()
+            self.object_links_list_update()
+            self.gui_status_update_buttons()
+            self.gui_status_update_lists(True)
+
+            if self.object_dragged:
+                # write the new coordinates of the image in the edited text of its object
+                self.object_text_attr_set('PositionX', image_x + delta_x)
+                self.object_text_attr_set('PositionY', image_y + delta_y)
+
+        self.dragged_object_uid = None
+
 
     #-------------------------------------------------------------------------------------------------
     def viewer_close(self):
@@ -11900,7 +12196,6 @@ class C_GUI(C_GUI_NOTEBOOK):
     opened_objects_iid_list = []   # list of the objects tree nodes iid which are opened
 
     odf_data_changed = False       # flag indicating that data have been changed in the odf_data and not saved in an ODF
-    edited_object_changed = False  # flag indicating that data have been changed in the object currently edited (and not yet applied in odf_data)
 
     is_loading = False             # flag set at True if an ODF loading/conversion is in progress
     is_loaded_odf = False          # flag set at True if an ODF is loaded
@@ -11908,11 +12203,10 @@ class C_GUI(C_GUI_NOTEBOOK):
 
     gui_events_blocked = False     # flag indicating that the GUI events are currently blocked
 
-    text_to_search = None       # text which has to be searched in the help
-    search_index = None         # last search result position in the help
-
     odf_check_files_names = None   # flag indicating if files names have to be checked or not during the ODF data check
-                                   # None means that the question has not been asked to the user
+                                   # None means that the question has to be done to the user when he will start a check
+
+    menu_closing_time = 0          # time at which the menu has been closed lastly
 
     # application data which are saved at application close and restored at application start
 
@@ -11950,7 +12244,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.focused_sel_item_id = None
 
         self.odf_data_changed = False
-        self.edited_object_changed = False
+        self.txt_object_text.edit_modified(False)
 
         self.odf_data.reset_all_data()
         self.odf_hw2go.reset_all_data()
@@ -11990,12 +12284,12 @@ class C_GUI(C_GUI_NOTEBOOK):
         icon = tk.PhotoImage(file = os.path.dirname(__file__) + os.path.sep + 'resources' + os.path.sep + 'OdfEdit.png')
         self.wnd_main.iconphoto(True, icon)
 
-        # define the style of tk widgets
+        # define the styles of tk widgets used in the application (Text, Entry, Listbox, Canvas, PhotoImage, Menu, PanedWindow, Toplevel)
         self.wnd_main.option_add('*TCombobox*tk.Listbox*Background', COLOR_BG_LIST)
         self.wnd_main.option_add('*TCombobox*tk.Listbox*Foreground', TEXT_COLOR)
         self.wnd_main.option_add('*Dialog.msg.font', TEXT_FONT)
 
-        # define the style of ttk widgets
+        # define the styles of ttk widgets used in the application (Frame, Button, Checkbutton, Radiobutton, Label, Combobox, Scrollbar, Treeview, Notebook)
         self.wnd_main.style = ttk.Style()
         self.wnd_main.style.theme_use('alt')
 
@@ -12003,6 +12297,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.wnd_main.style.map('Treeview', background=[('selected', COLOR_SELECTED_ITEM)])
 
         self.wnd_main.style.configure('TFrame', background=COLOR_BACKGROUND0)
+
         self.wnd_main.style.configure('TLabel',  font=TEXT_FONT, background=COLOR_BACKGROUND0)
 
         self.wnd_main.style.configure('TNotebook', background=COLOR_BACKGROUND0)
@@ -12011,12 +12306,17 @@ class C_GUI(C_GUI_NOTEBOOK):
                                                  focuscolor=COLOR_BACKGROUND1)
 
         self.wnd_main.style.configure('TButton', font=TEXT_FONT, focuscolor=COLOR_BACKGROUND1, background=COLOR_BACKGROUND1)
-        self.wnd_main.style.configure('Return.TButton', font=TEXT_FONT_BOLD)
-        self.wnd_main.style.configure('RedText.TButton', foreground='red')
-        self.wnd_main.style.configure('ReliefGroove.TButton', relief='groove')
         self.wnd_main.style.map('TButton', foreground=[('disabled', 'grey'), ('active', TEXT_COLOR)],
                                            background=[('disabled', COLOR_BACKGROUND0), ('active', COLOR_BACKGROUND2)],
-                                           focuscolor=[('active', COLOR_BACKGROUND2)])
+                                           focuscolor=[('active', COLOR_BACKGROUND2), ('disabled', COLOR_BACKGROUND0)])
+
+        self.wnd_main.style.configure('Bold.TButton', font=TEXT_FONT_BOLD)
+        self.wnd_main.style.configure('RedText.TButton', foreground='red')
+        self.wnd_main.style.configure('ReliefGroove.TButton', relief=tk.GROOVE)
+
+        self.wnd_main.style.configure('ReliefFlat.TButton', background=COLOR_BACKGROUND0, focuscolor=[('active', COLOR_BACKGROUND2), ('disabled', COLOR_BACKGROUND0)])
+        self.wnd_main.style.map('ReliefFlat.TButton', relief=[('pressed', 'flat'), ('!pressed', 'flat')])
+
 
         self.wnd_main.style.configure('TCheckbutton', font=TEXT_FONT, focuscolor=COLOR_BACKGROUND1, background=COLOR_BACKGROUND0)
         self.wnd_main.style.map('TCheckbutton', background=[('active', COLOR_BACKGROUND2), ('selected', COLOR_BACKGROUND0), ('!selected', COLOR_BACKGROUND0)],
@@ -12055,47 +12355,9 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.frm_top = ttk.Frame(self.wnd_main)
         self.frm_top.pack(side=tk.TOP, fill=tk.X)
 
-        # button 'New'
-        self.btn_odf_new = ttk.Button(self.frm_top, text='New', width=7, command=self.file_new)
-        self.btn_odf_new.pack(side=tk.LEFT, padx=7, pady=5)
-        ToolTip(self.btn_odf_new, 'Clear all existing data to create a new ODF from scratch.')
-
-        # button 'Open'
-        self.btn_odf_open = ttk.Button(self.frm_top, text='Open...', width=10, command=self.file_open)
-        self.btn_odf_open.pack(side=tk.LEFT, padx=0, pady=5)
-        ToolTip(self.btn_odf_open, 'Load a GrandOrgue ODF (extension .organ) or a Hauptwerk ODF (extension .Organ_Hauptwerk_xml or .xml).')
-
-        # button to open the recently opened ODFs list (showing the character ▼ unicode 25BC)
-        self.btn_odf_open_last = ttk.Button(self.frm_top, text='\u25BC', width=2, command=self.recent_odf_list_open)
-        self.btn_odf_open_last.pack(side=tk.LEFT, padx=0, pady=5)
-        ToolTip(self.btn_odf_open_last, 'Show the list of recently opened ODF permitting to open one of them.')
-
-        # list showing the last opened ODFs (is build in the function recent_odf_list_open)
-        self.lst_recent_odf = None
-
-        # button 'Reload'
-        self.btn_odf_reload = ttk.Button(self.frm_top, text='Reload', width=10, command=self.file_reload)
-        self.btn_odf_reload.pack(side=tk.LEFT, padx=3, pady=5)
-        ToolTip(self.btn_odf_reload, 'Reload from the storage the ODF currently opened.')
-
-        # button 'Save'
-        self.btn_odf_save = ttk.Button(self.frm_top, text='Save', style='RedText.TButton', width=7, state=tk.DISABLED, command=self.file_save)
-        self.btn_odf_save.pack(side=tk.LEFT, padx=3, pady=5)
-        ToolTip(self.btn_odf_save, 'Save in a GrandOrgue ODF the changes done in the edited ODF.')
-
-        # button 'Save as...'
-        self.btn_odf_saveas = ttk.Button(self.frm_top, text='Save as...', style='RedText.TButton', width=10, state=tk.DISABLED, command=self.file_saveas)
-        self.btn_odf_saveas.pack(side=tk.LEFT, padx=0, pady=5)
-        ToolTip(self.btn_odf_saveas, 'Save in a new GrandOrgue ODF the changes done in the edited ODF.')
-
-        # button 'Check ODF data'
-        self.btn_data_check = ttk.Button(self.frm_top, text='ODF data check', width=15, state=tk.DISABLED, command=self.odf_data_check)
-        self.btn_data_check.pack(side=tk.LEFT, padx=7, pady=5)
-        ToolTip(self.btn_data_check, 'Execute checks in the edited ODF data (syntax, compliance with the specification). Not as exhaustively as GrandOrgue does.')
-
         # button 'Menu' and general menu
-        self.btn_gen_menu = ttk.Button(self.frm_top, text='≡', width=3, command=self.gen_menu_open)
-        self.btn_gen_menu.pack(side=tk.LEFT, padx=2, pady=5)
+        self.btn_gen_menu = ttk.Button(self.frm_top, text='☰', width=3, style='ReliefFlat.TButton', command=lambda: self.gen_menu_open('button'))
+        self.btn_gen_menu.pack(side=tk.LEFT, padx=(3, 0), pady=5)
 
         self.general_menu = tk.Menu(self.btn_gen_menu, tearoff=0, background=COLOR_BACKGROUND1, foreground=TEXT_COLOR, activebackground=COLOR_BACKGROUND2, activeforeground=TEXT_COLOR)
         self.general_menu.add_checkbutton(label='Save ODF with ISO-8859-1 encoding (else UTF-8-BOM)', onvalue=ENCODING_ISO_8859_1, offvalue=ENCODING_UTF8_BOM, variable=self.odf_save_encoding, command=self.gen_menu_open)
@@ -12110,16 +12372,53 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.general_menu.add_checkbutton(label='HW to GO - correct pipes pitch from samples file name', onvalue=True, offvalue=False, variable=self.hw2go_pitch_tuning_filename_bool, command=self.gen_menu_open)
         self.general_menu.add_checkbutton(label='HW to GO - correct pipes pitch from samples metadata', onvalue=True, offvalue=False, variable=self.hw2go_pitch_tuning_metadata_bool, command=self.gen_menu_open)
         self.general_menu.add_separator()
-        self.general_menu.add_command(label='Clear logs', command=self.logs_clear)
         self.general_menu.add_command(label='Clear last opened ODF list', command=self.recent_odf_list_clear)
         self.general_menu.add_command(label='About...', command=self.gen_menu_about)
 
-        # button 'Quit'
-        self.btn_quit_appli = ttk.Button(self.frm_top, text='Quit', style='ReliefGroove.TButton', width=7, command=self.wnd_main_quit)
-        self.btn_quit_appli.pack(side=tk.LEFT, padx=7, pady=5)
+        # button 'Open'
+        self.btn_odf_open = ttk.Button(self.frm_top, text='Open...', width=10, command=self.file_open)
+        self.btn_odf_open.pack(side=tk.LEFT, padx=(3,0), pady=5)
+        ToolTip(self.btn_odf_open, 'Load a GrandOrgue ODF for editing, or Hauptwerk ODF for conversion in a GrandOrgue ODF.')
+
+        # button to open the recently opened ODFs list
+        self.btn_odf_open_last = ttk.Button(self.frm_top, text='▼', width=2, command=self.recent_odf_list_open)
+        self.btn_odf_open_last.pack(side=tk.LEFT, padx=(0,3), pady=5)
+        ToolTip(self.btn_odf_open_last, 'Show list of recently edited ODFs to load one.')
+
+        # list showing the last opened ODFs (it is build in the function recent_odf_list_open)
+        self.lst_recent_odf = None
+
+        # button 'Reload'
+        self.btn_odf_reload = ttk.Button(self.frm_top, text='Reload', width=10, command=self.file_reload)
+        self.btn_odf_reload.pack(side=tk.LEFT, padx=3, pady=5)
+        ToolTip(self.btn_odf_reload, 'Reload from the hard disk the ODF currently edited.')
+
+        # button 'Save'
+        self.btn_odf_save = ttk.Button(self.frm_top, text='Save', style='RedText.TButton', width=7, state=tk.DISABLED, command=self.file_save)
+        self.btn_odf_save.pack(side=tk.LEFT, padx=3, pady=5)
+        ToolTip(self.btn_odf_save, 'Save changes done in the edited ODF.')
+
+        # button 'Save as...'
+        self.btn_odf_saveas = ttk.Button(self.frm_top, text='Save as...', style='RedText.TButton', width=10, state=tk.DISABLED, command=self.file_saveas)
+        self.btn_odf_saveas.pack(side=tk.LEFT, padx=3, pady=5)
+        ToolTip(self.btn_odf_saveas, 'Save in a new ODF the changes done in the edited ODF.')
+
+        # button 'Check ODF data'
+        self.btn_data_check = ttk.Button(self.frm_top, text='ODF data check', width=15, state=tk.DISABLED, command=self.odf_data_check)
+        self.btn_data_check.pack(side=tk.LEFT, padx=3, pady=5)
+        ToolTip(self.btn_data_check, 'Execute checks in the edited ODF (syntax, compliance with the specification). Not as exhaustively as GrandOrgue does.')
+
+        # button 'Close'
+        self.btn_odf_close = ttk.Button(self.frm_top, text='Close', width=7, command=self.file_new)
+        self.btn_odf_close.pack(side=tk.LEFT, padx=3, pady=5)
+        ToolTip(self.btn_odf_close, 'Close the edited ODF.')
+
+        # button 'Exit'
+        self.btn_exit_appli = ttk.Button(self.frm_top, text='Exit', style='ReliefGroove.TButton', width=7, command=self.wnd_main_quit)
+        self.btn_exit_appli.pack(side=tk.LEFT, padx=3, pady=5)
 
         # label with loaded ODF file name or to display progression status
-        self.lab_odf_file_name = tk.Label(self.frm_top, text='', fg=TEXT_COLOR, bg=COLOR_BACKGROUND0, borderwidth=1, relief=tk.SOLID, anchor=tk.W, height=1)
+        self.lab_odf_file_name = ttk.Label(self.frm_top, text='', borderwidth=0, anchor=tk.W)
         self.lab_odf_file_name.pack(side=tk.LEFT, padx=5, pady=5, ipady=3, expand=True, fill=tk.X)
 
         #-- bottom area with horizontal paned window on the full window width
@@ -12145,20 +12444,25 @@ class C_GUI(C_GUI_NOTEBOOK):
                         obj_paned_wnd : vertical paned window placed inside paned_wnd_frm_3
                             obj_paned_wnd_frm_1 : first frame of obj_paned_wnd (buttons bar and object perents/children list)
                                 frm_top_obj_paned_wnd_1 : top frame of obj_paned_wnd_frm_1 for buttons bar
-                                    btn_object_apply_chg : button to apply changes made in the object editor
                                     btn_object_add       : button to add an object
                                     btn_object_parents   : button to link the selected object to parents
                                     btn_object_children  : button to link the selected object to children
                                     btn_object_rename    : button to rename the selected object
                                     btn_object_delete    : button to delete the selected objects
-                                    btn_show_help        : button to show the help related to the selected object
                                 frm_bottom_obj_paned_wnd_1 : bottom frame of obj_paned_wnd_frm_1 for object parents/children list and its scroll bar
                                     scrollbarv : vertical scroll bar
                                     lst_links_list : object parents/children list
-                            obj_paned_wnd_frm_2 : second frame of obj_paned_wnd (object text editor and its scroll bars)
-                                scrollbarv : vertical scroll bar
-                                scrollbarh : horizontal scroll bar
-                                txt_object_text : object text editor
+                            obj_paned_wnd_frm_2 : second frame of obj_paned_wnd (button bar and object text editor with its scroll bars)
+                                frm_top_obj_paned_wnd_2 : top frame of obj_paned_wnd_frm_2 for buttons bar
+                                    btn_object_apply_chg : button to apply changes made in the object editor
+                                    btn_object_text_undo : button to undo changes done in the text box
+                                    btn_object_text_redo : button to redo changes done in the text box
+                                    btn_file_picker      : button to pick a file path/name to insert in the object editor
+                                    btn_show_help        : button to show the help related to the selected object
+                                frm_bottom_obj_paned_wnd_2 : bottom frame of obj_paned_wnd_frm_2 for object text editor with its scroll bars
+                                    scrollbarv : vertical scroll bar
+                                    scrollbarh : horizontal scroll bar
+                                    txt_object_text : object text editor
                     paned_wnd_frm_4 : fourth frame of paned_wnd containing the notebook
         """
 
@@ -12177,7 +12481,7 @@ class C_GUI(C_GUI_NOTEBOOK):
 
         # label with the number of objects in the objects list, placed at the top of the parent frame
         self.lab_objects_nb = ttk.Label(self.paned_wnd_frm_1, text='', borderwidth=0, relief=tk.SOLID, anchor=tk.CENTER)
-        self.lab_objects_nb.pack(side = tk.TOP, pady=10, fill=tk.X)
+        self.lab_objects_nb.pack(side = tk.TOP, pady=8, fill=tk.X)
 
         # frame to occupy the bottom area of the parent frame and to encapsulate the list box and its scroll bars
         self.frm_objects_list = ttk.Frame(self.paned_wnd_frm_1)
@@ -12218,17 +12522,18 @@ class C_GUI(C_GUI_NOTEBOOK):
 
         # button 'Collapse' to collapse the selected object in objects tree
         self.btn_collapse_tree_node = ttk.Button(self.frm_top_paned_wnd_2, text='Collapse', width=5, state=tk.DISABLED, command=self.objects_tree_collapse_current)
-        self.btn_collapse_tree_node.pack(side=tk.LEFT, padx=1, pady=5, ipadx=0, fill=tk.X, expand=True)
+        self.btn_collapse_tree_node.pack(side=tk.LEFT, padx=1, pady=2, fill=tk.X, expand=True)
         ToolTip(self.btn_collapse_tree_node, 'Collapse the entire tree under the selected section.')
 
         # button 'Expand' to expand the selected object in objects tree
         self.btn_expand_tree_node = ttk.Button(self.frm_top_paned_wnd_2, text='Expand', width=5, state=tk.DISABLED, command=self.objects_tree_expand_selected)
-        self.btn_expand_tree_node.pack(side=tk.LEFT, padx=1, pady=5, ipadx=0, fill=tk.X, expand=True)
+        self.btn_expand_tree_node.pack(side=tk.LEFT, padx=1, pady=2, fill=tk.X, expand=True)
         ToolTip(self.btn_expand_tree_node, 'Expand the entire tree under the selected section.')
 
         # button 'Unselect'
         self.btn_unselect = ttk.Button(self.frm_top_paned_wnd_2, text='Unselect', width=5, state=tk.DISABLED, command=self.object_unselect)
-        self.btn_unselect.pack(side=tk.LEFT, padx=1, pady=5, ipadx=0, fill=tk.X, expand=True)
+        self.btn_unselect.pack(side=tk.LEFT, padx=1, pady=2, fill=tk.X, expand=True)
+        ToolTip(self.btn_unselect, 'Unselect the selected section.')
 
         # frame to occupy the bottom area of the parent frame and to encapsulate the tree view and its scroll bars
         self.frm_object_tree = ttk.Frame(self.paned_wnd_frm_2)
@@ -12273,40 +12578,35 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.frm_top_obj_paned_wnd_1 = ttk.Frame(self.obj_paned_wnd_frm_1)
         self.frm_top_obj_paned_wnd_1.pack(side=tk.TOP, fill=tk.X)
 
-        # button 'Apply'
-        self.btn_object_apply_chg = ttk.Button(self.frm_top_obj_paned_wnd_1, text='Apply', width=5, style='RedText.TButton', state=tk.DISABLED, command=self.object_text_changes_apply)
-        self.btn_object_apply_chg.pack(side=tk.LEFT, padx=1, pady=5, ipadx=0, fill=tk.X, expand=True)
-        ToolTip(self.btn_object_apply_chg, 'Apply the changes done in the text box below.')
-
         # button 'Add'
-        self.btn_object_add = ttk.Button(self.frm_top_obj_paned_wnd_1, text='Add', width=5, state=tk.NORMAL, command=self.object_add)
-        self.btn_object_add.pack(side=tk.LEFT, padx=1, pady=5, ipadx=0, fill=tk.X, expand=True)
+        self.btn_object_add = ttk.Button(self.frm_top_obj_paned_wnd_1, text='Add', width=6, state=tk.NORMAL, command=self.object_add)
+        self.btn_object_add.pack(side=tk.LEFT, padx=1, pady=2, fill=tk.X, expand=True)
         ToolTip(self.btn_object_add, 'Add a child section to the selected section or at the root.')
 
+        # button 'Clone'
+        self.btn_object_clone = ttk.Button(self.frm_top_obj_paned_wnd_1, text='Clone', width=6, state=tk.NORMAL, command=self.object_clone)
+        self.btn_object_clone.pack(side=tk.LEFT, padx=1, pady=2, fill=tk.X, expand=True)
+        ToolTip(self.btn_object_clone, 'Clone the selected section in a new one having same attributes.')
+
         # button 'Parents'
-        self.btn_object_parents = ttk.Button(self.frm_top_obj_paned_wnd_1, text='Parents', width=8, state=tk.DISABLED, command=lambda type=TO_PARENT: self.object_link(type))
-        self.btn_object_parents.pack(side=tk.LEFT, padx=1, pady=5, ipadx=0, fill=tk.X, expand=True)
-        ToolTip(self.btn_object_parents, 'Set/unset links between the selected section and parent sections.')
+        self.btn_object_parents = ttk.Button(self.frm_top_obj_paned_wnd_1, text='Parents', width=6, state=tk.DISABLED, command=lambda: self.object_link(TO_PARENT))
+        self.btn_object_parents.pack(side=tk.LEFT, padx=1, pady=2, fill=tk.X, expand=True)
+        ToolTip(self.btn_object_parents, 'Set or Unset links between the selected section and parent sections.')
 
         # button 'Children'
-        self.btn_object_children = ttk.Button(self.frm_top_obj_paned_wnd_1, text='Children', width=8, state=tk.DISABLED, command=lambda type=TO_CHILD: self.object_link(type))
-        self.btn_object_children.pack(side=tk.LEFT, padx=1, pady=5, ipadx=0, fill=tk.X, expand=True)
-        ToolTip(self.btn_object_children, 'Set/unset links between the selected section and child sections.')
+        self.btn_object_children = ttk.Button(self.frm_top_obj_paned_wnd_1, text='Children', width=6, state=tk.DISABLED, command=lambda: self.object_link(TO_CHILD))
+        self.btn_object_children.pack(side=tk.LEFT, padx=1, pady=2, fill=tk.X, expand=True)
+        ToolTip(self.btn_object_children, 'Set or Unset links between the selected section and child sections.')
 
         # button 'Rename'
-        self.btn_object_rename = ttk.Button(self.frm_top_obj_paned_wnd_1, text='Rename', width=8, state=tk.DISABLED, command=self.object_rename)
-        self.btn_object_rename.pack(side=tk.LEFT, padx=1, pady=5, ipadx=0, fill=tk.X, expand=True)
+        self.btn_object_rename = ttk.Button(self.frm_top_obj_paned_wnd_1, text='Rename', width=6, state=tk.DISABLED, command=self.object_rename)
+        self.btn_object_rename.pack(side=tk.LEFT, padx=1, pady=2, fill=tk.X, expand=True)
         ToolTip(self.btn_object_rename, 'Rename the last three digits of the selected section.')
 
         # button 'Delete'
-        self.btn_object_delete = ttk.Button(self.frm_top_obj_paned_wnd_1, text='Delete', width=8, state=tk.DISABLED, command=self.object_delete)
-        self.btn_object_delete.pack(side=tk.LEFT, padx=1, pady=5, ipadx=0, fill=tk.X, expand=True)
+        self.btn_object_delete = ttk.Button(self.frm_top_obj_paned_wnd_1, text='Delete', width=6, state=tk.DISABLED, command=self.object_delete)
+        self.btn_object_delete.pack(side=tk.LEFT, padx=1, pady=2, fill=tk.X, expand=True)
         ToolTip(self.btn_object_delete, 'Delete the selected section.')
-
-        # button 'Help'
-        self.btn_show_help = ttk.Button(self.frm_top_obj_paned_wnd_1, text='Help', width=5, state=tk.DISABLED, command=self.help_search_object)
-        self.btn_show_help.pack(side=tk.LEFT, padx=1, pady=5, ipadx=0, fill=tk.X, expand=True)
-        ToolTip(self.btn_show_help, 'Show in the help tab the part describing the selected section type.')
 
         # frame to occupy the bottom area of the parent frame and to encapsulate the parent/children list and its vertical scroll bar
         self.frm_bottom_obj_paned_wnd_1 = ttk.Frame(self.obj_paned_wnd_frm_1)
@@ -12331,14 +12631,47 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.obj_paned_wnd_frm_2 = ttk.Frame(self.wnd_main)
         self.obj_paned_wnd.add(self.obj_paned_wnd_frm_2, minsize=200, height=200)
 
+        # frame to occupy the top area of the parent frame and to encapsulate buttons
+        self.frm_top_obj_paned_wnd_2 = ttk.Frame(self.obj_paned_wnd_frm_2)
+        self.frm_top_obj_paned_wnd_2.pack(side=tk.TOP, fill=tk.X)
+
+        # button 'Apply'
+        self.btn_object_apply_chg = ttk.Button(self.frm_top_obj_paned_wnd_2, text='Apply changes', style='RedText.TButton', state=tk.DISABLED, command=self.object_text_changes_apply)
+        self.btn_object_apply_chg.pack(side=tk.LEFT, padx=1, pady=2, fill=tk.X, expand=True)
+        ToolTip(self.btn_object_apply_chg, 'Apply changes done in the text editor below.')
+
+        # button 'Undo'
+        self.btn_object_text_undo = ttk.Button(self.frm_top_obj_paned_wnd_2, style='Bold.TButton', text='↶', state=tk.DISABLED, width=5, command=lambda: self.object_text_undo_redo('undo'))
+        self.btn_object_text_undo.pack(side=tk.LEFT, padx=1, pady=2, fill=tk.X, expand=False)
+        ToolTip(self.btn_object_text_undo, 'Undo changes done in the text editor.')
+
+        # button 'Redo'
+        self.btn_object_text_redo = ttk.Button(self.frm_top_obj_paned_wnd_2, style='Bold.TButton', text='↷', state=tk.DISABLED, width=5, command=lambda: self.object_text_undo_redo('redo'))
+        self.btn_object_text_redo.pack(side=tk.LEFT, padx=1, pady=2, fill=tk.X, expand=False)
+        ToolTip(self.btn_object_text_redo, 'Redo changes done in the text editor.')
+
+        # button 'File picker'
+        self.btn_file_picker = ttk.Button(self.frm_top_obj_paned_wnd_2, text='File picker',  state=tk.DISABLED, width=12, command=self.object_text_file_pick)
+        self.btn_file_picker.pack(side=tk.LEFT, padx=1, pady=2, fill=tk.X, expand=False)
+        ToolTip(self.btn_file_picker, 'Insert a file reference at the line where is the edition cursor if a file definition attribute is present.')
+
+        # button 'Help'
+        self.btn_show_help = ttk.Button(self.frm_top_obj_paned_wnd_2, text='Help', state=tk.DISABLED, width=10, command=self.help_search_object)
+        self.btn_show_help.pack(side=tk.LEFT, padx=1, pady=2, fill=tk.X, expand=False)
+        ToolTip(self.btn_show_help, 'Show in the help the part describing the selected section type.')
+
+        # frame to occupy the bottom area of the parent frame and to encapsulate the object text editor and its scroll bars
+        self.frm_bottom_obj_paned_wnd_2 = ttk.Frame(self.obj_paned_wnd_frm_2)
+        self.frm_bottom_obj_paned_wnd_2.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
         # text box with the object text and with horizontal and vertical scroll bars
-        scrollbarv = ttk.Scrollbar(self.obj_paned_wnd_frm_2, orient=tk.VERTICAL)
+        scrollbarv = ttk.Scrollbar(self.frm_bottom_obj_paned_wnd_2, orient=tk.VERTICAL)
         scrollbarv.pack(side=tk.RIGHT, fill=tk.Y)
-        scrollbarh = ttk.Scrollbar(self.obj_paned_wnd_frm_2, orient=tk.HORIZONTAL)
+        scrollbarh = ttk.Scrollbar(self.frm_bottom_obj_paned_wnd_2, orient=tk.HORIZONTAL)
         scrollbarh.pack(side=tk.BOTTOM, fill=tk.X)
-        self.txt_object_text = tk.Text(self.obj_paned_wnd_frm_2, fg=TEXT_COLOR, bg=COLOR_BG_EDITOR, bd=1, wrap=tk.NONE, font=TEXT_FONT, selectbackground=COLOR_BG_TEXT_SEL, undo=True)
+        self.txt_object_text = tk.Text(self.frm_bottom_obj_paned_wnd_2, fg=TEXT_COLOR, bg=COLOR_BG_EDITOR, bd=1, wrap=tk.NONE,
+                                       font=TEXT_FONT, selectbackground=COLOR_BG_TEXT_SEL, undo=True, maxundo=-1, autoseparators=True)
         self.txt_object_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.txt_object_text.bind('<<Modified>>', self.object_text_changed)
         self.txt_object_text.bind('<<Paste>>', self.object_text_paste)
         self.txt_object_text.bind('<KeyRelease>', self.object_text_key_pressed)
         self.txt_object_text.bind('<ButtonRelease-1>', self.object_text_click)
@@ -12388,7 +12721,7 @@ class C_GUI(C_GUI_NOTEBOOK):
     def wnd_main_quit(self):
         # (GUI event callback) the user has clicked on the button "Quit" or window top-right "X"
 
-        if self.can_i_make_change(is_odf_changed=True):
+        if self.can_i_make_change(True):
             # the user has saved his modifications if he wanted and has not canceled the operation
 
             # save application data
@@ -12454,15 +12787,17 @@ class C_GUI(C_GUI_NOTEBOOK):
         widget.config(background=COLOR_BACKGROUND1)
 
     #-------------------------------------------------------------------------------------------------
-    def mouse_cursor_processing(self, waiting=False):
+    def mouse_cursor_processing(self, processing=False):
+        # display the "processing" mouse cursor or remove it
 
-        if waiting:
+        if processing:
             self.wnd_main['cursor'] = 'watch'
             self.txt_object_text['cursor'] = 'watch'
             self.lst_objects_list['cursor'] = 'watch'
             self.lst_links_list['cursor'] = 'watch'
             self.trv_objects_tree['cursor'] = 'watch'
             self.notebook['cursor'] = 'watch'
+            self.view_canvas['cursor'] = 'watch'
         else:
             self.wnd_main['cursor'] = ''
             self.txt_object_text['cursor'] = 'xterm'
@@ -12470,6 +12805,7 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.lst_links_list['cursor'] = ''
             self.trv_objects_tree['cursor'] = ''
             self.notebook['cursor'] = ''
+            self.view_canvas['cursor'] = ''
 
     #-------------------------------------------------------------------------------------------------
     def init_complete(self):
@@ -12580,7 +12916,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         # (GUI event callback) the user has clicked on the button "New"
         # do a reset of the objects list/tree, edit box and ODF data
 
-        if ignore_changes or self.can_i_make_change(is_odf_changed=True):
+        if ignore_changes or self.can_i_make_change(True):
             # the user has saved his modifications if he wanted and has not canceled the operation
 
             # reset the various data
@@ -12594,30 +12930,49 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.object_links_list_update()
             self.gui_status_update_buttons()
             self.gui_status_update_notebook()
+
+            # hide the HW browser notebook tab
             self.notebook.hide(self.frm_hw_browser)
 
     #-------------------------------------------------------------------------------------------------
     def file_reload(self, file_name=None):
         # (GUI event callback) the user has clicked on the button "Reopen"
 
-        kept_data = (self.selected_object_app, self.selected_object_uid, self.selected_linked_uid, self.edited_object_uid)
+        if self.can_i_make_change(True):
+            # the user has saved his modifications if he wanted and has not canceled the operation
 
-        self.file_open(self.odf_data.odf_file_name)
+            self.mouse_cursor_processing(True)
 
-        self.selected_object_app, self.selected_object_uid, self.selected_linked_uid, self.edited_object_uid = kept_data
+            # reload the last opened ODF
+            self.odf_data.load_from_file(self.odf_data.odf_file_name)
 
-        # update the objects list / tree / text
-        self.object_text_update()
-        self.object_links_list_update()
-        self.gui_status_update_buttons()
-        self.gui_status_update_notebook()
-        self.gui_status_update_lists(True, True)
+            self.odf_data_changed = False
+
+            if self.selected_object_uid not in self.odf_data.odf_data_dic.keys():
+                # the selected object UID is not present in the reloaded ODF
+                self.object_unselect()
+
+            self.odf_check_files_names = None
+
+            # update the objects list / tree / text
+            self.objects_list_update()
+            self.objects_tree_update()
+            self.object_text_update()
+            self.object_links_list_update()
+            self.gui_status_update_buttons()
+            self.gui_status_update_notebook()
+            self.gui_status_update_lists(True)
+            self.viewer_update('previous')
+
+            self.logs_update()
+
+            self.mouse_cursor_processing(False)
 
     #-------------------------------------------------------------------------------------------------
     def file_open(self, file_name=None):
         # (GUI event callback) the user has clicked on the button "Open" or the provided file name has to be opened
 
-        if self.can_i_make_change(is_odf_changed=True):
+        if self.can_i_make_change(True):
             # the user has saved his modifications if he wanted and has not canceled the operation
 
             if file_name == None:
@@ -12633,7 +12988,8 @@ class C_GUI(C_GUI_NOTEBOOK):
 
                 self.is_loading = True
 
-                self.file_new(True)  # ignore the changes in the file_new function, already checked above
+                # reset the various data and display
+                self.file_new(True)
 
                 # show the mouse cursor watch
                 self.mouse_cursor_processing(True)
@@ -12647,10 +13003,6 @@ class C_GUI(C_GUI_NOTEBOOK):
 
                 # store the file to open
                 self.recent_odf_list_update(file_name)
-
-                # select the logs tab of the notebook to show the file opening logs
-                self.notebook.select(self.frm_logs)
-                self.notebook.hide(self.frm_hw_browser)
 
                 if file_extension in ('.xml', '.Organ_Hauptwerk_xml'):
                     # Hauptwerk ODF selected : build a GrandOrgue ODF which uses the Hauptwerk sample set
@@ -12746,7 +13098,6 @@ class C_GUI(C_GUI_NOTEBOOK):
                 self.recent_odf_list_update(file_name)
 
                 self.odf_data_changed = False
-                self.edited_object_changed = False
                 self.gui_status_update_buttons()
                 data_saved = True
             else:
@@ -12758,17 +13109,17 @@ class C_GUI(C_GUI_NOTEBOOK):
         return data_saved
 
     #-------------------------------------------------------------------------------------------------
-    def can_i_make_change(self, is_odf_changed=False):
-        # before a file change or window closing (is_odf_changed to set at True) or a selected object change
+    def can_i_make_change(self, will_odf_change=False):
+        # before a file change or window closing (will_odf_change to set at True) or a selected object change
         # ask to the user if he wants to save his modifications if any, if the answer is yes then do it
         # return True if the change to do can be done
 
         is_change_ok = True
 
-        if is_odf_changed:
+        if will_odf_change:
             # the coming change will be at ODF level
-            if self.edited_object_changed:
-                # the edited object have been chnaged
+            if self.txt_object_text.edit_modified():
+                # the edited object have been changed
                 # ask to the user if he wants to apply changes and to save the ODF data
                 if self.edited_object_uid != None:
                     answer = AskUserAnswerQuestion(self.wnd_main, "OdfEdit", f"Do you want to apply and save changes made in {self.edited_object_uid} ?", ['Yes', 'No', 'Cancel'], 'Cancel')
@@ -12792,7 +13143,7 @@ class C_GUI(C_GUI_NOTEBOOK):
                 elif answer != 'No':
                     is_change_ok = False
 
-        elif self.edited_object_changed:
+        elif self.txt_object_text.edit_modified():
             # the edited object have been changed
             # ask to the user if he wants to apply changes
             if self.edited_object_uid != None:
@@ -12841,8 +13192,8 @@ class C_GUI(C_GUI_NOTEBOOK):
         # get if an object is selected in the objects tree
         objects_tree_selected = len(self.trv_objects_tree.selection()) > 0
 
-        # button "New"
-        self.btn_odf_new['state'] = tk.NORMAL if objects_nb > 0 else tk.DISABLED
+        # button for opening the general menu
+        self.btn_gen_menu['state'] = tk.NORMAL if not self.is_loading else tk.DISABLED
 
         # button "Open"
         self.btn_odf_open['state'] = tk.NORMAL if not self.is_loading else tk.DISABLED
@@ -12852,7 +13203,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.btn_odf_open_last['state'] = tk.NORMAL if len(self.odf_recent_opened_list) >= min_list_len and not self.is_loading else tk.DISABLED
 
         # button "Reload"
-        self.btn_odf_reload['state'] = tk.NORMAL if (self.odf_data.odf_file_name != '' and self.odf_data_changed) else tk.DISABLED
+        self.btn_odf_reload['state'] = tk.NORMAL if self.odf_data.odf_file_name != '' else tk.DISABLED
 
         # button "Save"
         self.btn_odf_save['state'] = tk.NORMAL if (self.odf_data.odf_file_name != '' and self.odf_data_changed) else tk.DISABLED
@@ -12864,8 +13215,8 @@ class C_GUI(C_GUI_NOTEBOOK):
         # button "Do check"
         self.btn_data_check['state'] = tk.NORMAL if objects_nb > 0 else tk.DISABLED
 
-        # button for opening the general menu
-        self.btn_gen_menu['state'] = tk.NORMAL if not self.is_loading else tk.DISABLED
+        # button "Close"
+        self.btn_odf_close['state'] = tk.NORMAL if objects_nb > 0 else tk.DISABLED
 
         # button "Collapse"
         self.btn_collapse_tree_node['state'] = tk.NORMAL if objects_tree_selected else tk.DISABLED
@@ -12873,11 +13224,14 @@ class C_GUI(C_GUI_NOTEBOOK):
         # button "Expand"
         self.btn_expand_tree_node['state'] = tk.NORMAL if objects_tree_selected else tk.DISABLED
 
-        # button "Apply changes"
-        self.btn_object_apply_chg['state'] = tk.NORMAL if self.edited_object_changed else tk.DISABLED
+        # button "Unselect"
+        self.btn_unselect['state'] = tk.NORMAL if (self.edited_object_uid != None and self.selected_object_app == 'GO') else tk.DISABLED
 
         # button "Add"
         self.btn_object_add['state'] = tk.NORMAL if (len(possible_children_type_list) > 0 or root_object_not_def) and self.selected_object_app == 'GO' and not self.is_loading else tk.DISABLED
+
+        # button "Clone"
+        self.btn_object_clone['state'] = tk.NORMAL if not self.edited_object_uid in ('Organ', 'Header', None) else tk.DISABLED
 
         # button "Parents"
         self.btn_object_parents['state'] = tk.NORMAL if len(possible_parents_list) > 0 else tk.DISABLED
@@ -12891,16 +13245,12 @@ class C_GUI(C_GUI_NOTEBOOK):
         # button "Delete"
         self.btn_object_delete['state'] = tk.NORMAL if (self.edited_object_uid != None and self.edited_object_uid != 'Organ' and self.selected_object_app == 'GO') else tk.DISABLED
 
-        # button "Unselect"
-        self.btn_unselect['state'] = tk.NORMAL if (self.edited_object_uid != None and self.selected_object_app == 'GO') else tk.DISABLED
-
-        # button "Show help"
-        self.btn_show_help['state'] = tk.NORMAL if (self.edited_object_uid not in (None, 'Header') and self.selected_object_app == 'GO') else tk.DISABLED
+        self.gui_status_update_editor_buttons()
 
         # label with the loaded ODF name
         if not self.is_loaded_odf:
             if objects_nb == 0:
-                self.lab_odf_file_name.config(text='Click on the button "Open" to load a GrandOrgue or Hauptwerk ODF, or "Add" to create new sections')
+                self.lab_odf_file_name.config(text='Click on the button "Open" to load a GrandOrgue or Hauptwerk ODF, or "Add" to create sections.')
             else:
                 self.lab_odf_file_name.config(text='Click on the button "Save as" to define a file name')
         else:
@@ -12919,7 +13269,34 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.lab_objects_nb.config(text=f"{objects_nb} sections")
 
     #-------------------------------------------------------------------------------------------------
-    def gui_status_update_lists(self, object_see_list=False, object_see_tree=False):
+    def gui_status_update_editor_buttons(self):
+        # update the status of the buttons of the object editor box
+
+        # button "Apply changes"
+        self.btn_object_apply_chg['state'] = tk.NORMAL if self.txt_object_text.edit_modified() else tk.DISABLED
+
+        # button "File picker"
+        cursor_pos = self.txt_object_text.index(tk.INSERT)
+        line = self.txt_object_text.get(cursor_pos + ' linestart', cursor_pos + ' lineend')
+        attr_defines_file = False
+        equal_pos = line.find('=')
+        if equal_pos > 0:
+            attr_name = line[:equal_pos]
+            attr_defines_file = self.odf_data.is_image_attribute(attr_name) or self.odf_data.is_sample_attribute(attr_name)
+        else:
+            attr_name = ''
+        self.btn_file_picker['state'] = (tk.NORMAL if self.odf_data.is_image_attribute(attr_name) or self.odf_data.is_sample_attribute(attr_name)
+                                                   else tk.DISABLED)
+
+        # buttons "Undo" and "Redo"
+        self.btn_object_text_undo['state'] = tk.NORMAL if self.txt_object_text.edit("canundo") else tk.DISABLED
+        self.btn_object_text_redo['state'] = tk.NORMAL if self.txt_object_text.edit("canredo") else tk.DISABLED
+
+        # button "Show help"
+        self.btn_show_help['state'] = tk.NORMAL if (self.edited_object_uid not in (None, 'Header') and self.selected_object_app == 'GO') else tk.DISABLED
+
+    #-------------------------------------------------------------------------------------------------
+    def gui_status_update_lists(self, show_list_item=False, show_tree_item=False):
         # update the selections in the GUI lists/tree
         # if one object_see flag is enabled, the corresponding list or tree is moved to see the selected object
 
@@ -12927,36 +13304,41 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.gui_events_block()
 
         # GO objects list
-        # highlight and make visible the item corresponding to the selected object UID
+        # select and show (if requested in parameter) the item corresponding to the selected object UID
         for i in range(0, self.lst_objects_list.size()):
             object_uid = self.lst_objects_list.get(i).split(' ')[0]
-            if object_uid == self.selected_object_uid and self.selected_object_app == 'GO':
-                # the current item corresponds to the selected GO object UID : highlight it
+            if object_uid == self.selected_object_uid:
+                # the current item corresponds to the selected object UID
+                # highlight the item
                 self.lst_objects_list.itemconfig(i, foreground=TEXT_COLOR, background=COLOR_SAME_UID_ITEM)
-                if object_see_list:
+                if show_list_item:
+                    # move the list to show the item
                     self.lst_objects_list.see(i)
+                if self.focused_objects_widget == self.lst_objects_list:
+                    # the objects list has the focus, select the item
+                    self.lst_objects_list.selection_set(i)
+                else:
+                    self.lst_objects_list.selection_clear(i)
             else:
+                # remove the highlight and the focus on the item if any is present
                 self.lst_objects_list.itemconfig(i, foreground=TEXT_COLOR, background=COLOR_BG_LIST)
-
-            if self.focused_objects_widget == self.lst_objects_list and self.focused_sel_item_id == object_uid:
-                # the current item has the focus : select it
-                self.lst_objects_list.selection_set(i)
-            else:
                 self.lst_objects_list.selection_clear(i)
 
         # GO linked objects list
         for i in range(0, self.lst_links_list.size()):
-            object_uid = self.lst_links_list.get(i).strip().split(' ')[0]
-            if object_uid == self.selected_object_uid and self.selected_object_app == 'GO':
-                # the current item corresponds to the selected GO object UID : highlight it
+            object_uid = self.lst_links_list.get(i).lstrip().split(' ')[0]
+            if object_uid in (self.selected_object_uid, self.selected_linked_uid):
+                # the current item corresponds to the selected object UID or linked object UID
+                # highlight the item
                 self.lst_links_list.itemconfig(i, foreground=TEXT_COLOR, background=COLOR_SAME_UID_ITEM)
-                if object_see_list:
+                if show_list_item:
+                    # move the list to show the item
                     self.lst_links_list.see(i)
             else:
                 self.lst_links_list.itemconfig(i, foreground=TEXT_COLOR, background=COLOR_BG_LIST)
 
             if self.focused_objects_widget == self.lst_links_list and self.focused_sel_item_id == object_uid:
-                # the current item has the focus : select it
+                # the this item of the linked objects list has the focus, select it
                 self.lst_links_list.selection_set(i)
             else:
                 self.lst_links_list.selection_clear(i)
@@ -12967,21 +13349,22 @@ class C_GUI(C_GUI_NOTEBOOK):
         else:
             object_uid = None
         # select the items corresponding to the selected GO object UID if any
-        self.one_seen = False
+        self.one_tree_item_shown = False
         for iid in self.trv_objects_tree.get_children():
-            self.objects_tree_nodes_select(iid, object_uid, object_see_tree)
+            self.objects_tree_nodes_select(iid, object_uid, show_tree_item)
 
     #-------------------------------------------------------------------------------------------------
-    def gen_menu_open(self):
-        # (GUI event callback) the user has clicked on the button Menu to open the general menu
+    def gen_menu_open(self, mode=None):
+        # (GUI event callback) the user has clicked on the button Menu or on a checkbox item of the menu
 
-        self.general_menu.tk_popup(self.btn_gen_menu.winfo_rootx() + self.btn_gen_menu.winfo_width(), self.btn_gen_menu.winfo_rooty())
+        if mode == 'button' and time.time() - self.menu_closing_time < 0.5:
+            # the function has been called by the menu button press less than 0.5 seconds after the previous menu closing (triggered by the menu button press itself)
+            # do no open it. It permits to not reopen the menu when a press on the button Menu has closed it
+            return
 
-    #-------------------------------------------------------------------------------------------------
-    def gen_menu_close(self, event=None):
-        # (GUI event callback) the menu has lost its focus
-
-        self.general_menu.grab_release()
+        self.general_menu.tk_popup(self.btn_gen_menu.winfo_rootx(), self.btn_gen_menu.winfo_rooty() + self.btn_gen_menu.winfo_height())
+        # the tk_popup function returns only when the menu has been closed
+        self.menu_closing_time = time.time()
 
     #-------------------------------------------------------------------------------------------------
     def gen_menu_about(self):
@@ -13149,7 +13532,7 @@ class C_GUI(C_GUI_NOTEBOOK):
                 self.lst_objects_list.selection_set(selected_line_indice)
 
             # ignore the mouse button 1 release if the edited object has been changed : to let the user say if he wants to save the change or not or cancel
-            self.ignore_b1_release = self.edited_object_changed
+            self.ignore_b1_release = self.txt_object_text.edit_modified()
 
             if self.can_i_make_change():
                 # the user has saved his modifications if he wanted and has not canceled the selection
@@ -13216,7 +13599,7 @@ class C_GUI(C_GUI_NOTEBOOK):
                 if object_uid not in ('Header', 'Organ'):
                     # scan the objects UID of the objects list which are not Header or Organ
                     object_type = self.odf_data.object_type_get(object_uid)
-                    if object_type in ('General', 'Manual', 'Panel', 'WindchestGroup', 'Image', 'tk.Label', 'ReversiblePiston', 'SetterElement'):
+                    if object_type in ('General', 'Manual', 'Panel', 'WindchestGroup', 'Image', 'Label', 'ReversiblePiston', 'SetterElement'):
                         # put the current object under the 'Organ' node
                         self.objects_tree_child_add(organ_node_iid, object_uid, depth)
                     elif len(self.odf_data.object_kinship_list_get(object_uid, TO_PARENT)) == 0:
@@ -13310,35 +13693,45 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.objects_tree_node_and_children_open(iid, open_status)
 
     #-------------------------------------------------------------------------------------------------
-    def objects_tree_nodes_select(self, node_iid, object_uid, object_see_tree=False):
+    def objects_tree_nodes_select(self, node_iid, object_uid, show_tree_item=False):
         # recursive function to select and make visible the nodes of the objects tree which contain the given object UID text
 
+        parent_object_type = self.odf_data.object_main_parent_type_get(self.focused_sel_item_id)
+        if object_uid != None:
+            parent_node_iid = node_iid[:-len(object_uid)]
+        else:
+            parent_node_iid = ''
+
         if object_uid != None and self.trv_objects_tree.item(node_iid)['text'].split(' ')[0] == object_uid:
-            # the node node_iid corresponds to the object UID : tag it and open it parents nodes
+            # the node node_iid corresponds to the object UID
+            # tag it to color it with a background color
             self.trv_objects_tree.item(node_iid, tags=TAG_SAME_UID)
-            # open the parents of the node so that the object is visible if it is requested by the user in the menu
-            if object_see_tree:
+            if show_tree_item:
+                # open its parent node to see it
                 self.objects_tree_node_and_parents_open(self.trv_objects_tree.parent(node_iid))
-                if not self.one_seen:
+
+                if (parent_object_type == None and not self.one_tree_item_shown) or (parent_object_type != None and parent_object_type in parent_node_iid):
+                    # show the node if none node has been shown yet or the node is under a parent node
                     self.trv_objects_tree.see(node_iid)
-                    self.one_seen = True
+                    self.one_tree_item_shown = True
+
+            if self.focused_objects_widget == self.trv_objects_tree and (parent_object_type == None or parent_object_type in parent_node_iid):
+                # put the focus on the current node
+                self.trv_objects_tree.selection_add(node_iid)
+            else:
+                # remove the selection on the node if any
+                self.trv_objects_tree.selection_remove(node_iid)
         else:
             # remove the tag on the node_iid if any
             self.trv_objects_tree.item(node_iid, tags=())
-
-        if self.focused_objects_widget == self.trv_objects_tree and self.focused_sel_item_id != None and node_iid.endswith(self.focused_sel_item_id):
-            # the current node has the focus (use of endswith in case the focused_sel_item_id doesn't fit the full path of the node iid)
-            self.trv_objects_tree.selection_add(node_iid)
-            self.trv_objects_tree.see(node_iid)
-            self.one_seen = True
-        else:
+            # remove the selection on the node if any
             self.trv_objects_tree.selection_remove(node_iid)
 
-        if self.trv_objects_tree.item(node_iid, 'open') or object_see_tree:
+        if self.trv_objects_tree.item(node_iid, 'open') or show_tree_item:
             # the node_iid is opened so its children are visible, or the tree has to be automatically expanded to show the selected object UID
             # search to select the object_uid in the children of node_iid
             for iid in self.trv_objects_tree.get_children(node_iid):
-                self.objects_tree_nodes_select(iid, object_uid, object_see_tree)
+                self.objects_tree_nodes_select(iid, object_uid, show_tree_item)
 
     #-------------------------------------------------------------------------------------------------
     def objects_tree_node_show(self, object_uid, parent_uid, node_iid=''):
@@ -13385,7 +13778,7 @@ class C_GUI(C_GUI_NOTEBOOK):
             # an item has been selected in the objects tree
 
             # ignore the mouse button 1 release if the edited object has been changed : to let the user say if he wants to save the change or not or cancel
-            self.ignore_b1_release = self.edited_object_changed
+            self.ignore_b1_release = self.txt_object_text.edit_modified()
 
             if self.can_i_make_change():
                 # the user has saved his modifications if he wanted and has not canceled the operation
@@ -13458,7 +13851,7 @@ class C_GUI(C_GUI_NOTEBOOK):
             # an item has been selected in the object links list
 
             # ignore the mouse button 1 release if the edited object has been changed : to let the user say if he wants to save the change or not or cancel
-            self.ignore_b1_release = self.edited_object_changed
+            self.ignore_b1_release = self.txt_object_text.edit_modified()
 
             if self.can_i_make_change():
                 # the user has saved his modifications if he wanted and has not canceled the operation
@@ -13599,8 +13992,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         if self.object_dragging_in_progress:
             # UID of the object on which the dragged object UID has been dropped
 
-            self.wnd_main['cursor'] = 'watch'
-            self.wnd_main.update()
+            self.mouse_cursor_processing(True)
 
             target_object_uid = self.drag_overflown_object_uid
 
@@ -13682,7 +14074,7 @@ class C_GUI(C_GUI_NOTEBOOK):
 
         # update the status of GUI widgets
         self.object_text_update()
-        self.gui_status_update_lists(self.dragged_object_drop_action != None, self.dragged_object_drop_action != None)
+        self.gui_status_update_lists(self.dragged_object_drop_action != None)
         self.gui_status_update_buttons()
 
         # reset the drag&drop variables
@@ -13691,12 +14083,11 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.drag_overflown_object_uid = None
         self.dragged_object_uid = None
 
-        # restore the default mouse cursor
-        self.wnd_main['cursor'] = ''
+        self.mouse_cursor_processing(False)
 
     #-------------------------------------------------------------------------------------------------
     def object_unselect(self):
-        # (GUI event callback) the user has selected 'Clear all' in the context menu of the object text box
+        # (GUI event callback) the user has clicked on the button 'Unselect'
 
         if self.can_i_make_change():
             # clear the current object selection
@@ -13711,10 +14102,6 @@ class C_GUI(C_GUI_NOTEBOOK):
             # update the object text and links list
             self.object_text_update()
             self.object_links_list_update()
-
-            # reset the edit modified flag
-            self.txt_object_text.edit_modified(False)
-            self.edited_object_changed = False
 
             self.gui_status_update_lists()
             self.gui_status_update_buttons()
@@ -13748,41 +14135,65 @@ class C_GUI(C_GUI_NOTEBOOK):
         # apply the syntax highlighting
         self.odf_syntax_highlight(self.txt_object_text)
 
-        # reset the text modified flag
-        self.txt_object_text.edit_modified(False)
-        self.edited_object_changed = False
+        # reset the undo stack
+        self.txt_object_text.edit_reset()
 
+        # reset the edit modified flag
+        self.txt_object_text.edit_modified(False)
+
+        # update the status of the buttons of the text editor
+        self.gui_status_update_editor_buttons()
+
+        # update the content of the viewer
         self.viewer_update(self.edited_object_uid, None, self.selected_object_app)
 
         self.txt_object_text['cursor'] = 'xterm'
 
     #-------------------------------------------------------------------------------------------------
-    def object_text_changed(self, event):
-        # (GUI event callback) the user has made a change in the object text box
+    def object_text_undo_redo(self, action):
+        # (GUI event callback) the user has clicked on the button "Undo" (action = 'undo') or "Redo" (action = 'redo')
 
-        if self.gui_events_blocked:
-            return
+        if action == 'undo' and self.txt_object_text.edit("canundo"):
+            self.txt_object_text.edit_undo()
+        elif action == 'redo' and self.txt_object_text.edit("canredo"):
+            self.txt_object_text.edit_redo()
 
-        if self.txt_object_text.edit_modified() and self.edited_object_changed == False and self.selected_object_app == 'GO':
-            # update the status of GUI widgets
-            self.edited_object_changed = True
-            self.gui_status_update_buttons()
+        self.gui_status_update_editor_buttons()
+
+        # update the syntax highlighting
+        self.odf_syntax_highlight(self.txt_object_text)
 
     #-------------------------------------------------------------------------------------------------
-    def object_text_click(self, event):
+    def object_text_key_pressed(self, event):
+        # (GUI event callback) the user has pressed a keyboard key in the object text box
+
+        self.gui_status_update_editor_buttons()
+
+        # update the syntax highlighting
+        self.odf_syntax_highlight(self.txt_object_text)
+
+    #-------------------------------------------------------------------------------------------------
+    def object_text_click(self, event=None):
         # (GUI event callback) the user has clicked with left button in the object text editor box
 
-        cursor_pos = self.txt_object_text.index('insert')
+        self.gui_status_update_editor_buttons()
 
+        # update the viewer according to the currently edited object and the content of the line where is the insertion cursor
+        cursor_pos = self.txt_object_text.index(tk.INSERT)
         line = self.txt_object_text.get(cursor_pos + ' linestart', cursor_pos + ' lineend')
-        self.viewer_update(self.edited_object_uid, line, self.selected_object_app)
+
+        # if image position is defined in the text, recover it
+        image_x = myint(self.object_text_attr_get("PositionX"))
+        image_y = myint(self.object_text_attr_get("PositionY"))
+
+        self.viewer_update(self.edited_object_uid, line, self.selected_object_app, image_x, image_y)
 
     #-------------------------------------------------------------------------------------------------
     def object_text_click_dbl(self, event):
         # (GUI event callback) the user has double clicked with left button in the object text box
 
-        # get the position of the cursor in the text box
-        cursor_pos = self.txt_object_text.index('insert')
+        # get the position of the insertion cursor in the text box
+        cursor_pos = self.txt_object_text.index(tk.INSERT)
         line_nb = int(cursor_pos.split('.')[0])
         char_nb = int(cursor_pos.split('.')[1])
         # get the entire line in which is the cursor
@@ -13816,14 +14227,7 @@ class C_GUI(C_GUI_NOTEBOOK):
             # in all other cases, select the entire line
             self.txt_object_text.tag_add('sel', f'{line_nb}.0', f'{line_nb}.0 lineend')
 
-        return 'break'  # don't let tkinter manage the event
-
-    #-------------------------------------------------------------------------------------------------
-    def object_text_key_pressed(self, event):
-        # (GUI event callback) the user has pressed a keyboard key in the object text box
-
-        # update the syntax highlighting
-        self.odf_syntax_highlight(self.txt_object_text)
+        return 'break'  # 'break' to don't let tkinter manage the mouse double click event in the widget
 
     #-------------------------------------------------------------------------------------------------
     def object_text_select_all(self, event):
@@ -13831,7 +14235,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         # in Windows it is managed natively by the text box widget, but not in Linux
 
         self.txt_object_text.tag_add('sel', '1.0', 'end')
-        return 'break'  # do not process further the event in the widget
+        return 'break'  # 'break' to don't let tkinter manage the mouse double click event in the widget
 
     #-------------------------------------------------------------------------------------------------
     def object_text_paste(self, event):
@@ -13850,14 +14254,14 @@ class C_GUI(C_GUI_NOTEBOOK):
         except:
             pass
 
-        return 'break'  # do not process further the event in the widget
+        return 'break'  # 'break' to don't let tkinter manage the mouse double click event in the widget
 
     #-------------------------------------------------------------------------------------------------
     def object_text_changes_apply(self):
         # (GUI event callback) the user has clicked on the button "Apply" to apply the changes done in the object text box
         # return False if there is an error in the text to apply, else True
 
-        if not self.edited_object_changed:
+        if not self.txt_object_text.edit_modified():
             # there is no change to apply
             return True
 
@@ -13868,13 +14272,13 @@ class C_GUI(C_GUI_NOTEBOOK):
             # the text box is empty
             return True
 
+        self.mouse_cursor_processing(True)
+
         # apply the object data in the ODF data
         object_uid = self.odf_data.object_lines_write(object_lines_list, self.edited_object_uid)
         if object_uid != None:
             # the modification has been applied with success
             self.odf_data_changed = True
-            self.edited_object_changed = False
-            # reset the edit modified flag
             self.txt_object_text.edit_modified(False)
 
             if self.edited_object_uid not in (None, object_uid):
@@ -13892,6 +14296,7 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.object_links_list_update()
             self.gui_status_update_lists(True)
             self.gui_status_update_buttons()
+            self.viewer_update('previous')
             changes_applied = True
         else:
             changes_applied = False
@@ -13901,14 +14306,109 @@ class C_GUI(C_GUI_NOTEBOOK):
         # update the events log text
         self.logs_update()
 
-        self.viewer_update('previous')  ##self.edited_object_uid, None, self.selected_object_app)
+        self.mouse_cursor_processing(False)
 
         return changes_applied
 
     #-------------------------------------------------------------------------------------------------
+    def object_text_file_pick(self):
+        # (GUI event callback) the user has clicked on the button "File picker" to select a file which path/name will be inserted in the text editor
+
+        if self.odf_data.odf_file_name == '':
+            AskUserAnswerQuestion(self.wnd_main, "OdfEdit", "Firstly save the data in an ODF.", ['Ok'], 'Ok')
+            return
+
+        # get the line content and number in which is placed the insertion cursor
+        cursor_pos = self.txt_object_text.index(tk.INSERT)
+        line = self.txt_object_text.get(cursor_pos + ' linestart', cursor_pos + ' lineend')
+
+        file_types = None
+        (error_msg, attr_name, attr_value, comment) = self.odf_data.object_line_split(line)
+        if error_msg == None and attr_name != 'uid':
+            # check the attribute name to propose the proper file types filter
+            if self.odf_data.is_image_attribute(attr_name):
+                file_types = [('Supported image files', '*.bmp *.gif *.jpg *.ico *.png'), ('All files', '*.*')]
+            elif self.odf_data.is_sample_attribute(attr_name):
+                file_types = [('Supported audio files', '*.wav'), ('All files', '*.*')]
+            else:
+                file_types = [('All files', '*.*')]
+
+            # define the initial directory for the file selection dialog box, based on the ODF path
+            initial_dir = os.path.dirname(os.path.dirname(self.odf_data.odf_file_name) + os.path.sep + path2ospath(attr_value))
+            while not os.path.isdir(initial_dir) and len(initial_dir) > 3:  # 3 chars is generally the length of the drive, like D:\
+                # use the parent folder of the current path until to have found an existing folder or the drive folder
+                initial_dir = os.path.dirname(initial_dir)
+                if initial_dir.endswith('..'): initial_dir = initial_dir[:-2]
+            # ask the user to select a file
+            file_name = fdialog.askopenfilename(title='Open an Organ Definition File (ODF)', initialdir=initial_dir, filetypes=file_types)
+
+            if file_name != '':
+                # a file has been selected by the user
+                # recover its path relatively to the path of the ODF
+                rel_path = os.path.relpath(file_name, os.path.dirname(self.odf_data.odf_file_name))
+                # for Linux, replace / characters by \ characters for the ODF
+                rel_path = rel_path.replace('/', '\\')
+                # apply the file path/name in the selected attribute
+                self.object_text_attr_set(attr_name, rel_path)
+
+                # update the viewer to reflect new content in the line having the insertion cursor
+                self.object_text_click()
+
+        if file_types == None:
+            # the attribute cannot have a file as value
+            AskUserAnswerQuestion(self.wnd_main, "OdfEdit", "Place the insertion cursor in the text editor\non a line having a file definition attribute.", ['Ok'], 'Ok')
+
+    #-------------------------------------------------------------------------------------------------
+    def object_text_attr_set(self, attrib_name, attrib_value):
+        # set in the text present in the object text box the given attribute value to the given attribute name
+        # if the attribute name is not present, add it in last line
+
+        # put in a list the lines of the text box
+        lines = self.txt_object_text.get('1.0', tk.END).splitlines()
+        attr_found = False
+
+        # search the given attribute name in the lines
+        for line_nb, line in enumerate(lines):
+
+            (error_msg, attr_name, attr_value, comment) = self.odf_data.object_line_split(line)
+            if error_msg == None and attr_name == attrib_name:
+                # attribute found
+                attr_found = True
+                #  delete the previous value and replace it by the given one after the '=' character
+                equal_pos = line.find('=', 1)
+                self.txt_object_text.replace(f'{line_nb+1}.{equal_pos+1}', f'{line_nb+1}.1 lineend', attrib_value)
+                break
+
+        if not attr_found:
+            # attribute not found, add it at the end of the present text
+            self.txt_object_text.insert(tk.END, f'\n{attrib_name}={attrib_value}')
+            # update the syntax highlighting in the object text
+            self.odf_syntax_highlight(self.txt_object_text)
+
+        self.gui_status_update_editor_buttons()
+
+    #-------------------------------------------------------------------------------------------------
+    def object_text_attr_get(self, attrib_name):
+        # get in the text present in the object text box the value of the given attribute name
+        # if the attribute name is not present, return None
+
+        # put in a list the lines of the text box
+        lines = self.txt_object_text.get('1.0', tk.END).splitlines()
+        attr_found = False
+
+        # search the given attribute name in the lines
+        for line_nb, line in enumerate(lines):
+
+            (error_msg, attr_name, attr_value, comment) = self.odf_data.object_line_split(line)
+            if error_msg == None and attr_name == attrib_name:
+                # attribute name found
+                return attr_value
+
+        return None
+
+    #-------------------------------------------------------------------------------------------------
     def object_add(self):
         # (GUI event callback) the user has clicked on the button "Add" to create a new object
-
 
         if not self.can_i_make_change():
             # the user has answered Cancel if the edited object has been modified
@@ -13968,11 +14468,68 @@ class C_GUI(C_GUI_NOTEBOOK):
                     self.focused_sel_item_id += new_object_uid
                 else:
                     self.focused_sel_item_id = 'Header'
-                self.objects_tree_node_and_parents_open(self.focused_sel_item_id)
             else:
                 self.focused_sel_item_id = new_object_uid
 
-            self.gui_status_update_lists(True)
+            self.gui_status_update_lists(True, True)
+            self.gui_status_update_buttons()
+
+        # update the events log text
+        self.logs_update()
+
+    #-------------------------------------------------------------------------------------------------
+    def object_clone(self):
+        # (GUI event callback) the user has clicked on the button "Clone" to create a new object cloned from the selected one
+
+        if not self.can_i_make_change():
+            # the user has answered Cancel if the edited object has been modified
+            return
+
+        object_type = self.odf_data.object_type_get(self.edited_object_uid)
+
+        if object_type in (None, 'Organ', 'Header'):
+            return
+
+        # recover the lines of the object to clone
+        object_lines = self.odf_data.object_lines_read(self.edited_object_uid)
+        # remove the first line which if it contains the object UID
+        if object_lines[0][0] == '[':
+            del object_lines[0]
+
+        # get the type of the object which must be taken in the parents of the object to clone (it can be None)
+        parent_object_type = self.odf_data.object_main_parent_type_get(self.edited_object_uid)
+
+        # recover the UID of the object which must be parent of the cloned object
+        parent_objects_uid_list = self.odf_data.object_kinship_list_get(self.edited_object_uid, TO_PARENT, parent_object_type)
+        if len(parent_objects_uid_list) > 0:
+            parent_object_uid = parent_objects_uid_list[0]
+        else:
+            parent_object_uid = None
+
+        # create the cloned object in the ODF
+        new_object_uid = self.odf_data.object_add(object_type, parent_object_uid, object_lines)
+        if new_object_uid != None:
+            # the object has been created successfully
+            self.odf_data_changed = True
+            logs.add(f'{new_object_uid} cloned from {self.edited_object_uid}')
+
+            if self.focused_objects_widget == self.trv_objects_tree:
+                self.focused_sel_item_id = self.focused_sel_item_id.replace(self.edited_object_uid, new_object_uid)
+            else:
+                self.focused_sel_item_id = new_object_uid
+
+            # set the new object as the current selected and focused object
+            self.selected_object_uid = new_object_uid
+            self.selected_linked_uid = None
+            self.edited_object_uid = new_object_uid
+
+            # update the content of GUI widgets
+            self.objects_list_update()
+            self.objects_tree_update()
+            self.object_links_list_update()
+            self.object_text_update()
+
+            self.gui_status_update_lists(True, True)
             self.gui_status_update_buttons()
 
         # update the events log text
@@ -14156,7 +14713,6 @@ class C_GUI(C_GUI_NOTEBOOK):
         if self.odf_data.object_delete(self.edited_object_uid):
             # the object has been removed without issue
             self.odf_data_changed = True
-            self.edited_object_changed = False
             # update the current object UID
             self.selected_object_uid = next_selected_object_uid
             self.selected_linked_uid = None
@@ -14327,7 +14883,7 @@ class C_GUI(C_GUI_NOTEBOOK):
 
             if self.odf_check_files_names == None:
                 # ask the user if he wants to check the files names (to make a faster check)
-                self.odf_check_files_names = 'Yes' == AskUserAnswerQuestion(self.wnd_main, 'OdfEdit', "Do you want to check files names ?\nThe check will be faster if files names are not checked.\nThis choice will be memorized until the next ODF opening", ['Yes', 'No'], 'No')
+                self.odf_check_files_names = 'Yes' == AskUserAnswerQuestion(self.wnd_main, 'OdfEdit', "Do you want to check files names ?\nThe check will be faster if files names are not checked.\nThis choice will be memorized until the next ODF open or reload", ['Yes', 'No'], 'No')
 
             # do the check
             self.odf_data.check_odf_data(self.progress_status_update, self.odf_check_files_names)
@@ -14401,8 +14957,7 @@ class ToolTip():
         self.tw.wm_overrideredirect(True)
         self.tw.wm_geometry(f"+{x}+{y}")
         label = tk.Label(self.tw, text=self.text, justify=tk.LEFT,
-                          background='#FFFFE5', relief=tk.SOLID, borderwidth=1,
-                          wraplength = self.wraplength)
+                         background='#FFFFE5', relief=tk.SOLID, borderwidth=1, wraplength = self.wraplength)
         label.pack(ipadx=1)
 
     def hidetip(self):
@@ -14418,7 +14973,7 @@ class AskUserChooseListItems():
     # returns a list containing the selected items in choice_items_list, or None if the user clicked on Cancel or close button or nothing has been selected
 
     # dialog box dimensions
-    dialog_wnd_w = 300
+    dialog_wnd_w = 400
     dialog_wnd_h = 450
 
     def __new__(cls, parent_wnd, title, message, choice_items_list, preselect_items_list = [], multiselect_bool=False, resizable_wnd_bool=True):
@@ -14462,11 +15017,11 @@ class AskUserChooseListItems():
         listdialog_frm1.pack(side=tk.BOTTOM, fill=tk.X)
 
         # OK button
-        toplevel_dialog_yes_button = ttk.Button(listdialog_frm1, text='OK', style='Return.TButton', command=lambda reason='ok': closure_reason.set(reason))
+        toplevel_dialog_yes_button = ttk.Button(listdialog_frm1, text='OK', style='Bold.TButton', command=lambda: closure_reason.set('ok'))
         toplevel_dialog_yes_button.pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X, expand=True)
 
         # Cancel button
-        toplevel_dialog_no_button = ttk.Button(listdialog_frm1, text='Cancel', command=lambda reason=None: closure_reason.set(reason))
+        toplevel_dialog_no_button = ttk.Button(listdialog_frm1, text='Cancel', command=lambda: closure_reason.set(None))
         toplevel_dialog_no_button.pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X, expand=True)
 
         # frame to occupy the middle area of the window and to encapsulate the list and its vertical scroll bar
@@ -14569,7 +15124,7 @@ class AskUserAnswerQuestion():
         # create buttons for the given possible answers
         for answer in answers_list:
             if answer == on_return_answer:
-                ttk.Button(listdialog_frm1, text=answer, style='Return.TButton', command=lambda reason=answer: closure_reason.set(reason)).pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X, expand=True)
+                ttk.Button(listdialog_frm1, text=answer, style='Bold.TButton', command=lambda reason=answer: closure_reason.set(reason)).pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X, expand=True)
             else:
                 ttk.Button(listdialog_frm1, text=answer, command=lambda reason=answer: closure_reason.set(reason)).pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X, expand=True)
 
@@ -14635,7 +15190,7 @@ class AskUserEnterString():
                 image = None
 
             if image != None:
-                label_image = tk.Label(dialog_wnd, image=image)
+                label_image = ttk.Label(dialog_wnd, image=image)
                 label_image.pack(side=tk.TOP, padx=20, pady=0, fill=tk.X)
 
         # create the entry widget to let the user enter his string
@@ -14648,8 +15203,8 @@ class AskUserEnterString():
         listdialog_frm1.pack(side=tk.BOTTOM, fill=tk.X)
 
         # create OK and Cancel buttons
-        ttk.Button(listdialog_frm1, text='OK', style='Return.TButton', command=lambda reason='OK': closure_reason.set(reason)).pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X, expand=True)
-        ttk.Button(listdialog_frm1, text='Cancel', command=lambda reason=None: closure_reason.set(reason)).pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X, expand=True)
+        ttk.Button(listdialog_frm1, text='OK', style='Bold.TButton', command=lambda: closure_reason.set('OK')).pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X, expand=True)
+        ttk.Button(listdialog_frm1, text='Cancel', command=lambda: closure_reason.set(None)).pack(side=tk.LEFT, padx=5, pady=5, fill=tk.X, expand=True)
 
         # place the dialog window at the center of the parent window
         dialog_wnd.update()
