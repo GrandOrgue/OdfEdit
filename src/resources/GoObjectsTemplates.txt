@@ -87,6 +87,13 @@
     "NumberOfTremulants=0",
    ),
 
+"Image":
+   (
+    "Image=",
+    "PositionX=0",
+    "PositionY=0",
+   ),
+
 "Manual":
    (
     "Name=Manual template",

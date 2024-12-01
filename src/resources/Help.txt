@@ -6,7 +6,8 @@ To completely check the goodness of an ODF, loading it in GrandOrgue will detect
 Double clicking a section name in the sections list will expand the sections tree so that all the occurrences of the selected section are visible in the tree.
 Double clicking on a parent or child section name in the parents/children list will make this section the selected one in the sections list and tree.
 Double clicking on a search result in the HW sample set will make show the related section in the "HW sections" tab.
-Pressing on the Delete button of the computer keyboard will do the same clicking on the Delete button of OdfEdit.
+Right clicking in the logs area displays a contextual menu, permitting to clear logs or to select the section which the name is under the mouse cursor.
+Pressing on the Delete button of the computer keyboard will do the same as clicking on the Delete button of OdfEdit.
 The help below is largely inspired and copy/pasted from the GrandOrgue help.
 
 Menu items
