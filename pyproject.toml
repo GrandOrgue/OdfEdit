@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "OdfEdit"
-version = "2.15"
+version = "2.16"
 description = "Tool for GrandOrgue organ definition file edition and generation"
 readme = "README.md"
 authors = [{ name = "Eric Turpault" }]
