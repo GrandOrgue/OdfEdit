@@ -208,13 +208,17 @@
                             - the zoom-in has more effect than the zoom-out
                           HW2GO : files not found in the sample set folders are converted all the same in the GO ODF if they are not addressing Hauptwerk Standard Components packages
                                   (if their package ID is higher than 10)
+   v2.17 - 23 Dec 2024  - Support of multiple sections selection. Drag & drop and Parent/Clone/Delete buttons can act on selected sections. More details in the help.
+                          A section referenced in a PanelElement section is its child and no more its parent
+
 TO DO LIST :
+    ...
 
 -------------------------------------------------------------------------------
 """
 
-APP_VERSION = 'v2.16'
-RELEASE_DATE = 'December 1st 2024'
+APP_VERSION = 'v2.17'
+RELEASE_DATE = 'December 23rd 2024'
 
 DEV_MODE = False
 LOG_HW2GO_drawstop = False
@@ -232,7 +236,7 @@ import math
 import sys
 import time
 
-##import traceback  # call traceback.print_stack(limit=5) in a function to print in the Python console the last 5 calls stack to this function
+##import traceback  # call traceback.print_stack(limit=5) in a function to print in the Python console the stack of last 5 calls to this function
 
 from threading import Thread
 from datetime  import date
@@ -724,7 +728,6 @@ class C_AUDIO_PLAYER:
                     metadata_dic['loops_nb'] = loops_nb = int.from_bytes(file_obj.read(4), 'little')
                     file_obj.read(4) # skip the sampler data bytes number
                     chunk_read_data_size += 36
-
 
                     for l in range(1, loops_nb+1):
                         metadata_dic[f'loop{l}_id'] = int.from_bytes(file_obj.read(4), 'little')
@@ -2667,7 +2670,7 @@ class C_ODF_DATA_CHECK:
         self.check_attribute_value(object_uid, lines_list, 'MaxVelocityVolume', ATTR_TYPE_FLOAT, False, 0, 1000)
         self.check_attribute_value(object_uid, lines_list, 'AcceptsRetuning', ATTR_TYPE_BOOLEAN, False)
 
-        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfLogicalPipes', ATTR_TYPE_INTEGER, is_rank_obj, 1, 192))
+        value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfLogicalPipes', ATTR_TYPE_INTEGER, is_rank_obj, 1, 192), 0)
         for idx in range(1, value + 1):  # Pipe999xxx attributes
             pipe_id = f'Pipe{str(idx).zfill(3)}'
             self.check_attribute_value(object_uid, lines_list, pipe_id, ATTR_TYPE_PIPE_WAVE, True)
@@ -3064,19 +3067,19 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
     go_objects_children_dic = {
         'Header': [],
         'Organ': ['General', 'Image', 'Manual', 'Panel', 'Switch', 'WindchestGroup'],  # are not real children but are presented as children in the objects tree
-        'Coupler': ['Manual', 'PanelElement', 'Switch'],
-        'Divisional': ['PanelElement'],
-        'DivisionalCoupler': ['Manual', 'PanelElement', 'Switch'],
-        'Enclosure': ['PanelElement'],
-        'General': ['PanelElement'],
-        'Manual': ['Coupler', 'Divisional', 'PanelElement', 'Stop', 'Switch', 'Tremulant'],
+        'Coupler': ['Manual', 'Switch'],
+        'Divisional': [],
+        'DivisionalCoupler': ['Manual', 'Switch'],
+        'Enclosure': [],
+        'General': [],
+        'Manual': ['Coupler', 'Divisional', 'Stop', 'Switch', 'Tremulant'],
         'Panel': ['PanelElement', 'PanelImage'],
-        'PanelElement': [],
+        'PanelElement': ['Coupler', 'Divisional', 'DivisionalCoupler', 'Enclosure', 'General', 'Manual', 'Stop', 'Switch', 'Tremulant'],
         'PanelImage': [],
         'Rank': [],
-        'Stop': ['PanelElement', 'Rank', 'Switch'],
-        'Switch': ['PanelElement', 'Switch'],
-        'Tremulant': ['PanelElement', 'Switch'],
+        'Stop': ['Rank', 'Switch'],
+        'Switch': ['Switch'],
+        'Tremulant': ['Switch'],
         'WindchestGroup': ['Enclosure', 'Stop', 'Rank', 'Tremulant'],
         # old panel format
         'Image': [],
@@ -3471,7 +3474,7 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
                 # link the new object to its parent if provided
                 self.object_parent2child_link(parent_object_uid, object_uid, 'link')
             elif self.object_type_get(object_uid) in ('PanelElement', 'PanelImage'):
-                # link the new object to its parent panel if it is PanelElement or PanelImage object
+                # link the new object to its parent panel if it is a PanelElement or PanelImage object
                 self.object_parent2child_link(object_uid[:8], object_uid, 'link')
 
         else:
@@ -3540,9 +3543,12 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
         return object_uid
 
     #-------------------------------------------------------------------------------------------------
-    def object_copy(self, object_uid, parent_uid):
-        # make a copy of the object having given UID and place it as child of the given parent object UID (can be None)
-        # return the UID of the copied object, or None if an error occured
+    def object_clone(self, object_uid, parent_uid):
+        # clone the given object UID and set the clone as child of the given parent object UID (can be None)
+        # return the UID of the cloned object, or None if an error occured
+
+        if self.object_type_get(object_uid) in (None, 'Organ', 'Header'):
+            return None
 
         # recover the lines of the object to copy
         attribute_lines_list = self.object_lines_read(object_uid)
@@ -3556,9 +3562,9 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
             new_object_uid = None
 
         if new_object_uid != None:
-            logs.add(f'{new_object_uid} : copied from {object_uid}')
+            logs.add(f'{new_object_uid} : cloned from {object_uid}')
         else:
-            logs.add(f'ERROR cannot make a copy of {object_uid}')
+            logs.add(f'ERROR cannot make a clone of {object_uid}')
 
         return new_object_uid
 
@@ -3579,7 +3585,7 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
         current_kinship_list = sorted(self.object_kinship_list_get(object_uid, relationship))
 
         # build a dictionary with as keys the object types which are present in the given kinship objects list
-        #                     and as values how many ther are in the list
+        #                     and as values how many they are in the list
         kinship_objects_types_dic = {}
         for obj_uid in kinship_objects_list:
             obj_type = self.object_type_get(obj_uid)
@@ -3641,9 +3647,9 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
         return ret_object_uid
 
     #-------------------------------------------------------------------------------------------------
-    def object_rename(self, object_uid, new_object_uid, do_kinship_links_update=True, same_uid_shift=0):
+    def object_rename(self, object_uid, new_object_uid, do_kinship_links_update=True, same_uid_shift_value=0):
         # rename in the ODF data the object having the given UID to the given new UID (only the three ending digits of the UID can be changed)
-        # if same_uid_shift is not 0 and an object has already the same UID as the given new UID,
+        # if same_uid_shift_value is not 0 and an object has already the same UID as the given new UID,
         #       its UID is shifted by the given shift value to permit the given UID to have the new UID
         # return the new UID of the object, or None if failure
 
@@ -3652,34 +3658,33 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
             logs.add("INTERNAL ERROR in object_rename : Header and Organ objects cannot be renamed")
             return None
 
-        if self.object_type_get(object_uid) != self.object_type_get(new_object_uid):
+        object_type = self.object_type_get(object_uid, False)
+        if object_type != self.object_type_get(new_object_uid, False):
             # current and new objects are not of the same object type
             logs.add(f"INTERNAL ERROR in object_rename : objects {object_uid} and {new_object_uid} are not of the same type")
             return None
 
-        if self.object_dic_get(object_uid) == None:
+        object_dic = self.object_dic_get(object_uid)
+        if object_dic == None:
             # there is no object in the ODF having the given object UID
             logs.add(f"INTERNAL ERROR in object_rename : object {object_uid} does not exit")
             return None
 
+        object_id = self.object_id_get(object_uid)
+        new_object_id = self.object_id_get(new_object_uid)
         if self.object_dic_get(new_object_uid) != None:
             # there is already in the ODF an object having the same UID as the given new UID
-            if same_uid_shift != 0:
-                # the object having already the new UID has to be renamed to the UID + same_uid_shift value
+            if same_uid_shift_value != 0:
+                # the object having already the new UID has to be renamed to the UID + same_uid_shift_value value
                 # apply recursively the UID renaming to next/previous consecutive objects
-                shifted_object_uid = new_object_uid[:-3] + str(int(new_object_uid[-3:]) + same_uid_shift).zfill(3)
-                self.object_rename(new_object_uid, shifted_object_uid, False, same_uid_shift)
+                shifted_object_uid = object_type + str(new_object_id + same_uid_shift_value).zfill(3)
+                self.object_rename(new_object_uid, shifted_object_uid, do_kinship_links_update, same_uid_shift_value)
             else:
                 logs.add(f"Warning : cannot rename {object_uid} in {new_object_uid} which is already used")
                 return None
 
         # rename the reference to the object UID in its parents or children objects if necessary
-
         object_type = self.object_type_get(object_uid)
-        object_dic = self.object_dic_get(object_uid)
-        object_id = self.object_id_get(object_uid)
-        new_object_id = self.object_id_get(new_object_uid)
-
         if object_type == 'Panel':
             # rename the UID of all the children (PanelElement and PanelImage objects) of the panel to rename
             # so that they contain the new UID of the parent panel
@@ -3729,7 +3734,8 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
                             self.object_attr_value_set(parent_dic, attr_name, str(new_object_id).zfill(3))
                             logs.add(f"{parent_uid} : attribute {attr_name} changed from {str(object_id).zfill(3)} to {str(new_object_id).zfill(3)}")
                             # sort in the parent object the references to the object type if necessary
-                            self.object_children_ref_update(parent_uid, object_type)
+                            if do_kinship_links_update:
+                                self.object_children_ref_update(parent_uid, object_type)
                             break
 
             # rename the reference to the object to rename in its children if necessary
@@ -3927,11 +3933,21 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
 
     #-------------------------------------------------------------------------------------------------
     def object_names_get(self, object_uid):
-        # return the UID followed by the names between parenthesis (if defined) of the given object UID
+        # return in a string the names of the given object UID if defined
 
         object_dic = self.object_dic_get(object_uid)
         if object_dic != None and len(object_dic['names']) > 0:
-            return object_uid + ' (' + ' | '.join(object_dic['names']) + ')'
+            return ' | '.join(object_dic['names'])
+
+        return ''
+
+    #-------------------------------------------------------------------------------------------------
+    def object_uid_names_get(self, object_uid):
+        # return in a string the UID followed by the names between parenthesis (if defined) of the given object UID
+
+        object_dic = self.object_dic_get(object_uid)
+        if object_dic != None and len(object_dic['names']) > 0:
+            return object_uid + ' - ' + ' | '.join(object_dic['names'])
 
         return object_uid
 
@@ -4037,7 +4053,7 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
             if operation == 'link':
                 self.object_attr_value_set(parent_object_dic, 'DestinationManual', child_object_id)
                 logs.add(f"{parent_object_uid} : reference to {child_object_uid} added")
-            else:
+            else: # operation == 'unlink'
                 self.object_attr_value_set(parent_object_dic, 'DestinationManual', '')
                 logs.add(f"{parent_object_uid} : reference to {child_object_uid} removed")
             return child_object_uid
@@ -4047,7 +4063,7 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
             if operation == 'link':
                 self.object_attr_value_set(child_object_dic, 'WindchestGroup', parent_object_id)
                 logs.add(f"{child_object_uid} : reference to {parent_object_uid} added")
-            else:
+            else: # operation == 'unlink'
                 self.object_attr_value_set(child_object_dic, 'WindchestGroup', '')
                 logs.add(f"{child_object_uid} : reference to {parent_object_uid} removed")
             return child_object_uid
@@ -4081,35 +4097,46 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
                 # update the NumberOf attribute of the parent Panel object to take into account the added child
                 self.object_panel_numbers_update(parent_object_uid)
 
-            elif operation == 'unlink':
+            else: # operation == 'unlink'
                 # unlink a PanelElement or PanelImage to its parent panel is not possible as its UID contain necessarily a parent UID
                 # the object can be only renamed, which is done by the Link operation, or deleted
                 child_object_uid = None
 
             return child_object_uid
 
-        if child_object_type == 'PanelElement':  # and parent_object_type != 'Panel'
-            # link between a child PanelElement and a parent which is not a Panel and which has to be unique)
+        if parent_object_type == 'PanelElement':
+            # link between a parent PanelElement and a child object which has to be unique
             # remove in the PanelElement object all the lines with Type or referencing attributes
             line_nb = 0
-            child_lines_list = child_object_dic['lines']
-            while line_nb < len(child_lines_list):
-                # scan the lines of the child object
-                (error_msg, attr_name, attr_value, comment) = self.object_line_split(child_lines_list[line_nb])
-                if attr_name != None and (attr_name in self.go_objects_parents_dic['PanelElement'] or attr_name == 'Type'):
-                    # the current line contains an attribute which the name is an allowed parent name : remove this line
-                    del child_object_dic['lines'][line_nb]
+            parent_lines_list = parent_object_dic['lines']
+            while line_nb < len(parent_lines_list):
+                # scan the lines of the parent object
+                (error_msg, attr_name, attr_value, comment) = self.object_line_split(parent_lines_list[line_nb])
+                if attr_name != None and (attr_name in self.go_objects_children_dic[parent_object_type] or attr_name in ('Type', 'Manual')):
+                    # the current line contains an attribute which the name is an allowed child name or Type / Manual : remove this line
+                    del parent_object_dic['lines'][line_nb]
                     line_nb -= 1
                 line_nb += 1
             if operation == 'link':
                 # add the type and reference to the parent object to link to the child PanelElement
-                child_object_dic['lines'].insert(1, f'Type={parent_object_type}')
-                child_object_dic['lines'].insert(2, f'{parent_object_type}={str(parent_object_id).zfill(3)}')
-                logs.add(f"{child_object_uid} : link to {parent_object_uid} added")
-            else:
+                parent_object_dic['lines'].insert(1, f'Type={child_object_type}')
+                if child_object_type in ('Coupler', 'Divisional', 'Stop'):
+                    # recover the manual UID in which is defined the child Coupler or Divisional or Stop
+                    manual_uid_list = self.object_kinship_list_get(child_object_uid, TO_PARENT, 'Manual')
+                    if len(manual_uid_list) > 0:
+                        manual_uid = manual_uid_list[0]
+                        manual_children_list = self.object_kinship_list_get(manual_uid, TO_CHILD, child_object_type)
+                        child_index = manual_children_list.index(child_object_uid)
+                        parent_object_dic['lines'].insert(2, f'{child_object_type}={str(child_index + 1).zfill(3)}')
+                        parent_object_dic['lines'].insert(3, f'Manual={manual_uid[-3:]}')
+                else:
+                    parent_object_dic['lines'].insert(2, f'{child_object_type}={str(child_object_id).zfill(3)}')
+
+                logs.add(f"{parent_object_uid} : link to {child_object_uid} added")
+            else: # operation == 'unlink'
                 # add an empty "Type=" attribute
-                child_object_dic['lines'].insert(1, 'Type=')
-                logs.add(f"{child_object_uid} : link to {parent_object_uid} removed")
+                parent_object_dic['lines'].insert(1, 'Type=')
+                logs.add(f"{parent_object_uid} : link to {child_object_uid} removed")
 
             return child_object_uid
 
@@ -4415,7 +4442,7 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
     def objects_kinship_update(self):
         # update the kinship links (parent - child) between the objects of the ODF dictionary
 
-        for object_uid, object_dic in self.odf_data_dic.items():
+        for object_dic in self.odf_data_dic.values():
             # scan the objects of the ODF dictionary to reset their internal attributes
             object_dic['names'] = []
             object_dic['parents'] = []
@@ -4424,6 +4451,7 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
         for object_uid, object_dic in self.odf_data_dic.items():
             # scan the objects of the ODF dictionary to define their parent/child kinship links and their name to display in the objects list/tree
             object_type = self.object_type_get(object_uid)
+            object_with_no_link = object_type in ('Divisional', 'Enclosure', 'General', 'Panel', 'Tremulant')
 
             for line in object_dic['lines']:
                 # scan the lines of the current object to detect links toward other objects or names to display
@@ -4433,26 +4461,31 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
 
                     # get possible names to display in the objects list/tree
                     if attr_name in ['Name', 'ChurchName', 'DispLabelText']:
-                        object_dic['names'].insert(0, attr_value)
+                        object_dic['names'].append(attr_value)
                     elif object_type == 'PanelImage' and attr_name == 'Image':
                         # image attribute, the value is the path of the image : keep from the image path only the file name
-                        object_dic['names'].insert(0, os.path.split(attr_value)[1])
+                        object_dic['names'].append(os.path.split(attr_value)[1])
 
-                    if myint(attr_value) != None:
+                    if object_with_no_link:
+                        # objects not to link with another object are skipped as soon as their name is defined
+                        if len(object_dic['names']) > 0:
+                            break
+                    elif myint(attr_value) != None:
                         # the attribute value is an integer which may refer to the ID of another object
-                        if object_type not in ('General', 'Divisional') and myint(attr_name[-3:]) != None:
-                            # attribute name ending with 3 digits (like Coupler999)
+
+                        if myint(attr_name[-3:]) != None:
+                            # attribute name ending with 3 digits (like Coupler999) in an object which is not a General or Divisional
                             ref_object_type = attr_name[:-3]
                             if ref_object_type not in ('MIDIKey', 'DisplayKey'):
                                 ref_object_uid = ref_object_type + attr_value.zfill(3)
                                 self.object_kinship_list_add(object_uid, ref_object_uid, TO_CHILD)
 
                         elif object_type == 'Rank' and attr_name == 'WindchestGroup':
-                            # attribute WindchestGroup in a Rank object referencing a WindchestGroup object
+                            # attribute WindchestGroup refering to the parent WindchestGroup of the Rank object
                             ref_object_uid = attr_name + attr_value.zfill(3)
                             self.object_kinship_list_add(object_uid, ref_object_uid, TO_PARENT)
                             if len(object_dic['names']) > 0:
-                                # no need to continue to parse the lines of the rank object if it has already its name recovered, to gain time
+                                # no need to continue to parse the lines of the rank object if it has already its name recovered, to gain time (a rank can have a lot attributes)
                                 break
 
                         elif object_type == 'Coupler' and attr_name == 'DestinationManual':
@@ -4460,37 +4493,37 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
                             ref_object_uid = 'Manual' + attr_value.zfill(3)
                             self.object_kinship_list_add(object_uid, ref_object_uid, TO_CHILD)
 
-                        elif object_type == 'PanelElement':
-                            if attr_name in self.go_objects_parents_dic['PanelElement']:
-                                # attribute referencing a parent object of a PanelElement
-                                ref_object_uid = None
-                                if attr_name in ('Coupler', 'Divisional', 'Stop'):
-                                    # the attribute value is the index of the referenced object in the manual given in the attribute Manual of the PanelElement
-                                    # recover the ID of the referenced Manual object
-                                    manual_id = myint(self.object_attr_value_get(object_dic, 'Manual'))
-                                    if manual_id != None:
-                                        manual_uid = 'Manual' + str(manual_id).zfill(3)
-                                        # recover the sorted list of children of the manual which the type is equal to the attribute name
-                                        manual_children_list = sorted(self.object_kinship_list_get(manual_uid, TO_CHILD, attr_name))
-                                        ref_object_index = int(attr_value)
-                                        if 0 < ref_object_index <= len(manual_children_list):
-                                            # recover the object UID at the referenced index in the children of the manual
-                                            ref_object_uid = manual_children_list[ref_object_index - 1]
-                                            self.object_kinship_list_add(object_uid, ref_object_uid, TO_PARENT)
-                                elif attr_name != 'Manual' or self.object_attr_value_get(object_dic, 'Type') == 'Manual':
-                                    # it is not the attribute Manual or it is a PanelElement of the Manual type (having also the attribute name = Manual)
-                                    # to ignore the Manual attribute of PanelElement objects referencing to Coupler, Divisional or Stop already managed above
-                                    ref_object_uid = attr_name + attr_value.zfill(3)
-                                    self.object_kinship_list_add(object_uid, ref_object_uid, TO_PARENT)
+                        elif object_type == 'PanelElement' and attr_name in self.go_objects_children_dic['PanelElement']:
+                            # attribute refering to a child object of a PanelElement
+                            ref_object_uid = None
+                            if attr_name in ('Coupler', 'Divisional', 'Stop'):
+                                # the attribute value is the index of the referenced object in the manual given in the attribute Manual of the PanelElement
+                                # recover the UID of the referenced Manual object
+                                manual_id = myint(self.object_attr_value_get(object_dic, 'Manual'))
+                                if manual_id != None:
+                                    manual_uid = 'Manual' + str(manual_id).zfill(3)
+                                    # recover the sorted list of children of the manual which the type is equal to the attribute name
+                                    manual_children_list = self.object_kinship_list_get(manual_uid, TO_CHILD, attr_name)
+                                    ref_object_index = int(attr_value)
+                                    if 0 < ref_object_index <= len(manual_children_list):
+                                        # recover the object UID at the referenced index in the children of the manual
+                                        ref_object_uid = manual_children_list[ref_object_index - 1]
+                                        self.object_kinship_list_add(object_uid, ref_object_uid, TO_CHILD)
 
-                                if ref_object_uid != None:
-                                    # add to the object's names the UID and name of the referenced object
-                                    ref_object_name = self.object_attr_value_get(ref_object_uid, 'Name')
-                                    if ref_object_name != None:
-                                        # add the name of the referenced object UID to the PanelElement names list
-                                        object_dic['names'].append(ref_object_name)
-                                    # add the referenced object UID to the PanelElement names list
-                                    object_dic['names'].append(ref_object_uid)
+                            elif attr_name != 'Manual' or self.object_attr_value_get(object_dic, 'Type') == 'Manual':
+                                # it is not the attribute Manual or it is a PanelElement of the Manual type (having also the attribute name = Manual)
+                                # to ignore the Manual attribute of PanelElement objects referencing to Coupler, Divisional or Stop already managed above
+                                ref_object_uid = attr_name + attr_value.zfill(3)
+                                self.object_kinship_list_add(object_uid, ref_object_uid, TO_CHILD)
+
+                            if ref_object_uid != None:
+                                # add to the object's names the UID and name of the referenced object
+                                ref_object_name = self.object_attr_value_get(ref_object_uid, 'Name')
+                                if ref_object_name != None:
+                                    # add the name of the referenced object UID to the PanelElement names list
+                                    object_dic['names'].append(ref_object_name)
+                                # add the referenced object UID to the PanelElement names list
+                                object_dic['names'].insert(0, ref_object_uid)
 
             if object_type.startswith('Panel') and len(object_type) > 5:
                 # Panel999xxxx object type
@@ -4498,17 +4531,11 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
                 # link the object to its Panel parent
                 self.object_kinship_list_add(object_uid, panel_uid, TO_PARENT)
 
-                if object_type == 'PanelElement':
-                    if len(object_dic['parents']) == 1:
-                        # there is only the parent Panel in the parents list, add the object type in the names
-                        ref_object_type = self.object_attr_value_get(object_dic, 'Type')
-                        if ref_object_type != None:
-                            object_dic['names'].append(ref_object_type)
-
-                # add to the object's names the name of its parent panel
-                name = self.object_attr_value_get(panel_uid, 'Name')
-                if name not in (None, ''):
-                    object_dic['names'].append(name)
+                if object_type == 'PanelElement' and len(object_dic['children']) == 0:
+                    # the PanelElement has no children object, add its type in the names of the object
+                    ref_object_type = self.object_attr_value_get(object_dic, 'Type')
+                    if ref_object_type != None:
+                        object_dic['names'].insert(0, ref_object_type)
 
     #-------------------------------------------------------------------------------------------------
     def object_organ_numbers_update(self, object_uid):
@@ -10255,8 +10282,8 @@ class C_GUI_NOTEBOOK():
     canvas_zoom_factor = 1.0 # zoom factor at which is displayed the images in the canvas
     canvas_outer_margin = 10
 
-    dragged_object_id_list = {}
-    dragged_object_uid = None
+    img_drag_objects_id_list = {}
+    img_drag_object_uid = None
 
     # variables used for the search in the Help
     search_in_help_last_text = ''      # last searched text
@@ -10285,7 +10312,7 @@ class C_GUI_NOTEBOOK():
         scrollbarh = ttk.Scrollbar(self.frm_logs, orient=tk.HORIZONTAL)
         scrollbarv.pack(side=tk.RIGHT, fill=tk.Y)
         scrollbarh.pack(side=tk.BOTTOM, fill=tk.X)
-        self.txt_events_log = tk.Text(self.frm_logs, fg=TEXT_COLOR, bg=COLOR_BG_LOGS, bd=3, wrap=tk.NONE, font=TEXT_FONT, selectbackground=COLOR_BG_TEXT_SEL)
+        self.txt_events_log = tk.Text(self.frm_logs, fg=TEXT_COLOR, bg=COLOR_BG_LOGS, bd=3, wrap=tk.NONE, font=TEXT_FONT, state=tk.DISABLED, selectbackground=COLOR_BG_TEXT_SEL)
         self.txt_events_log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.txt_events_log.bind('<Control-Key-a>', self.logs_select_all)
         self.txt_events_log.bind('<Control-Key-A>', self.logs_select_all)
@@ -10543,8 +10570,10 @@ class C_GUI_NOTEBOOK():
 
         logs_list = logs.get()
         if len(logs_list) > 0:
+            self.txt_events_log.config(state=tk.NORMAL)
             self.txt_events_log.insert('end', '\n' + '\n'.join(logs_list) + '\n')
             self.txt_events_log.see('end-1c linestart')  # to see the start of the last line of the text
+            self.txt_events_log.config(state=tk.DISABLED)
         self.txt_events_log.update()
 
         # reset the logs buffer
@@ -10574,7 +10603,7 @@ class C_GUI_NOTEBOOK():
             self.logs_menu.entryconfigure(0, state=tk.ACTIVE)
         else:
             self.logs_menu_object_name = None
-            self.logs_menu.entryconfigure(0, label='No section name under the cursor')
+            self.logs_menu.entryconfigure(0, label='No valid section name under the cursor')
             self.logs_menu.entryconfigure(0, state=tk.DISABLED)
 
         # open the contextual menu
@@ -10588,26 +10617,30 @@ class C_GUI_NOTEBOOK():
             # the user has saved his modifications if he wanted and has not canceled the operation
             # select the object clicked in the logs
 
-            self.selected_object_uid = self.logs_menu_object_name
-            self.selected_linked_uid = None
-            self.edited_object_uid = self.selected_object_uid
-            self.focused_objects_widget = None
             self.selected_object_app = 'GO'
+            self.selected_object_uid = self.logs_menu_object_name
+            self.selected_linked_object_uid = None
+            self.selected_objects_uid_list = [self.selected_object_uid]
+            self.focused_objects_widget = None
 
             # update the object text box and links list
             self.object_text_update()
-            self.object_links_list_update()
+            self.objects_links_list_content_update()
 
             # update the status of GUI widgets
-            self.gui_status_update_lists(True)
-            self.gui_status_update_buttons()
+            self.gui_update_obj_list_focus(True)
+            self.gui_update_linkobj_list_focus(True)
+            self.gui_update_obj_tree_focus(self.focused_objects_widget == self.trv_objects_tree)
+            self.gui_update_buttons_state()
 
     #-------------------------------------------------------------------------------------------------
     def logs_clear(self):
         # (GUI event callback) the user has selected ""Clear logs" in the context menu of the logs text box
 
         # clear the content of the logs text box
+        self.txt_events_log.config(state=tk.NORMAL)
         self.txt_events_log.delete(1.0, "end")
+        self.txt_events_log.config(state=tk.DISABLED)
 
         # reset the logs buffer
         logs.clear()
@@ -10897,12 +10930,15 @@ class C_GUI_NOTEBOOK():
             # update the links between the objects and their displayed names
             self.odf_data.objects_kinship_update()
             # update the content of GUI widgets
-            self.objects_list_update()
-            self.objects_tree_update()
-            self.object_links_list_update()
+            self.objects_list_content_update()
+            self.objects_tree_content_update()
+            self.objects_links_list_content_update()
             self.object_text_update()
-            self.gui_status_update_lists()
-            self.gui_status_update_buttons()
+
+            self.gui_update_obj_list_focus()
+            self.gui_update_linkobj_list_focus()
+            self.gui_update_obj_tree_focus()
+            self.gui_update_buttons_state()
 
             # update the events log text
             self.logs_update()
@@ -11000,17 +11036,13 @@ class C_GUI_NOTEBOOK():
                 # the UID is existing in the HW ODF
                 self.selected_object_app = 'HW'
                 self.selected_object_uid = text_to_search
-                self.selected_linked_uid = None
-                self.edited_object_uid = text_to_search
+                self.selected_linked_object_uid = None
+                self.selected_objects_uid_list.clear()
                 self.focused_objects_widget = self.lst_hw_browser
-                self.focused_sel_item_id = text_to_search
 
                 # update the status of GUI widgets
-                self.object_links_list_update()
                 self.objects_list_update_hw()
                 self.object_text_update()
-                self.gui_status_update_lists()
-                self.gui_status_update_buttons()
             else:
                 AskUserAnswerQuestion(self.wnd_main, 'OdfEdit', f'"{text_to_search}" is not a known HW UID.', ['Close'], 'Close')
         else:
@@ -11027,20 +11059,19 @@ class C_GUI_NOTEBOOK():
             # the user has saved his modifications if he wanted and has not canceled the operation
             selected_text = self.lst_odf_sresults.get(selected_indice[0])
 
-            self.selected_object_uid = selected_text.split(' ')[0]
-            self.selected_linked_uid = None
-            self.edited_object_uid = self.selected_object_uid
-            self.focused_objects_widget = None
-
             if self.selected_object_uid == '_General' or self.selected_object_uid[-6:].isdigit():
                 # the results are concerning HW UID
                 self.selected_object_app = 'HW'
             else:
                 self.selected_object_app = 'GO'
+            self.selected_object_uid = selected_text.split(' ')[0]
+            self.selected_linked_object_uid = None
+            self.selected_objects_uid_list = [self.selected_object_uid]
+            self.focused_objects_widget = None
 
             # update the object text box and links list
             self.object_text_update()
-            self.object_links_list_update()
+            self.objects_links_list_content_update()
 
             # select in the object edition text box the line which corresponds to the selected result
             if ':' in selected_text:
@@ -11053,8 +11084,10 @@ class C_GUI_NOTEBOOK():
                     self.txt_object_text.focus_set()
 
             # update the status of GUI widgets
-            self.gui_status_update_lists(True)
-            self.gui_status_update_buttons()
+            self.gui_update_obj_list_focus(True)
+            self.gui_update_linkobj_list_focus(True)
+            self.gui_update_obj_tree_focus()
+            self.gui_update_buttons_state()
 
     #-------------------------------------------------------------------------------------------------
     def odf_search_text_result_selected_dbl(self, event):
@@ -11063,6 +11096,7 @@ class C_GUI_NOTEBOOK():
         selected_indice = self.lst_odf_sresults.curselection()
         selected_text = self.lst_odf_sresults.get(selected_indice[0])
         self.selected_object_uid = selected_text.split(' ')[0]
+        self.selected_objects_uid_list = [self.selected_object_uid]
 
         if self.selected_object_uid[-6:].isdigit():
             # the selected object is a HW object, display the "HW sections" tab of the notebook
@@ -11918,11 +11952,11 @@ class C_GUI_NOTEBOOK():
             if object_uid != None:
                 # an image has been clicked, update the viewer to highlight this image
                 self.viewer_update(object_uid)
-                self.dragged_object_uid = object_uid
-                self.dragged_object_id_list = self.view_canvas.find_withtag(self.dragged_object_uid)
+                self.img_drag_object_uid = object_uid
+                self.img_drag_objects_id_list = self.view_canvas.find_withtag(self.img_drag_object_uid)
             else:
-                self.dragged_object_uid = None
-                self.dragged_object_id_list.clear()
+                self.img_drag_object_uid = None
+                self.img_drag_objects_id_list.clear()
 
             # start a timer to engage the image drag only after a certain time after the click press
             self.click_right_start_time = time.time()
@@ -11934,13 +11968,13 @@ class C_GUI_NOTEBOOK():
     def viewer_drag_right(self, event):
         # (GUI event callback) the user has dragged the mouse in the viewer with the left button
 
-        if self.dragged_object_uid != None and time.time() - self.click_right_start_time > 0.2:
+        if self.img_drag_object_uid != None and time.time() - self.click_right_start_time > 0.2:
             # there are images to drag and the mouse unwanted move filtering time is passed
 
             x_canvas_mouse = self.view_canvas.canvasx(event.x)
             y_canvas_mouse = self.view_canvas.canvasy(event.y)
 
-            for object_id in self.dragged_object_id_list:
+            for object_id in self.img_drag_objects_id_list:
                 self.view_canvas.move(object_id, x_canvas_mouse - self.object_drag_x, y_canvas_mouse - self.object_drag_y)
 
             self.object_drag_x = x_canvas_mouse
@@ -11951,8 +11985,8 @@ class C_GUI_NOTEBOOK():
     def viewer_clickrel_right(self, event):
         # (GUI event callback) the user has released the click on the viewer with the mouse right button
 
-        if self.dragged_object_uid != None:
-            object_uid = self.dragged_object_uid  #self.view_canvas.gettags(self.dragged_object_id_list[0])
+        if self.img_drag_object_uid != None:
+            object_uid = self.img_drag_object_uid  #self.view_canvas.gettags(self.img_drag_objects_id_list[0])
 
             if self.object_dragged:
                 # recover the new position of the dragged object
@@ -11962,16 +11996,16 @@ class C_GUI_NOTEBOOK():
                 delta_y = int((self.object_drag_y - self.object_drag_y0) / self.canvas_zoom_factor)
 
                 # compute the new coordinates of the image
-                image_x = myint(self.odf_data.object_attr_value_get(self.dragged_object_uid, 'PositionX'), 0)
-                image_y = myint(self.odf_data.object_attr_value_get(self.dragged_object_uid, 'PositionY'), 0)
+                image_x = myint(self.odf_data.object_attr_value_get(self.img_drag_object_uid, 'PositionX'), 0)
+                image_y = myint(self.odf_data.object_attr_value_get(self.img_drag_object_uid, 'PositionY'), 0)
 
                 # update the position of the image(s) of the object UID in the images list as viewer_update will not do it (object_uid unchanged)
                 for image_nb, image_descr in enumerate(self.viewer_images_list):
-                    if image_descr[0] == self.dragged_object_uid:
+                    if image_descr[0] == self.img_drag_object_uid:
                         self.viewer_images_list[image_nb] = (image_descr[0], image_descr[1], image_descr[2] + delta_x, image_descr[3] + delta_y, image_descr[4], image_descr[5], image_descr[6])
                                                            # object_uid,     image,          image_x,                  image_y,                  width,          height,         is_prio_image
 
-            elif self.dragged_object_uid == self.edited_object_uid and self.viewer_object_uid.startswith('Panel'):
+            elif self.img_drag_object_uid == self.edited_object_uid and self.viewer_object_uid.startswith('Panel'):
                 # image not dragged and already selected before the right click : unselect the current object and select instead its parent panel
                 object_uid = self.viewer_object_uid[:8]
 
@@ -11984,27 +12018,29 @@ class C_GUI_NOTEBOOK():
                         self.object_text_update()
 
             # select the object UID in the editor
-            if self.selected_linked_uid == None or (object_uid != None and object_uid[:5] != 'Panel'):
-                self.selected_object_uid = object_uid
-                self.edited_object_uid = object_uid
-            else:
+            if self.focused_objects_widget == self.lst_linked_objects_list and object_uid != None and object_uid[:5] == 'Panel':
                 self.selected_object_uid = object_uid[:8]
-                self.edited_object_uid = object_uid
-                self.selected_linked_uid = object_uid
-            self.focused_sel_item_id = object_uid
+                self.selected_linked_object_uid = object_uid
+                self.selected_objects_uid_list = [self.selected_linked_object_uid]
+            else:
+                self.selected_object_uid = object_uid
+                self.selected_linked_object_uid = None
+                self.objects_links_list_content_update()
+                self.selected_objects_uid_list = [self.selected_object_uid]
 
             # update the objects list / tree / text and buttons states
             self.object_text_update()
-            self.object_links_list_update()
-            self.gui_status_update_buttons()
-            self.gui_status_update_lists(True)
+            self.gui_update_obj_list_focus(True)
+            self.gui_update_linkobj_list_focus(True)
+            self.gui_update_obj_tree_focus()
+            self.gui_update_buttons_state()
 
             if self.object_dragged:
                 # write the new coordinates of the image in the edited text of its object
                 self.object_text_attr_set('PositionX', image_x + delta_x)
                 self.object_text_attr_set('PositionY', image_y + delta_y)
 
-        self.dragged_object_uid = None
+        self.img_drag_object_uid = None
 
 
     #-------------------------------------------------------------------------------------------------
@@ -12139,22 +12175,22 @@ class C_GUI_NOTEBOOK():
             # an item of the HW objects list widget is selected
             # recover in the objects list widget the UID of the selected object (before the first space in the selected item text)
             self.selected_object_app = 'HW'
+            self.focused_objects_widget = self.lst_hw_browser
+
             self.selected_object_uid = self.lst_hw_browser.get(selected_line_indice).strip().split(' ')[0]
             if self.selected_object_uid[0] == '*': # item without object UID
                 self.selected_object_uid = None
-            self.selected_linked_uid = None
-            self.edited_object_uid = self.selected_object_uid
-
-            self.focused_objects_widget = self.lst_hw_browser
-            self.focused_sel_item_id = self.selected_object_uid
+            self.selected_linked_object_uid = None
+            self.selected_objects_uid_list.clear()
 
             # update the object text box and links list
-            self.object_links_list_update()
             self.object_text_update()
+            self.objects_links_list_content_update()
 
-        # update the status of GUI widgets
-        self.gui_status_update_lists()
-        self.gui_status_update_buttons()
+            # update the status of GUI widgets
+            self.gui_update_obj_list_focus()
+            self.gui_update_obj_tree_focus()
+            self.gui_update_buttons_state()
 
     #-------------------------------------------------------------------------------------------------
     def objects_list_selected_dbl_hw(self, event):
@@ -12173,25 +12209,29 @@ class C_GUI(C_GUI_NOTEBOOK):
 
     selected_object_app = 'GO'  # application associated to the object currently selected : 'GO' or 'HW', GO by default
     selected_object_uid = None  # UID of the object currently selected in the objects lists (GO or HW) or objects tree widgets (GO)
-    selected_linked_uid = None  # UID of the linked object currently selected in the linked objects list if any (GO)
-    edited_object_uid = None    # UID of the edited object in the edition text box
+    selected_linked_object_uid = None  # UID of the linked object currently selected in the linked objects list if any (GO)
+    selected_objects_uid_list = [] # list of all selected object UID if more than one object are selected
+    edited_object_uid = None    # UID of the edited object in the edition text box (either selected object or selected linked object)
 
-    focused_objects_widget = None  # objects widget which has the focus : self.lst_objects_list / self.trv_objects_tree / self.lst_links_list / self.lst_hw_browser / None
-    focused_sel_item_id = None     # identifier of the selected item of the focused widget
-    is_focus_on_objects_lists = False   # flag at True if one objects list or tree has currently the focus
+    first_sel_item_index = None    # index of the first selected item in the objects list having the focus
+    first_sel_node_iid = None      # index of the first selected item in the objects tree having the focus
+
+    focused_objects_widget = None  # objects widget which has the focus : self.lst_objects_list, self.trv_objects_tree, self.lst_linked_objects_list, self.lst_hw_browser or None
 
     is_key_control_pressed = False # flag indicating if a Control key is currently pressed on the keyboard of the computer in OdfEdit
+    is_key_shift_pressed = False   # flag indicating if a Shift key is currently pressed on the keyboard of the computer in OdfEdit
 
-    ignore_b1_release = False        # flag permitting to ignore the processing of the mouse button 1 release event
-    object_dragging_in_progress = False # flag indicating that a mouse cursor dragging is in progress
-    drag_overflown_object_uid = None    # UID of the object currently overflown by the mouse cursor dragging
-    dragged_object_drop_action = None   # action to do on dragged object drop
-    dragged_object_uid = None           # UID of the dragged object
-    dragged_object_type = None          # type of the dragged object
-    dragged_object_parents_list = None  # parents list of the dragged object
-    selected_object_uid_b4 = None       # selected object UID before the drag action
-    selected_linked_uid_b4 = None       # selected linked object UID before the drag action
-    selected_widget_b4 = None           # selected widget before the drag action
+    drag_in_progress = None        # flag indicating that a mouse cursor dragging is in progress
+    drag_drop_action = None        # action to do on dragged object drop
+    dragged_object_uid = None      # UID of the dragged object
+    drag_object_type = None        # type of the dragged object
+    drag_object_parents_list = None
+    drag_overflown_widget = None
+    drag_overflown_item_id = None
+    drag_overflown_object_uid = None
+    drag_last_overflown_widget = None
+    drag_last_overflown_item_id = None
+    drag_last_overflown_object_uid = None
 
     opened_objects_iid_list = []   # list of the objects tree nodes iid which are opened
 
@@ -12207,6 +12247,8 @@ class C_GUI(C_GUI_NOTEBOOK):
                                    # None means that the question has to be done to the user when he will start a check
 
     menu_closing_time = 0          # time at which the menu has been closed lastly
+
+    one_tree_item_shown = False
 
     # application data which are saved at application close and restored at application start
 
@@ -12237,11 +12279,14 @@ class C_GUI(C_GUI_NOTEBOOK):
 
         self.selected_object_app = 'GO'
         self.selected_object_uid = None
-        self.selected_linked_uid = None
+        self.selected_linked_object_uid = None
+        self.selected_objects_uid_list.clear()
         self.edited_object_uid = None
 
+        self.first_sel_item_index = None
+        self.first_sel_node_iid = None
+
         self.focused_objects_widget = None
-        self.focused_sel_item_id = None
 
         self.odf_data_changed = False
         self.txt_object_text.edit_modified(False)
@@ -12451,7 +12496,7 @@ class C_GUI(C_GUI_NOTEBOOK):
                                     btn_object_delete    : button to delete the selected objects
                                 frm_bottom_obj_paned_wnd_1 : bottom frame of obj_paned_wnd_frm_1 for object parents/children list and its scroll bar
                                     scrollbarv : vertical scroll bar
-                                    lst_links_list : object parents/children list
+                                    lst_linked_objects_list : object parents/children list
                             obj_paned_wnd_frm_2 : second frame of obj_paned_wnd (button bar and object text editor with its scroll bars)
                                 frm_top_obj_paned_wnd_2 : top frame of obj_paned_wnd_frm_2 for buttons bar
                                     btn_object_apply_chg : button to apply changes made in the object editor
@@ -12465,7 +12510,6 @@ class C_GUI(C_GUI_NOTEBOOK):
                                     txt_object_text : object text editor
                     paned_wnd_frm_4 : fourth frame of paned_wnd containing the notebook
         """
-
 
         # horizontal paned window at the bottom of the main window
         self.paned_wnd = tk.PanedWindow(self.wnd_main, orient=tk.HORIZONTAL, bg=COLOR_BACKGROUND1, relief=tk.FLAT, sashrelief = tk.RAISED, sashwidth = 10)
@@ -12492,19 +12536,13 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.scrollbarv_obj_list.pack(side=tk.RIGHT, fill=tk.Y)
         scrollbarh = ttk.Scrollbar(self.frm_objects_list, orient=tk.HORIZONTAL)
         scrollbarh.pack(side=tk.BOTTOM, fill=tk.X)
-        self.lst_objects_list = tk.Listbox(self.frm_objects_list, bg=COLOR_BG_LIST, font=TEXT_FONT, fg=TEXT_COLOR, selectbackground=COLOR_SELECTED_ITEM,
-                                           exportselection=0, selectmode=tk.SINGLE, activestyle=tk.DOTBOX)
+        self.lst_objects_list = tk.Listbox(self.frm_objects_list, bg=COLOR_BG_LIST, font=TEXT_FONT, fg=TEXT_COLOR, selectbackground=COLOR_SELECTED_ITEM)
         self.lst_objects_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.lst_objects_list.bind('<<ListboxSelect>>', self.objects_list_selected)
+        self.lst_objects_list.bind('<ButtonPress-1>', lambda event, widget=self.lst_objects_list: self.objects_list_b1_press(event, widget))
+        self.lst_objects_list.bind('<ButtonRelease-1>', lambda event, widget=self.lst_objects_list: self.objects_list_b1_release(event, widget))
+        self.lst_objects_list.bind('<B1-Motion>', self.objects_b1_drag)
         self.lst_objects_list.bind('<Double-1>', self.objects_list_selected_dbl)
-        self.lst_objects_list.bind('<B1-Motion>', self.object_b1_motion)
-        self.lst_objects_list.bind('<ButtonRelease-1>', self.object_b1_release)
         self.lst_objects_list.bind('<B1-Leave>', lambda event: 'break')  # to avoid the auto scrolling in the list on drag
-        self.lst_objects_list.bind('<FocusOut>', self.objects_widget_focus_out)
-
-        self.lst_objects_list.bind('<Up>', self.objects_list_selected)
-        self.lst_objects_list.bind('<Down>', self.objects_list_selected)
-
         self.lst_objects_list.config(yscrollcommand=self.scrollbarv_obj_list.set)
         self.lst_objects_list.config(xscrollcommand=scrollbarh.set)
         self.scrollbarv_obj_list.config(command=self.lst_objects_list.yview)
@@ -12521,7 +12559,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.frm_top_paned_wnd_2.pack(side=tk.TOP, fill=tk.X)
 
         # button 'Collapse' to collapse the selected object in objects tree
-        self.btn_collapse_tree_node = ttk.Button(self.frm_top_paned_wnd_2, text='Collapse', width=5, state=tk.DISABLED, command=self.objects_tree_collapse_current)
+        self.btn_collapse_tree_node = ttk.Button(self.frm_top_paned_wnd_2, text='Collapse', width=5, state=tk.DISABLED, command=self.objects_tree_collapse_selected)
         self.btn_collapse_tree_node.pack(side=tk.LEFT, padx=1, pady=2, fill=tk.X, expand=True)
         ToolTip(self.btn_collapse_tree_node, 'Collapse the entire tree under the selected section.')
 
@@ -12547,10 +12585,10 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.trv_objects_tree = ttk.Treeview(self.frm_object_tree, show='tree', selectmode=tk.EXTENDED)
         self.trv_objects_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.trv_objects_tree.column('#0', width=500)
-        self.trv_objects_tree.bind('<<TreeviewSelect>>', self.objects_tree_selected)
-        self.trv_objects_tree.bind('<B1-Motion>', self.object_b1_motion)
-        self.trv_objects_tree.bind('<ButtonRelease-1>', self.object_b1_release)
-        self.trv_objects_tree.bind('<FocusOut>', self.objects_widget_focus_out)
+        self.trv_objects_tree.bind('<ButtonPress-1>', lambda event, widget=self.trv_objects_tree: self.objects_tree_b1_press(event, widget))
+        self.trv_objects_tree.bind('<ButtonRelease-1>', lambda event, widget=self.trv_objects_tree: self.objects_tree_b1_release(event, widget))
+        self.trv_objects_tree.bind('<B1-Motion>', self.objects_b1_drag)
+        self.trv_objects_tree.bind('<Double-1>', self.objects_tree_selected_dbl)
 
         self.trv_objects_tree.config(yscrollcommand=scrollbarv.set)
         self.trv_objects_tree.config(xscrollcommand=scrollbarh.set)
@@ -12615,17 +12653,15 @@ class C_GUI(C_GUI_NOTEBOOK):
         # list of the selected object UID and its linked parent/children UID
         scrollbarv = ttk.Scrollbar(self.frm_bottom_obj_paned_wnd_1, orient=tk.VERTICAL)
         scrollbarv.pack(side='right', fill=tk.Y)
-        self.lst_links_list = tk.Listbox(self.frm_bottom_obj_paned_wnd_1, bg=COLOR_BG_LIST, font=TEXT_FONT, fg=TEXT_COLOR, selectforeground='white', selectbackground=COLOR_SELECTED_ITEM,
-                                      exportselection=0, selectmode=tk.SINGLE, activestyle=tk.DOTBOX)
-        self.lst_links_list.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        self.lst_links_list.bind('<<ListboxSelect>>', self.object_links_list_selected)
-        self.lst_links_list.bind('<Double-1>', self.object_links_list_selected_dbl)
-        self.lst_links_list.bind('<B1-Motion>', self.object_b1_motion)
-        self.lst_links_list.bind('<ButtonRelease-1>', self.object_b1_release)
-        self.lst_links_list.bind('<B1-Leave>', lambda event: 'break')  # to avoid the auto scrolling in the list on drag
-        self.lst_links_list.bind('<FocusOut>', self.objects_widget_focus_out)
-        self.lst_links_list.config(yscrollcommand=scrollbarv.set)
-        scrollbarv.config(command=self.lst_links_list.yview)
+        self.lst_linked_objects_list = tk.Listbox(self.frm_bottom_obj_paned_wnd_1, bg=COLOR_BG_LIST, font=TEXT_FONT, fg=TEXT_COLOR, selectforeground='white', selectbackground=COLOR_SELECTED_ITEM)
+        self.lst_linked_objects_list.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.lst_linked_objects_list.bind('<ButtonPress-1>', lambda event, widget=self.lst_linked_objects_list: self.objects_list_b1_press(event, widget))
+        self.lst_linked_objects_list.bind('<ButtonRelease-1>', lambda event, widget=self.lst_linked_objects_list: self.objects_list_b1_release(event, widget))
+        self.lst_linked_objects_list.bind('<B1-Motion>', self.objects_b1_drag)
+        self.lst_linked_objects_list.bind('<Double-1>', self.objects_links_list_selected_dbl)
+        self.lst_linked_objects_list.bind('<B1-Leave>', lambda event: 'break')  # to avoid the auto scrolling in the list on drag
+        self.lst_linked_objects_list.config(yscrollcommand=scrollbarv.set)
+        scrollbarv.config(command=self.lst_linked_objects_list.yview)
 
         # frame to occupy the full area of the element #2 of the vertical paned window
         self.obj_paned_wnd_frm_2 = ttk.Frame(self.wnd_main)
@@ -12695,6 +12731,10 @@ class C_GUI(C_GUI_NOTEBOOK):
         # build the notebook GUI
         self.wnd_notebook_build(self.paned_wnd_frm_4)
 
+        # label to display a text during objects drap action (not displayed out of a drag action in progress)
+        self.drag_label = tk.Label(self.wnd_main, font=TEXT_FONT, fg='white', bg=COLOR_SELECTED_ITEM, highlightthickness=1, highlightbackground="white")
+
+
         # create an instance of the C_ODF_DATA class
         self.odf_data = C_ODF_DATA()
 
@@ -12704,8 +12744,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.reset_all_data()
 
         # update the status of GUI widgets
-        self.gui_status_update_lists()
-        self.gui_status_update_buttons()
+        self.gui_update_buttons_state()
         self.gui_status_update_notebook()
 
         # display the logs resulting from the init of the application if any
@@ -12748,11 +12787,18 @@ class C_GUI(C_GUI_NOTEBOOK):
         if event.keysym in ('Control_L', 'Control_R') and not self.is_key_control_pressed:
             # control left or right key is pressed
             self.is_key_control_pressed = True
-            # update the mouse cursor aspect
-            self.object_b1_motion()
+            # update the mouse cursor aspect if objects dragging is in progress
+            self.objects_b1_drag()
 
-        elif event.keysym == 'Delete' and self.is_focus_on_objects_lists:
-            self.object_delete()
+        elif event.keysym in ('Shift_L', 'Shift_R') and not self.is_key_shift_pressed:
+            # shift left or right key is pressed
+            self.is_key_shift_pressed = True
+
+        elif event.keysym == 'Delete':
+            widget_under_mouse = self.wnd_main.winfo_containing(self.wnd_main.winfo_pointerx(), self.wnd_main.winfo_pointery())
+            if widget_under_mouse in (self.lst_objects_list, self.lst_linked_objects_list, self.trv_objects_tree):
+                # the mouse cursor ir over an objects list or tree, the selected object can be deleted
+                self.object_delete()
 
     #-------------------------------------------------------------------------------------------------
     def wnd_main_key_release(self, event):
@@ -12761,8 +12807,12 @@ class C_GUI(C_GUI_NOTEBOOK):
         if event.keysym in ('Control_L', 'Control_R') and self.is_key_control_pressed:
             # control left or right key is released
             self.is_key_control_pressed = False
-            # update the mouse cursor aspect
-            self.object_b1_motion()
+            # update the mouse cursor aspect if objects dragging is in progress
+            self.objects_b1_drag()
+
+        elif event.keysym in ('Shift_L', 'Shift_R') and self.is_key_shift_pressed:
+            # shift left or right key is released
+            self.is_key_shift_pressed = False
 
     #-------------------------------------------------------------------------------------------------
     def widget_mouse_enter(self, event, widget):
@@ -12794,7 +12844,7 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.wnd_main['cursor'] = 'watch'
             self.txt_object_text['cursor'] = 'watch'
             self.lst_objects_list['cursor'] = 'watch'
-            self.lst_links_list['cursor'] = 'watch'
+            self.lst_linked_objects_list['cursor'] = 'watch'
             self.trv_objects_tree['cursor'] = 'watch'
             self.notebook['cursor'] = 'watch'
             self.view_canvas['cursor'] = 'watch'
@@ -12802,7 +12852,7 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.wnd_main['cursor'] = ''
             self.txt_object_text['cursor'] = 'xterm'
             self.lst_objects_list['cursor'] = ''
-            self.lst_links_list['cursor'] = ''
+            self.lst_linked_objects_list['cursor'] = ''
             self.trv_objects_tree['cursor'] = ''
             self.notebook['cursor'] = ''
             self.view_canvas['cursor'] = ''
@@ -12923,19 +12973,19 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.reset_all_data()
 
             # update the various GUI widgets
-            self.objects_list_update()
+            self.objects_list_content_update()
             self.objects_list_update_hw()
-            self.objects_tree_update()
+            self.objects_tree_content_update()
             self.object_text_update()
-            self.object_links_list_update()
-            self.gui_status_update_buttons()
+            self.objects_links_list_content_update()
+            self.gui_update_buttons_state()
             self.gui_status_update_notebook()
 
             # hide the HW browser notebook tab
             self.notebook.hide(self.frm_hw_browser)
 
     #-------------------------------------------------------------------------------------------------
-    def file_reload(self, file_name=None):
+    def file_reload(self):
         # (GUI event callback) the user has clicked on the button "Reopen"
 
         if self.can_i_make_change(True):
@@ -12955,13 +13005,17 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.odf_check_files_names = None
 
             # update the objects list / tree / text
-            self.objects_list_update()
-            self.objects_tree_update()
+            self.objects_list_content_update()
+            self.objects_tree_content_update()
             self.object_text_update()
-            self.object_links_list_update()
-            self.gui_status_update_buttons()
+            self.objects_links_list_content_update()
+
+            self.gui_update_buttons_state()
             self.gui_status_update_notebook()
-            self.gui_status_update_lists(True)
+            self.gui_update_obj_list_focus(True)
+            self.gui_update_linkobj_list_focus(True)
+            self.gui_update_obj_tree_focus()
+
             self.viewer_update('previous')
 
             self.logs_update()
@@ -13061,12 +13115,12 @@ class C_GUI(C_GUI_NOTEBOOK):
                 self.is_loading = False
 
                 # update the objects list / tree / text
-                self.objects_list_update()
+                self.objects_list_content_update()
                 self.objects_list_update_hw()
-                self.objects_tree_update()
+                self.objects_tree_content_update()
                 self.object_text_update()
-                self.object_links_list_update()
-                self.gui_status_update_buttons()
+                self.objects_links_list_content_update()
+                self.gui_update_buttons_state()
                 self.gui_status_update_notebook()
 
                 self.logs_update()
@@ -13098,7 +13152,7 @@ class C_GUI(C_GUI_NOTEBOOK):
                 self.recent_odf_list_update(file_name)
 
                 self.odf_data_changed = False
-                self.gui_status_update_buttons()
+                self.gui_update_buttons_state()
                 data_saved = True
             else:
                 data_saved = False
@@ -13176,21 +13230,21 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.gui_events_blocked = False
 
     #-------------------------------------------------------------------------------------------------
-    def gui_status_update_buttons(self):
+    def gui_update_buttons_state(self):
         # update the status of some GUI widgets in a single time, according to some status of the application
 
         # recover the number of defined objects in the ODF data
         objects_nb = self.odf_data.objects_number_get()
 
-        # recover the list of possible parents and children objects of the selected object
+        # recover the number of objects selected in the objects lists or tree
+        selected_objects_nb = len(self.selected_objects_uid_list)
+
+        # recover the list of possible parents and children objects of the edited object
         (possible_parents_list, possible_children_list) = self.odf_data.object_poss_kinship_list_get(self.edited_object_uid)
         possible_children_type_list = self.odf_data.object_poss_children_type_list_get(self.edited_object_uid)
 
         root_object_not_def = bool('Header' not in self.odf_data.objects_list_get() or 'Organ' not in self.odf_data.objects_list_get())
         # True if the root object Header or Organ is not present in the ODF
-
-        # get if an object is selected in the objects tree
-        objects_tree_selected = len(self.trv_objects_tree.selection()) > 0
 
         # button for opening the general menu
         self.btn_gen_menu['state'] = tk.NORMAL if not self.is_loading else tk.DISABLED
@@ -13219,16 +13273,17 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.btn_odf_close['state'] = tk.NORMAL if objects_nb > 0 else tk.DISABLED
 
         # button "Collapse"
-        self.btn_collapse_tree_node['state'] = tk.NORMAL if objects_tree_selected else tk.DISABLED
+        self.btn_collapse_tree_node['state'] = tk.NORMAL if self.focused_objects_widget == self.trv_objects_tree else tk.DISABLED
 
         # button "Expand"
-        self.btn_expand_tree_node['state'] = tk.NORMAL if objects_tree_selected else tk.DISABLED
+        self.btn_expand_tree_node['state'] = tk.NORMAL if self.focused_objects_widget == self.trv_objects_tree else tk.DISABLED
 
         # button "Unselect"
         self.btn_unselect['state'] = tk.NORMAL if (self.edited_object_uid != None and self.selected_object_app == 'GO') else tk.DISABLED
 
         # button "Add"
-        self.btn_object_add['state'] = tk.NORMAL if (len(possible_children_type_list) > 0 or root_object_not_def) and self.selected_object_app == 'GO' and not self.is_loading else tk.DISABLED
+        self.btn_object_add['state'] = tk.NORMAL if ((len(possible_children_type_list) > 0 or root_object_not_def)
+                                                     and self.selected_object_app == 'GO' and not self.is_loading) else tk.DISABLED
 
         # button "Clone"
         self.btn_object_clone['state'] = tk.NORMAL if not self.edited_object_uid in ('Organ', 'Header', None) else tk.DISABLED
@@ -13237,15 +13292,16 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.btn_object_parents['state'] = tk.NORMAL if len(possible_parents_list) > 0 else tk.DISABLED
 
         # button "Children"
-        self.btn_object_children['state'] = tk.NORMAL if len(possible_children_list) > 0 else tk.DISABLED
+        self.btn_object_children['state'] = tk.NORMAL if selected_objects_nb == 1 and len(possible_children_list) > 0 else tk.DISABLED
 
         # button "Rename"
-        self.btn_object_rename['state'] = tk.NORMAL if (self.edited_object_uid != None and self.selected_object_app == 'GO' and self.edited_object_uid[-3:].isdigit()) else tk.DISABLED
+        self.btn_object_rename['state'] = tk.NORMAL if (selected_objects_nb == 1 and self.edited_object_uid != None and self.selected_object_app == 'GO'
+                                                        and self.edited_object_uid[-3:].isdigit()) else tk.DISABLED
 
         # button "Delete"
         self.btn_object_delete['state'] = tk.NORMAL if (self.edited_object_uid != None and self.edited_object_uid != 'Organ' and self.selected_object_app == 'GO') else tk.DISABLED
 
-        self.gui_status_update_editor_buttons()
+        self.gui_update_editor_buttons_state()
 
         # label with the loaded ODF name
         if not self.is_loaded_odf:
@@ -13269,7 +13325,7 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.lab_objects_nb.config(text=f"{objects_nb} sections")
 
     #-------------------------------------------------------------------------------------------------
-    def gui_status_update_editor_buttons(self):
+    def gui_update_editor_buttons_state(self):
         # update the status of the buttons of the object editor box
 
         # button "Apply changes"
@@ -13278,11 +13334,9 @@ class C_GUI(C_GUI_NOTEBOOK):
         # button "File picker"
         cursor_pos = self.txt_object_text.index(tk.INSERT)
         line = self.txt_object_text.get(cursor_pos + ' linestart', cursor_pos + ' lineend')
-        attr_defines_file = False
         equal_pos = line.find('=')
         if equal_pos > 0:
             attr_name = line[:equal_pos]
-            attr_defines_file = self.odf_data.is_image_attribute(attr_name) or self.odf_data.is_sample_attribute(attr_name)
         else:
             attr_name = ''
         self.btn_file_picker['state'] = (tk.NORMAL if self.odf_data.is_image_attribute(attr_name) or self.odf_data.is_sample_attribute(attr_name)
@@ -13296,62 +13350,136 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.btn_show_help['state'] = tk.NORMAL if (self.edited_object_uid not in (None, 'Header') and self.selected_object_app == 'GO') else tk.DISABLED
 
     #-------------------------------------------------------------------------------------------------
-    def gui_status_update_lists(self, show_list_item=False, show_tree_item=False):
-        # update the selections in the GUI lists/tree
-        # if one object_see flag is enabled, the corresponding list or tree is moved to see the selected object
+    def gui_update_obj_list_focus(self, show_selected_item=False):
+        # update the focus and the selection in the objects list widget
+        # if show_focused_item is True, the list is moved to show the focused item
 
         # to block the GUI events triggered by the GUI updates done in this function
         self.gui_events_block()
 
-        # GO objects list
+        if self.focused_objects_widget == self.lst_linked_objects_list:
+            ref_objects_uid_list = [self.selected_object_uid]
+        else:
+            ref_objects_uid_list = self.selected_objects_uid_list
+
         # select and show (if requested in parameter) the item corresponding to the selected object UID
         for i in range(0, self.lst_objects_list.size()):
             object_uid = self.lst_objects_list.get(i).split(' ')[0]
-            if object_uid == self.selected_object_uid:
-                # the current item corresponds to the selected object UID
-                # highlight the item
-                self.lst_objects_list.itemconfig(i, foreground=TEXT_COLOR, background=COLOR_SAME_UID_ITEM)
-                if show_list_item:
-                    # move the list to show the item
-                    self.lst_objects_list.see(i)
+            if object_uid in ref_objects_uid_list:
+                # the current item corresponds to a selected object UID
                 if self.focused_objects_widget == self.lst_objects_list:
                     # the objects list has the focus, select the item
                     self.lst_objects_list.selection_set(i)
+                    if self.first_sel_item_index == None and object_uid == self.edited_object_uid:
+                        self.first_sel_item_index = i
                 else:
                     self.lst_objects_list.selection_clear(i)
+                    # the objects list has not the focus, highlight the item background and clear its selection if it is selected
+                    self.lst_objects_list.itemconfig(i, foreground=TEXT_COLOR, background=COLOR_SAME_UID_ITEM)
+
+                if show_selected_item:
+                    # move the list to show the item
+                    self.lst_objects_list.see(i)
+
             else:
-                # remove the highlight and the focus on the item if any is present
+                # remove the highlight and the selection on the item if any is present
                 self.lst_objects_list.itemconfig(i, foreground=TEXT_COLOR, background=COLOR_BG_LIST)
                 self.lst_objects_list.selection_clear(i)
 
-        # GO linked objects list
-        for i in range(0, self.lst_links_list.size()):
-            object_uid = self.lst_links_list.get(i).lstrip().split(' ')[0]
-            if object_uid in (self.selected_object_uid, self.selected_linked_uid):
-                # the current item corresponds to the selected object UID or linked object UID
-                # highlight the item
-                self.lst_links_list.itemconfig(i, foreground=TEXT_COLOR, background=COLOR_SAME_UID_ITEM)
-                if show_list_item:
+    #-------------------------------------------------------------------------------------------------
+    def gui_update_linkobj_list_focus(self, show_selected_item=False):
+        # update the focus and the selection in the linked objects list widget
+        # if show_focused_item is True, the list is moved to show the focused item
+
+        # to block the GUI events triggered by the GUI updates done in this function
+        self.gui_events_block()
+
+        # highlight the first item of the list which is the selected object UID
+        if self.lst_linked_objects_list.index("end") > 0 and len(self.lst_linked_objects_list.get(0)) > 0:
+            self.lst_linked_objects_list.itemconfig(0, foreground=TEXT_COLOR, background=COLOR_SAME_UID_ITEM)
+
+        for i in range(0, self.lst_linked_objects_list.size()):
+            object_uid = self.lst_linked_objects_list.get(i).lstrip().split(' ')[0]
+            if object_uid in self.selected_objects_uid_list:
+                # the current item corresponds to a selected object UID
+                if self.focused_objects_widget == self.lst_linked_objects_list:
+                    # the objects list has the focus, select the item
+                    self.lst_linked_objects_list.selection_set(i)
+                    if self.first_sel_item_index == None and object_uid == self.edited_object_uid:
+                        self.first_sel_item_index = i
+                else:
+                    self.lst_linked_objects_list.selection_clear(i)
+
+                if show_selected_item:
                     # move the list to show the item
-                    self.lst_links_list.see(i)
-            else:
-                self.lst_links_list.itemconfig(i, foreground=TEXT_COLOR, background=COLOR_BG_LIST)
+                    self.lst_linked_objects_list.see(i)
 
-            if self.focused_objects_widget == self.lst_links_list and self.focused_sel_item_id == object_uid:
-                # the this item of the linked objects list has the focus, select it
-                self.lst_links_list.selection_set(i)
             else:
-                self.lst_links_list.selection_clear(i)
+                # remove the selection on the item if it is present
+                self.lst_linked_objects_list.selection_clear(i)
 
-        # GO objects tree
-        if self.selected_object_app == 'GO':
-            object_uid = self.selected_object_uid
+    #-------------------------------------------------------------------------------------------------
+    def gui_update_obj_tree_focus(self, show_selected_item=False):
+        # update the focus and the selection in the objects tree widget
+        # if show_focused_item is True, the tree is moved to show the selected item
+
+        # to block the GUI events triggered by the GUI updates done in this function
+        self.gui_events_block()
+
+        if self.focused_objects_widget == self.lst_linked_objects_list:
+            ref_objects_uid_list = [self.selected_object_uid]
         else:
-            object_uid = None
-        # select the items corresponding to the selected GO object UID if any
-        self.one_tree_item_shown = False
-        for iid in self.trv_objects_tree.get_children():
-            self.objects_tree_nodes_select(iid, object_uid, show_tree_item)
+            ref_objects_uid_list = self.selected_objects_uid_list
+
+        # scan recursively all nodes of the objects tree
+        one_tree_item_shown = False  # flag permitting to memorize that one item of the tree has been shown (to not show a next one)
+        for node_iid in self.trv_objects_tree.get_children():
+            self.gui_update_obj_tree_node_focus(node_iid, ref_objects_uid_list, show_selected_item, one_tree_item_shown)
+
+    #-------------------------------------------------------------------------------------------------
+    def gui_update_obj_tree_node_focus(self, node_iid, ref_objects_uid_list, show_selected_item, one_tree_item_shown):
+        # recursive function to update the focus and the selection in the objects tree widget
+        # for the given node iid and its children
+        # if show_focused_item is True, the tree is moved to show the selected item
+
+        object_uid = self.trv_objects_tree.item(node_iid)['text'].split(' ')[0]
+
+        main_parent_type = self.odf_data.object_main_parent_type_get(object_uid)
+        parent_node_iid = self.trv_objects_tree.parent(node_iid)
+
+        if object_uid in ref_objects_uid_list:
+            # the current node corresponds to a selected object UID
+            if self.focused_objects_widget == self.trv_objects_tree:
+                # the objects list has the focus, select the item
+                self.trv_objects_tree.selection_add(node_iid)
+                if (self.first_sel_node_iid == None and object_uid == self.edited_object_uid
+                    and (main_parent_type == None
+                         or (main_parent_type != None and main_parent_type in parent_node_iid))):
+                    self.first_sel_node_iid = node_iid
+            else:
+                self.trv_objects_tree.selection_remove(node_iid)
+                # the objects tree has not the focus, highlight the item background and clear its selection if it is selected
+                self.trv_objects_tree.item(node_iid, tags=TAG_SAME_UID)
+
+            if show_selected_item:
+                # open its parent node to see it
+                self.objects_tree_node_and_parents_open(self.trv_objects_tree.parent(node_iid))
+
+                if ((main_parent_type == None and not self.one_tree_item_shown)
+                    or (main_parent_type != None and main_parent_type in parent_node_iid)):
+                    # show the node if none node has been shown yet or the node is under a parent node
+                    self.trv_objects_tree.see(node_iid)
+                    self.one_tree_item_shown = True
+        else:
+            # remove the highlight and the selection on the node if any is present
+            self.trv_objects_tree.item(node_iid, tags=())
+            self.trv_objects_tree.selection_remove(node_iid)
+
+        if self.trv_objects_tree.item(node_iid, 'open') or show_selected_item:
+            # the node_iid is opened so its children are visible, or the tree has to be automatically expanded to show the selected object UID
+            # search to select the object_uid in the children of node_iid
+            for iid in self.trv_objects_tree.get_children(node_iid):
+                self.gui_update_obj_tree_node_focus(iid, ref_objects_uid_list, show_selected_item, one_tree_item_shown)
 
     #-------------------------------------------------------------------------------------------------
     def gen_menu_open(self, mode=None):
@@ -13386,7 +13514,7 @@ class C_GUI(C_GUI_NOTEBOOK):
                         # changes have been done in the edited object
                         self.odf_data_changed = True
                         self.object_text_update()
-                        self.gui_status_update_buttons()
+                        self.gui_update_buttons_state()
                     self.logs_update()
 
         else:  # self.selected_object_app is 'HW'
@@ -13445,7 +13573,7 @@ class C_GUI(C_GUI_NOTEBOOK):
 
         if len(self.odf_recent_opened_list) > 1:
             del self.odf_recent_opened_list[1:]
-            self.gui_status_update_buttons()
+            self.gui_update_buttons_state()
 
     #-------------------------------------------------------------------------------------------------
     def recent_odf_list_mouse_motion(self, event):
@@ -13473,16 +13601,8 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.file_open(file_name)
 
     #-------------------------------------------------------------------------------------------------
-    def objects_widget_focus_out(self, event):
-        # (GUI event callback) an objects widget (list or tree) has left the focus
-
-        if event.widget == self.focused_objects_widget:
-            # the widget which has lost the focus is the currently selected list or tree widget
-            self.is_focus_on_objects_lists = False
-
-    #-------------------------------------------------------------------------------------------------
-    def objects_list_update(self):
-        # do an update of the objects list widget content
+    def objects_list_content_update(self):
+        # do an update of the content of the objects list widget
 
         # clear the objects list widget content
         self.lst_objects_list.delete(0, 'end')
@@ -13492,7 +13612,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         organ_text = None
         header_text = None
         for object_uid in sorted(self.odf_data.objects_list_get()):
-            item_text = self.odf_data.object_names_get(object_uid)
+            item_text = self.odf_data.object_uid_names_get(object_uid)
             if object_uid == 'Organ':
                 organ_text = item_text
             elif object_uid =='Header':
@@ -13506,72 +13626,67 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.lst_objects_list.insert(0, header_text)
 
     #-------------------------------------------------------------------------------------------------
-    def objects_list_selected(self, event):
-        # (GUI event callback) the user has selected an item in the objects list widget
-
-        if self.gui_events_blocked: return
-
-        self.is_focus_on_objects_lists = True
-
-        # get the line number of the selected item in the list
-        cursel_tuple = self.lst_objects_list.curselection()
-        if len(cursel_tuple) > 0:
-            selected_line_indice = cursel_tuple[0]
-        else:
-            selected_line_indice = None
-
-        if selected_line_indice != None:
-            # an item has been selected in the list
-
-            if event.keysym in ('Up', 'Down'):
-                if event.keysym == 'Down' and selected_line_indice < self.lst_objects_list.size() - 1:
-                    selected_line_indice += 1
-                elif selected_line_indice > 0:
-                    selected_line_indice -= 1
-                self.lst_objects_list.selection_clear(0, tk.END)
-                self.lst_objects_list.selection_set(selected_line_indice)
-
-            # ignore the mouse button 1 release if the edited object has been changed : to let the user say if he wants to save the change or not or cancel
-            self.ignore_b1_release = self.txt_object_text.edit_modified()
-
-            if self.can_i_make_change():
-                # the user has saved his modifications if he wanted and has not canceled the selection
-
-                # recover in the objects list widget the UID of the selected object (before the first space in the selected item text)
-                object_uid = self.lst_objects_list.get(selected_line_indice).split(' ')[0]
-                self.selected_object_app = 'GO'
-                self.selected_object_uid = object_uid
-                self.selected_linked_uid = None
-                self.edited_object_uid = self.selected_object_uid
-
-                self.focused_objects_widget = self.lst_objects_list
-                self.focused_sel_item_id = object_uid
-
-                if self.ignore_b1_release:
-                    # do now the processing of the mouse button 1 release
-                    self.ignore_b1_release = False
-                    self.object_b1_release(event)
-                # else the widgets will be updated on mouse button release
-
-            else:
-                # the user had canceled the selection
-                self.ignore_b1_release = False
-                self.gui_status_update_lists()
-
-    #-------------------------------------------------------------------------------------------------
     def objects_list_selected_dbl(self, event):
         # (GUI event callback) the user has double-clicked an item in the objects list widget
 
-        # update the status of GUI widgets and for to see the objects of the tree having the selected UID
-        self.gui_status_update_lists(False, True)
+        # show the selected object in the objects tree
+        self.gui_update_obj_tree_focus(True)
 
     #-------------------------------------------------------------------------------------------------
-    def objects_tree_update(self):
+    def objects_links_list_content_update(self):
+        # update the selected object links list
+
+        tab = '    '
+
+        # clear the objects list widget content
+        self.lst_linked_objects_list.delete(0, tk.END)
+
+        if self.selected_object_app == 'GO' and self.selected_object_uid not in (None, ''):
+
+            # display the selected object
+            self.lst_linked_objects_list.insert('end', self.odf_data.object_uid_names_get(self.selected_object_uid))
+
+            # display the parents
+            parents_list = sorted(self.odf_data.object_kinship_list_get(self.selected_object_uid, TO_PARENT))
+            if len(parents_list) > 0:
+                self.lst_linked_objects_list.insert('end', f'Parents : #{len(parents_list)}')
+                for parent_uid in parents_list:
+                    self.lst_linked_objects_list.insert('end', tab + self.odf_data.object_uid_names_get(parent_uid))
+
+            # display the children
+            children_list = sorted(self.odf_data.object_kinship_list_get(self.selected_object_uid, TO_CHILD))
+            if len(children_list) > 0:
+                self.lst_linked_objects_list.insert('end', f'Children : #{len(children_list)}')
+                for child_uid in children_list:
+                    self.lst_linked_objects_list.insert('end', tab + self.odf_data.object_uid_names_get(child_uid))
+
+    #-------------------------------------------------------------------------------------------------
+    def objects_links_list_selected_dbl(self, event):
+        # (GUI event callback) the user has double-clicked an item in the object links list widget
+
+        if self.selected_linked_object_uid != None:
+            # make the selected linked UID the selected object UID
+            self.selected_object_uid = self.selected_linked_object_uid
+            self.selected_linked_object_uid = None
+            self.selected_objects_uid_list = [self.selected_object_uid]
+
+            # update the status of GUI widgets
+            self.object_text_update()
+            self.objects_links_list_content_update()
+            self.gui_update_obj_list_focus(True)
+            self.gui_update_obj_tree_focus()
+            self.gui_update_buttons_state()
+
+            # select the first item of the list which must have the focus
+            self.lst_linked_objects_list.selection_set(0)
+
+    #-------------------------------------------------------------------------------------------------
+    def objects_tree_content_update(self):
         # do an update of the objects tree widget
 
         # memorize the nodes of the tree which are currently opened to restore them in the updated list
         self.opened_objects_iid_list.clear()
-        for iid in self.trv_objects_tree.get_children(''):
+        for iid in self.trv_objects_tree.get_children():
             self.objects_tree_node_and_children_opened_nodes_get(iid)
 
         # delete all the nodes of the tree
@@ -13590,7 +13705,7 @@ class C_GUI(C_GUI_NOTEBOOK):
 
             if 'Organ' in odf_objects_list:
                 # place the Organ object after the Header or in first position if no header
-                organ_node_iid = self.trv_objects_tree.insert('', 'end', 'Organ', text=self.odf_data.object_names_get('Organ'), open=True)
+                organ_node_iid = self.trv_objects_tree.insert('', 'end', 'Organ', text=self.odf_data.object_uid_names_get('Organ'), open=True)
             else:
                 organ_node_iid = ''
 
@@ -13607,11 +13722,22 @@ class C_GUI(C_GUI_NOTEBOOK):
                         self.objects_tree_child_add('', object_uid, depth)
 
     #-------------------------------------------------------------------------------------------------
+    def objects_tree_selected_dbl(self, event):
+        # (GUI event callback) the user has double-clicked an item in the objects tree widget
+
+        # open / close the clicked node
+        node_iid_under_mouse = self.trv_objects_tree.identify_row(event.y)
+        open_state = self.trv_objects_tree.item(node_iid_under_mouse, option='open')
+        self.trv_objects_tree.item(node_iid_under_mouse, open=not open_state)
+
+        return 'break'
+
+    #-------------------------------------------------------------------------------------------------
     def objects_tree_child_add(self, parent_node_iid, child_object_uid, depth):
         # recursive function to insert in the objects tree widget the given child object UID under the given parent node ID
 
         # insert the given child object in the tree under the given parent node iid
-        child_node_iid = self.trv_objects_tree.insert(parent_node_iid, 'end', parent_node_iid + child_object_uid, text=self.odf_data.object_names_get(child_object_uid))
+        child_node_iid = self.trv_objects_tree.insert(parent_node_iid, 'end', parent_node_iid + child_object_uid, text=self.odf_data.object_uid_names_get(child_object_uid))
 
         if child_node_iid in self.opened_objects_iid_list:
             # the given child node iid has to be opened
@@ -13657,15 +13783,14 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.objects_tree_node_and_children_open(iid, False)
 
     #-------------------------------------------------------------------------------------------------
-    def objects_tree_collapse_current(self):
+    def objects_tree_collapse_selected(self):
         # (GUI event callback) the user has pressed the button "Expand"
         # collapse the node of the selected object and its children, except the root and the 'Organ' nodes
 
         # get the iid of the selected node in the tree
         cursel_tuple = self.trv_objects_tree.selection()
         if len(cursel_tuple) > 0:
-            selected_node_iid = cursel_tuple[0]
-            self.objects_tree_node_and_children_open(selected_node_iid, False)
+            self.objects_tree_node_and_children_open(cursel_tuple[0], False)
 
     #-------------------------------------------------------------------------------------------------
     def objects_tree_node_and_parents_open(self, node_iid):
@@ -13691,47 +13816,6 @@ class C_GUI(C_GUI_NOTEBOOK):
         # apply the open status to the child nodes
         for iid in self.trv_objects_tree.get_children(node_iid):
             self.objects_tree_node_and_children_open(iid, open_status)
-
-    #-------------------------------------------------------------------------------------------------
-    def objects_tree_nodes_select(self, node_iid, object_uid, show_tree_item=False):
-        # recursive function to select and make visible the nodes of the objects tree which contain the given object UID text
-
-        parent_object_type = self.odf_data.object_main_parent_type_get(self.focused_sel_item_id)
-        if object_uid != None:
-            parent_node_iid = node_iid[:-len(object_uid)]
-        else:
-            parent_node_iid = ''
-
-        if object_uid != None and self.trv_objects_tree.item(node_iid)['text'].split(' ')[0] == object_uid:
-            # the node node_iid corresponds to the object UID
-            # tag it to color it with a background color
-            self.trv_objects_tree.item(node_iid, tags=TAG_SAME_UID)
-            if show_tree_item:
-                # open its parent node to see it
-                self.objects_tree_node_and_parents_open(self.trv_objects_tree.parent(node_iid))
-
-                if (parent_object_type == None and not self.one_tree_item_shown) or (parent_object_type != None and parent_object_type in parent_node_iid):
-                    # show the node if none node has been shown yet or the node is under a parent node
-                    self.trv_objects_tree.see(node_iid)
-                    self.one_tree_item_shown = True
-
-            if self.focused_objects_widget == self.trv_objects_tree and (parent_object_type == None or parent_object_type in parent_node_iid):
-                # put the focus on the current node
-                self.trv_objects_tree.selection_add(node_iid)
-            else:
-                # remove the selection on the node if any
-                self.trv_objects_tree.selection_remove(node_iid)
-        else:
-            # remove the tag on the node_iid if any
-            self.trv_objects_tree.item(node_iid, tags=())
-            # remove the selection on the node if any
-            self.trv_objects_tree.selection_remove(node_iid)
-
-        if self.trv_objects_tree.item(node_iid, 'open') or show_tree_item:
-            # the node_iid is opened so its children are visible, or the tree has to be automatically expanded to show the selected object UID
-            # search to select the object_uid in the children of node_iid
-            for iid in self.trv_objects_tree.get_children(node_iid):
-                self.objects_tree_nodes_select(iid, object_uid, show_tree_item)
 
     #-------------------------------------------------------------------------------------------------
     def objects_tree_node_show(self, object_uid, parent_uid, node_iid=''):
@@ -13760,330 +13844,562 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.objects_tree_node_and_children_opened_nodes_get(iid)
 
     #-------------------------------------------------------------------------------------------------
-    def objects_tree_selected(self, event):
-        # (GUI event callback) the user has selected an item in the objects tree widget
+    def objects_tree_node_and_children_uncolor(self, node_iid):
+        # recursive function to remove the background color of the given node iid and all his children
 
-        if self.gui_events_blocked: return
+        self.trv_objects_tree.item(node_iid, tags=())
 
-        self.is_focus_on_objects_lists = True
-
-        # get the iid of the selected node in the tree
-        cursel_tuple = self.trv_objects_tree.selection()
-        if len(cursel_tuple) > 0:
-            selected_node_iid = cursel_tuple[0]
-        else:
-            selected_node_iid = None
-
-        if selected_node_iid != None:
-            # an item has been selected in the objects tree
-
-            # ignore the mouse button 1 release if the edited object has been changed : to let the user say if he wants to save the change or not or cancel
-            self.ignore_b1_release = self.txt_object_text.edit_modified()
-
-            if self.can_i_make_change():
-                # the user has saved his modifications if he wanted and has not canceled the operation
-
-                # recover the object UID
-                object_uid = self.trv_objects_tree.item(selected_node_iid, option='text').split(' ')[0]
-                self.selected_object_app = 'GO'
-                self.selected_object_uid = object_uid
-                self.selected_linked_uid = None
-                self.edited_object_uid = self.selected_object_uid
-
-                self.focused_objects_widget = self.trv_objects_tree
-                self.focused_sel_item_id = selected_node_iid
-
-                if self.ignore_b1_release:
-                    # do now the processing of the mouse button 1 release
-                    self.ignore_b1_release = False
-                    self.object_b1_release(event)
-                # else the widgets will be updated on mouse button release
-
-            else:
-                # the user had canceled the selection
-                self.ignore_b1_release = False
-                self.gui_status_update_lists()
+        for iid in self.trv_objects_tree.get_children(node_iid):
+            self.objects_tree_node_and_children_uncolor(iid)
 
     #-------------------------------------------------------------------------------------------------
-    def object_links_list_update(self):
-        # update the selected object links list
+    def objects_list_b1_press(self, event, list_widget):
+        # (GUI event callback) the user pressed the mouse left button in the objects list widget
 
-        tab = '    '
+        self.drag_in_progress = None
 
-        # clear the objects list widget content
-        self.lst_links_list.delete(0, tk.END)
+        if not self.can_i_make_change():
+            return 'break'
 
-        if self.selected_object_app == 'GO' and self.selected_object_uid not in (None, 'Header', 'Organ'):
+        # to block the GUI events triggered by the list items selection changes done in this function
+        self.gui_events_block()
 
-            # display the selected object
-            self.lst_links_list.insert('end', self.odf_data.object_names_get(self.selected_object_uid))
+        # get the list of items index currently selected in the list
+        sel_items_index_list = list_widget.curselection()
 
-            # display the parents
-            parents_list = sorted(self.odf_data.object_kinship_list_get(self.selected_object_uid, TO_PARENT))
-            if len(parents_list) > 0:
-                self.lst_links_list.insert('end', f'Parents : #{len(parents_list)}')
-                for parent_uid in parents_list:
-                    self.lst_links_list.insert('end', tab + self.odf_data.object_names_get(parent_uid))
+        # get the index of the item under the mouse cursor in the list
+        index_under_mouse = list_widget.nearest(event.y)
 
-            # display the children
-            children_list = sorted(self.odf_data.object_kinship_list_get(self.selected_object_uid, TO_CHILD))
-            if len(children_list) > 0:
-                self.lst_links_list.insert('end', f'Children : #{len(children_list)}')
-                for child_uid in children_list:
-                    self.lst_links_list.insert('end', tab + self.odf_data.object_names_get(child_uid))
+        if list_widget == self.lst_linked_objects_list and list_widget.get(index_under_mouse)[:4] in ('Pare', 'Chil'):
+            # a click on items Parents and Children of the objects links list must have none effect
+            return 'break'
 
-    #-------------------------------------------------------------------------------------------------
-    def object_links_list_selected(self, event):
-        # (GUI event callback) the user has selected an item in the object links list widget
-
-        if self.gui_events_blocked: return
-
-        self.is_focus_on_objects_lists = True
-
-        # get the line number of the selected item in the list
-        cursel_tuple = self.lst_links_list.curselection()
-        if len(cursel_tuple) > 0:
-            selected_line_indice = cursel_tuple[0]
+        if len(sel_items_index_list) == 0:
+            # there is none item selected, select the one under the mouse cursor
+            list_widget.selection_set(index_under_mouse)
+            self.first_sel_item_index = index_under_mouse
         else:
-            selected_line_indice = None
-
-        if selected_line_indice != None:
-            # an item has been selected in the object links list
-
-            # ignore the mouse button 1 release if the edited object has been changed : to let the user say if he wants to save the change or not or cancel
-            self.ignore_b1_release = self.txt_object_text.edit_modified()
-
-            if self.can_i_make_change():
-                # the user has saved his modifications if he wanted and has not canceled the operation
-
-                # recover in the list widget the UID of the selected object (before the first space in the selected item text)
-                object_uid = self.lst_links_list.get(selected_line_indice).strip().split(' ')[0]
-                if object_uid not in ('Parents', 'Children', self.selected_object_uid):
-                    self.selected_linked_uid = object_uid
-                    self.edited_object_uid = self.selected_linked_uid
-                    self.focused_sel_item_id = self.selected_linked_uid
+            # there is already one or more selected items
+            if not self.is_key_control_pressed and not self.is_key_shift_pressed:
+                # Control and Shift keys are not pressed
+                if index_under_mouse in sel_items_index_list:
+                    # the mouse cursor is over a selected item : an objects dragging can be started but is not yet in progress
+                    # it will managed in the motion or release events functions
+                    self.drag_in_progress = False
+                    self.drag_x0 = event.x
+                    self.drag_y0 = event.y
                 else:
-                    self.selected_linked_uid = None
-                    self.edited_object_uid = self.selected_object_uid
-                    self.focused_sel_item_id = self.selected_object_uid
+                    # unselect all items and select the one under the mouse cursor
+                    for i in sel_items_index_list:
+                        list_widget.selection_clear(i)
+                    list_widget.selection_set(index_under_mouse)
+                    self.first_sel_item_index = index_under_mouse
 
-                self.focused_objects_widget = self.lst_links_list
+            elif self.is_key_shift_pressed:
+                # a Shift key is pressed : select items between the first selected item and the currently selected item
+                for i in sel_items_index_list:
+                    list_widget.selection_clear(i)
+                if index_under_mouse < self.first_sel_item_index:
+                    for i in range(index_under_mouse, self.first_sel_item_index + 1):
+                        list_widget.selection_set(i)
+                else:
+                    for i in range(self.first_sel_item_index, index_under_mouse + 1):
+                        list_widget.selection_set(i)
 
-                if self.ignore_b1_release:
-                    # do now the processing of the mouse button 1 release
-                    self.ignore_b1_release = False
-                    self.object_b1_release(event)
-                # else the widgets will be updated on mouse button release
+            elif self.is_key_control_pressed:
+                # a Control key is pressed : invert the selection status of the item under the mouse cursor
+                if index_under_mouse in sel_items_index_list and len(sel_items_index_list) > 1:
+                    list_widget.selection_clear(index_under_mouse)
+                    if index_under_mouse == self.first_sel_item_index:
+                        self.first_sel_item_index = list_widget.curselection()[0]
+                else:
+                    list_widget.selection_set(index_under_mouse)
 
-            else:
-                # the user had canceled the selection
-                self.ignore_b1_release = False
-                self.gui_status_update_lists()
+        # remove the eventual background highlight on an item
+        for i in range(list_widget.index("end")):
+            list_widget.itemconfig(i, foreground=TEXT_COLOR, background=COLOR_BG_LIST)
+
+        # build the list of all selected objects UID and check if all have same type as the first selected object
+        # if it is not the case, unselect all items and select only the one under the mouse cursor
+        first_sel_object_uid = None
+        self.selected_objects_uid_list.clear()
+        if self.first_sel_item_index != None:
+            # get the new selected items list (changed above)
+            sel_items_index_list = list_widget.curselection()
+
+            first_sel_object_uid = list_widget.get(self.first_sel_item_index).lstrip().split(' ')[0]
+            sel_object_type = self.odf_data.object_type_get(first_sel_object_uid)
+
+            object_type_diff_found = False
+            for i in sel_items_index_list:
+                object_uid = list_widget.get(i).lstrip().split(' ')[0]
+                if self.odf_data.object_type_get(object_uid) != sel_object_type:
+                    object_type_diff_found = True
+                    break
+                self.selected_objects_uid_list.append(object_uid)
+
+            if object_type_diff_found:
+                # there is a difference, unselect all items
+                for i in sel_items_index_list:
+                    list_widget.selection_clear(i)
+                # select the item under the mouse cursor and set it as new first selected item
+                list_widget.selection_set(index_under_mouse)
+
+                self.first_sel_item_index = index_under_mouse
+                first_sel_object_uid = list_widget.get(self.first_sel_item_index).lstrip().split(' ')[0]
+                self.selected_objects_uid_list = [first_sel_object_uid]
+
+        self.focused_objects_widget = list_widget
+        self.selected_object_app = 'GO'
+
+        if self.drag_in_progress == None:
+            if list_widget == self.lst_objects_list:
+                # the objects list is clicked
+                self.selected_object_uid = first_sel_object_uid
+                self.selected_linked_object_uid = None
+
+                self.objects_links_list_content_update()
+                self.gui_update_linkobj_list_focus()
+
+            elif list_widget == self.lst_linked_objects_list:
+                # the linked objects list is clicked
+                if first_sel_object_uid != self.selected_object_uid:
+                    self.selected_linked_object_uid = first_sel_object_uid
+                else:
+                    self.selected_linked_object_uid = None
+
+                self.gui_update_obj_list_focus()
+                # highlight the first item which is the selected object UID
+                if self.lst_linked_objects_list.index("end") > 1:
+                    self.lst_linked_objects_list.itemconfig(0, foreground=TEXT_COLOR, background=COLOR_SAME_UID_ITEM)
+
+            self.object_text_update()
+            self.gui_update_obj_tree_focus()
+            self.gui_update_buttons_state()
+
+        return 'break'
 
     #-------------------------------------------------------------------------------------------------
-    def object_links_list_selected_dbl(self, event):
-        # (GUI event callback) the user has double-clicked an item in the object links list widget
+    def objects_list_b1_release(self, event, list_widget):
+        # (GUI event callback) the user released the mouse left button in the objects list widget
 
-        if self.selected_linked_uid != None:
-            # make the selected linked UID the selected object UID
-            self.selected_object_uid = self.selected_linked_uid
-            self.selected_linked_uid = None
-            self.ignore_b1_release = True
+        # get the list of items index currently selected in the list
+        sel_items_index_list = list_widget.curselection()
 
-            # update the status of GUI widgets
-            self.object_links_list_update()
-            self.gui_status_update_lists(True)
-            self.gui_status_update_buttons()
+        if self.drag_in_progress == False and len(sel_items_index_list) > 1:
+            # selected objects could have been dragged but have not been : select only the item under the mouse cursor
+            for i in sel_items_index_list:
+                list_widget.selection_clear(i)
+
+            # simulate a mouse button press to select the item under the mouse cursor
+            self.objects_list_b1_press(event, list_widget)
+
+        elif self.drag_in_progress == True:
+            # selected objects have been dragged
+            self.objects_b1_drop(event)
+
+        return 'break'
 
     #-------------------------------------------------------------------------------------------------
-    def object_b1_motion(self, event=None):
-        # (GUI event callback) the user has moved the mouse cursor inside the objects lists or tree with the button 1 pressed
-        # if event = None, the mouse cursor position must be ignored
+    def objects_tree_b1_press(self, event, tree_widget):
+        # (GUI event callback) the user pressed the mouse left button in the objects tree widget
 
-        overflown_widget = None
-        overflown_object_uid = None
-        if event != None:
-            # identify which object UID of an objects list or tree is overflown by the mouse cursor
-            overflown_widget = event.widget.winfo_containing(event.x_root, event.y_root)
-            if overflown_widget == self.lst_objects_list:
-                # the objects list is overflown by the mouse cursor
-                index = self.lst_objects_list.nearest(event.y)
-                overflown_object_uid = self.lst_objects_list.get(index).split(' ')[0]
-            elif overflown_widget == self.trv_objects_tree:
-                # the objects tree is overflown by the mouse cursor
-                index = self.trv_objects_tree.identify_row(event.y)
-                overflown_object_uid = self.trv_objects_tree.item(index, option='text').split(' ')[0]
-            elif overflown_widget == self.lst_links_list:
-                # the linked objects list is overflown by the mouse cursor, no drag&drop possible with this list
-                pass
+        self.drag_in_progress = None
+
+        if not self.can_i_make_change():
+            return 'break'
+
+        # to block the GUI events triggered by the list items selection changes done in this function
+        self.gui_events_block()
+
+        # get the list of nodes iid currently selected in the tree
+        sel_nodes_iid_list = tree_widget.selection()
+
+        # get the idd of the node and the element type under the mouse cursor in the tree
+        node_iid_under_mouse = tree_widget.identify_row(event.y)
+        element = tree_widget.identify_element(event.x, event.y)
+
+        if element == 'Treeitem.indicator':
+            # the + or - has been clicked : toggle the open state of the node
+            open_state = tree_widget.item(node_iid_under_mouse, option='open')
+            tree_widget.item(node_iid_under_mouse, open=not open_state)
+
+        if len(sel_nodes_iid_list) == 0:
+            # there is none node selected, select the one under the mouse cursor
+            tree_widget.selection_add(node_iid_under_mouse)
+            self.first_sel_node_iid = node_iid_under_mouse
         else:
-            # event = None : the Control key has been pressed or released
-            if self.object_dragging_in_progress:
-                # keep active the current overflown object
-                overflown_object_uid = self.drag_overflown_object_uid
-            else:
-                return
+            # there is already one or more selected nodes
+            if not self.is_key_control_pressed and not self.is_key_shift_pressed:
+                # Control and Shift keys are not pressed
+                if node_iid_under_mouse in sel_nodes_iid_list:
+                    # the mouse cursor is over a selected node : an objects dragging can be started but is not yet in progress
+                    # it will managed in the motion or release events functions
+                    self.drag_in_progress = False
+                    self.drag_x0 = event.x
+                    self.drag_y0 = event.y
+                else:
+                    # unselect all items and select the one under the mouse cursor
+                    for node_iid in sel_nodes_iid_list:
+                        tree_widget.selection_remove(node_iid)
+                    tree_widget.selection_add(node_iid_under_mouse)
+                    self.first_sel_node_iid = node_iid_under_mouse
 
-        if not self.object_dragging_in_progress:
-            # start of a dragging operation
-            self.selected_widget_b4 = overflown_widget
-            if overflown_object_uid != self.edited_object_uid:
-                # first time the mouse cursor is dragged outside the edited object UID
-                self.object_dragging_in_progress = True
-                # the dragged object UID is the edited object UID
-                self.dragged_object_uid = self.edited_object_uid
-                self.dragged_object_type = self.odf_data.object_type_get(self.dragged_object_uid)
-                self.dragged_object_parents_list = self.odf_data.object_kinship_list_get(self.dragged_object_uid, TO_PARENT)
-                # erase selections in objects lists/tree
-                self.selected_object_uid_b4 = self.selected_object_uid
-                self.selected_linked_uid_b4 = self.selected_linked_uid
-                self.selected_object_uid = None
-                self.selected_linked_uid = None
+            elif self.is_key_shift_pressed:
+                # a Shift key is pressed : select nodes between the first selected node and the currently selected node
+                for node_iid in sel_nodes_iid_list:
+                    tree_widget.selection_remove(node_iid)
 
-        if self.object_dragging_in_progress and (self.drag_overflown_object_uid != overflown_object_uid or event == None) and self.selected_widget_b4 != self.lst_links_list:
-            # a new object UID is overflown by the dragged mouse cursor or no event if provided (Control key has been pressed/released)
-            self.drag_overflown_object_uid = overflown_object_uid
+                if tree_widget.parent(self.first_sel_node_iid) != tree_widget.parent(node_iid_under_mouse):
+                    # the clicked node is not under the same parent as the first selected node
+                    # set it as the first selected node so that other selected nodes will be unselected later in this function
+                    tree_widget.selection_add(node_iid_under_mouse)
+                    self.first_sel_node_iid = node_iid_under_mouse
+                else:
+                    i = 200  # counter permitting to avoid an infinite while loop in case of node iid unconsistency
+                    if node_iid_under_mouse < self.first_sel_node_iid:
+                        node_iid = node_iid_under_mouse
+                        while i > 0:
+                            tree_widget.selection_add(node_iid)
+                            if node_iid == self.first_sel_node_iid:
+                                break
+                            node_iid = tree_widget.next(node_iid)
+                            i -= 1
+                    else:
+                        node_iid = self.first_sel_node_iid
+                        while i > 0:
+                            tree_widget.selection_add(node_iid)
+                            if node_iid == node_iid_under_mouse:
+                                break
+                            node_iid = tree_widget.next(node_iid)
+                            i -= 1
 
-            # highlight in the lists/tree the object UID which is overflown if the dragged object can be dropped on it
-            # and update the mouse cursor aspect
-            self.selected_object_uid = None
-            self.dragged_object_drop_action = None
-            self.wnd_main['cursor'] = 'X_cursor'
-            if overflown_object_uid != None and self.dragged_object_uid != None and overflown_object_uid != self.dragged_object_uid:
-                # overflown and dragged objects have not the same UID
-                if overflown_object_uid[:-3] == self.dragged_object_uid[:-3]:
-                    # dragged and overflown objects UID have the same type
+            elif self.is_key_control_pressed:
+                # a Control key is pressed : invert the selection status of the node under the mouse cursor
+                if node_iid_under_mouse in sel_nodes_iid_list and len(sel_nodes_iid_list) > 1:
+                    tree_widget.selection_remove(node_iid_under_mouse)
+                    if node_iid_under_mouse == self.first_sel_node_iid:
+                        self.first_sel_node_iid = tree_widget.selection()[0]
+                else:
+                    tree_widget.selection_add(node_iid_under_mouse)
+
+        # remove the eventual background highlight on a node
+        for node_iid in tree_widget.get_children():
+            self.objects_tree_node_and_children_uncolor(node_iid)
+
+        # build the list of all selected objects UID and check if all have same type as the first selected object
+        # if it is not the case, unselect all items and select only the one under the mouse cursor
+        first_sel_object_uid = None
+        self.selected_objects_uid_list.clear()
+        if self.first_sel_node_iid != None:
+            # get the new selected items list (changed above)
+            sel_nodes_iid_list = tree_widget.selection()
+
+            first_sel_object_uid = tree_widget.item(self.first_sel_node_iid, option='text').split(' ')[0]
+            sel_object_type = self.odf_data.object_type_get(first_sel_object_uid)
+
+            object_type_diff_found = False
+            for node_iid in sel_nodes_iid_list:
+                object_uid = tree_widget.item(node_iid, option='text').split(' ')[0]
+                if self.odf_data.object_type_get(object_uid) != sel_object_type:
+                    object_type_diff_found = True
+                    break
+                self.selected_objects_uid_list.append(object_uid)
+
+            if object_type_diff_found:
+                # there is a difference, unselect all items
+                for node_iid in sel_nodes_iid_list:
+                    tree_widget.selection_remove(node_iid)
+                # select the item under the mouse cursor and set it as new first selected item
+                tree_widget.selection_add(node_iid_under_mouse)
+                self.first_sel_node_iid = node_iid_under_mouse
+
+                first_sel_object_uid = tree_widget.item(self.first_sel_node_iid, option='text').split(' ')[0]
+                self.selected_objects_uid_list = [first_sel_object_uid]
+
+        self.focused_objects_widget = tree_widget
+        self.selected_object_app = 'GO'
+
+        if self.drag_in_progress == None:
+            self.selected_object_uid = first_sel_object_uid
+            self.selected_linked_object_uid = None
+
+            self.object_text_update()
+            self.objects_links_list_content_update()
+            self.gui_update_obj_list_focus()
+            self.gui_update_linkobj_list_focus()
+            self.gui_update_buttons_state()
+
+        return 'break'
+
+    #-------------------------------------------------------------------------------------------------
+    def objects_tree_b1_release(self, event, tree_widget):
+        # (GUI event callback) the user released the mouse left button in the objects tree widget
+
+        # get the list of nodes iid currently selected in the tree
+        sel_nodes_iid_list = tree_widget.selection()
+
+        if self.drag_in_progress == False and len(sel_nodes_iid_list) > 1:
+            # selected objects could have been dragged but have not been : select only the item under the mouse cursor
+            for node_iid in sel_nodes_iid_list:
+                tree_widget.selection_remove(node_iid)
+
+            # simulate a mouse button press to select the item under the mouse cursor
+            self.objects_tree_b1_press(event, tree_widget)
+
+        elif self.drag_in_progress == True:
+            # selected objects have been dragged
+            self.objects_b1_drop(event)
+
+        return 'break'
+
+    #-------------------------------------------------------------------------------------------------
+    def objects_b1_drag(self, event=None):
+        # (GUI event callback) the user has moved the mouse cursor with the left button pressed
+        # if event = None, the mouse cursor position is ignored (used if Control key is pressed / released)
+
+        if self.drag_in_progress == None:
+            # no dragging has to be managed
+            return 'break'
+
+        # manage the mouse cursor position
+        if event != None:
+            # find on which widget and object is eventually placed the mouse cursor
+            self.drag_overflown_widget = None
+            self.drag_overflown_item_id = None
+            self.drag_overflown_object_uid = None
+
+            self.drag_overflown_widget = event.widget.winfo_containing(event.x_root, event.y_root)
+            if self.drag_overflown_widget in (self.lst_objects_list, self.lst_linked_objects_list):
+                # the objects or linked objects list is overflown by the mouse cursor
+                self.drag_overflown_item_id = self.drag_overflown_widget.nearest(event.y)
+                self.drag_overflown_object_uid = self.drag_overflown_widget.get(self.drag_overflown_item_id).lstrip().split(' ')[0]
+            elif self.drag_overflown_widget == self.trv_objects_tree:
+                # the objects tree is overflown by the mouse cursor
+                self.drag_overflown_item_id = self.drag_overflown_widget.identify_row(event.y)
+                self.drag_overflown_object_uid = self.drag_overflown_widget.item(self.drag_overflown_item_id, option='text').split(' ')[0]
+
+            if self.drag_overflown_object_uid != None and self.drag_overflown_object_uid[:4] in ('', 'Pare', 'Chil'):
+                # cursor on an empty line in the objects tree or on Parents / Children line in the linked objects list
+                # consider the mouse cursor as outside objects lists/tree
+                self.drag_overflown_widget = None
+                self.drag_overflown_item_id = None
+                self.drag_overflown_object_uid = None
+
+            if self.drag_in_progress == False and (abs(self.drag_x0 - event.x) > 5 or abs(self.drag_y0 - event.y) > 5):
+                # the mouse cursor has been moved significantly, start of the dragging mode
+                self.drag_in_progress = True
+                self.drag_last_overflown_widget = None
+                self.drag_last_overflown_item_id = None
+                self.drag_last_overflown_object_uid = None
+
+                # get objet type and parent objects of the edited object (which is the first of selected/dragged object)
+                self.drag_object_type = self.odf_data.object_type_get(self.edited_object_uid)              # can return for example PanelElement
+                self.drag_object_type_long = self.odf_data.object_type_get(self.edited_object_uid, False)  # can return for example Panel001Element
+                self.drag_object_parents_list = self.odf_data.object_kinship_list_get(self.edited_object_uid, TO_PARENT)
+
+
+            if self.drag_in_progress == True and self.drag_overflown_object_uid != self.drag_last_overflown_object_uid:
+                # a new object UID is overflown by the mouse cursor
+                if self.drag_last_overflown_object_uid not in self.selected_objects_uid_list:
+                    # unselect on the last overflown list/tree item if it is not a selected object
+                    if self.drag_last_overflown_widget in (self.lst_objects_list, self.lst_linked_objects_list):
+                        self.drag_last_overflown_widget.selection_clear(self.drag_last_overflown_item_id)
+                    elif self.drag_last_overflown_widget == self.trv_objects_tree:
+                        self.drag_last_overflown_widget.selection_remove(self.drag_last_overflown_item_id)
+
+                if self.drag_overflown_object_uid not in self.selected_objects_uid_list:
+                    # select the new overflown list/tree item if it is not a selected object (already selected)
+                    if self.drag_overflown_widget in (self.lst_objects_list, self.lst_linked_objects_list):
+                        self.drag_overflown_widget.selection_set(self.drag_overflown_item_id)
+                    elif self.drag_overflown_widget == self.trv_objects_tree:
+                        self.drag_overflown_widget.selection_add(self.drag_overflown_item_id)
+
+            # update last dragging status
+            self.drag_last_overflown_widget = self.drag_overflown_widget
+            self.drag_last_overflown_item_id = self.drag_overflown_item_id
+            self.drag_last_overflown_object_uid = self.drag_overflown_object_uid
+
+        if self.drag_in_progress == True:
+            # define the drop action which can be done on the overflown object and define the associated mouse cursor aspect
+            self.drag_drop_action = None
+            overflown_object_name = self.odf_data.object_names_get(self.drag_overflown_object_uid)
+            drag_label_text = ''
+            if self.drag_overflown_object_uid != None and self.drag_overflown_object_uid not in self.selected_objects_uid_list:
+                # an object is overflown and is not one of selected objects
+                if self.odf_data.object_type_get(self.drag_overflown_object_uid, False) == self.drag_object_type_long:
+                    # the overflown and dragged objects have the same type
                     if not self.is_key_control_pressed:
                         # the Control key is not pressed
-                        self.selected_object_uid = overflown_object_uid
-                        self.dragged_object_drop_action = 'reorder'
-                        if overflown_object_uid < self.dragged_object_uid:
-                            self.wnd_main['cursor'] = 'based_arrow_up'
+                        if self.drag_overflown_object_uid < self.edited_object_uid:
+                            # the first of dragged objects can be moved before the overflown object
+                            drag_label_text = '➝ Move before: ' + overflown_object_name
+                            self.drag_drop_action = 'move_before'
                         else:
-                            self.wnd_main['cursor'] = 'based_arrow_down'
-                elif (self.dragged_object_type in self.odf_data.object_poss_children_type_list_get(overflown_object_uid) and
-                      overflown_object_uid not in ('Organ', 'Header')):
-                    # the dragged object can be child of the overflown object which is not Organ or Header
+                            # the first of dragged objects can be moved after the overflown object
+                            drag_label_text = '➝ Move after: ' + overflown_object_name
+                            self.drag_drop_action = 'move_after'
+
+                elif (self.drag_object_type in self.odf_data.object_poss_children_type_list_get(self.drag_overflown_object_uid) and
+                      self.drag_overflown_object_uid not in ('Organ', 'Header')):
+                    # the dragged object type can be child of the overflown object which is not Organ or Header
                     if not self.is_key_control_pressed:
                         # the Control key is not pressed
-                        if overflown_object_uid not in self.dragged_object_parents_list:
-                            # the overflown object is not parent of the dragged object
-                            self.selected_object_uid = overflown_object_uid
-                            self.dragged_object_drop_action = 'move'
-                            self.wnd_main['cursor'] = 'sb_up_arrow'
+                        if self.drag_overflown_object_uid not in self.drag_object_parents_list:
+                            # the overflown object is not already parent of the dragged object
+                            # the dragged objects can be moved as children of the overflown object
+                            drag_label_text = '➝ Move under: ' + overflown_object_name
+                            self.drag_drop_action = 'move_under'
                     else:
                         # the Control key is pressed
-                        self.selected_object_uid = overflown_object_uid
-                        self.dragged_object_drop_action = 'copy'
-                        self.wnd_main['cursor'] = 'plus'
+                        # the dragged objects can be duplicated as children of the overflown object
+                        self.drag_drop_action = 'clone_under'
+                        drag_label_text = '+ Clone under: ' + overflown_object_name
 
-            # update the selections in the objects lists/tree
-            self.gui_status_update_lists()
+            if self.drag_drop_action != None:
+                # a drag&drop action is possible with the overflown object
+                self.drag_label.config(text=' ' + drag_label_text + ' ')
+                self.wnd_main['cursor'] = 'hand2'
+
+                # place the drag label at the right of the mouse cursor position
+                x = self.wnd_main.winfo_pointerx() - self.wnd_main.winfo_rootx() + 15
+                y = self.wnd_main.winfo_pointery() - self.wnd_main.winfo_rooty() + 10
+                self.drag_label.place(x=x, y=y)
+            else:
+                # a drag&drop action is not possible with the overflown object
+                self.wnd_main['cursor'] = 'X_cursor'
+                # hide the drag label
+                self.drag_label.place_forget()
+
+        return 'break'
 
     #-------------------------------------------------------------------------------------------------
-    def object_b1_release(self, event):
-        # (GUI event callback) the user has released the mouse button 1 inside the GO objects lists or tree
+    def objects_b1_drop(self, event):
+        # the user has released the mouse button 1 whereas an objects drag was in progress : manage the drag & drop operation
 
-        if self.ignore_b1_release:
-            # the mouse button 1 release event has to be ignored (asked by a list/tree select function if the edited object has been changed)
+        self.drag_in_progress = None # to block any further event processing in objects_b1_drag
+
+        if self.drag_last_overflown_object_uid not in self.selected_objects_uid_list:
+            # unselect on the last overflown list/tree item if it is not a selected object
+            if self.drag_last_overflown_widget in (self.lst_objects_list, self.lst_linked_objects_list):
+                self.drag_last_overflown_widget.selection_clear(self.drag_last_overflown_item_id)
+            elif self.drag_last_overflown_widget == self.trv_objects_tree:
+                self.drag_last_overflown_widget.selection_remove(self.drag_last_overflown_item_id)
+
+        # hide the drag label
+        self.drag_label.place_forget()
+
+        if self.drag_drop_action == None:
             self.wnd_main['cursor'] = ''
-            return
+            return 'break'
 
-        if self.object_dragging_in_progress:
-            # UID of the object on which the dragged object UID has been dropped
+        # a drag & drop operation has to be managed
+        self.mouse_cursor_processing(True)
 
-            self.mouse_cursor_processing(True)
+        target_object_uid = self.drag_overflown_object_uid
+        target_object_id = self.odf_data.object_id_get(target_object_uid)
+        target_object_type = self.odf_data.object_type_get(target_object_uid)
+        target_object_type_long = self.odf_data.object_type_get(target_object_uid, False)
+        new_edited_object_uid = None
+        new_selected_objects_uid_list = []
 
-            target_object_uid = self.drag_overflown_object_uid
+        if self.drag_drop_action in ('move_before', 'move_after'):
+            # dragged objects has to be moved before or after the target object UID
 
-            if self.dragged_object_drop_action == 'reorder':
-                # the position of the dragged object has to be reordered
-                # in this case the dragged object is moved before or after the overflown object, weither it has respectively a higher or lower UID than the target
+            dragged_objects_nb = len(self.selected_objects_uid_list)
 
-                # rename temporarily the dragged object with the ID 999 to let its UID free in the ODF to shift objects before or after its new position
-                temp_uid = self.dragged_object_uid[:-3] + '999'
-                self.odf_data.object_rename(self.dragged_object_uid, temp_uid, True, 0)
+            # rename temporarily the dragged objects with an ID 99x to let their UID free in the ODF to shift the target object UID and its neighbours
+            for i, object_uid in enumerate(self.selected_objects_uid_list):
+                temp_uid = self.drag_object_type_long + str(999 - i).zfill(3)
+                self.odf_data.object_rename(object_uid, temp_uid, True)
 
-                if target_object_uid < self.dragged_object_uid:
-                    # object dragged over an object with lower UID, +1 shift is applied on target and next objects UID
-                    self.odf_data.object_rename(temp_uid, target_object_uid, True, +1)
-                else:
-                    # object dragged over an object with higher UID, -1 shift is applied on target and previous objects UID
-                    self.odf_data.object_rename(temp_uid, target_object_uid, True, -1)
+            if self.drag_drop_action == 'move_before':
 
-                self.odf_data_changed = True
+                # place the dragged objects one by one in inverted order at the target object position, shifting it and its neighbours onwards
+                for i, object_uid in enumerate(self.selected_objects_uid_list):
+                    temp_uid = self.drag_object_type_long + str(999 + i - (dragged_objects_nb - 1)).zfill(3)
+                    new_uid = self.odf_data.object_rename(temp_uid, target_object_uid, True, 1)
+                    if new_uid != None:
+                        # the renaming has been done with success, guess the new UID of the current renamed object
+                        new_uid = target_object_type_long + str(target_object_id + i).zfill(3)
+                        new_selected_objects_uid_list.append(new_uid)
+                        if object_uid == self.edited_object_uid:
+                            new_edited_object_uid = new_uid
 
-               # update the selection variables
-                if self.focused_objects_widget == self.trv_objects_tree:
-                    self.focused_sel_item_id = self.focused_sel_item_id.replace(self.dragged_object_uid, target_object_uid)
-                else:
-                    self.focused_sel_item_id = target_object_uid
-                self.selected_object_uid = target_object_uid
-                self.selected_linked_uid = None
-                self.edited_object_uid = target_object_uid
+            else:  # self.drag_drop_action == 'move_after'
 
-            elif self.dragged_object_drop_action == 'move':
-                # the dragged object has to be moved under a new parent : the target object UID
-                target_object_type = self.odf_data.object_type_get(target_object_uid)
-                parents_uid_list = self.odf_data.object_kinship_list_get(self.dragged_object_uid, TO_PARENT)
+                # place the dragged objects one by one at the target object position, shifting it and its neighbours backwards
+                for i, object_uid in enumerate(self.selected_objects_uid_list):
+                    temp_uid = self.drag_object_type_long + str(999 - i).zfill(3)
+                    new_uid = self.odf_data.object_rename(temp_uid, target_object_uid, True, -1)
+                    if new_uid != None:
+                        # the renaming has been done with success, guess the new UID of the current renamed object
+                        new_uid = target_object_type_long + str(target_object_id - i).zfill(3)
+                        new_selected_objects_uid_list.append(new_uid)
+                        if object_uid == self.edited_object_uid:
+                            new_edited_object_uid = new_uid
 
-                # if the dragged object has already a parent of the type of the target object, remove it in its parents list
+            self.odf_data_changed = True
+
+        elif self.drag_drop_action == 'move_under':
+            # dragged objects have to be moved under the overflown object UID (target object UID) their new parent
+            for object_uid in self.selected_objects_uid_list:
+                # link each selected object to its new parent, removing before its existing parents of the same type as the new parent
+                parents_uid_list = self.odf_data.object_kinship_list_get(object_uid, TO_PARENT)
                 for parent_uid in list(parents_uid_list):
                     if self.odf_data.object_type_get(parent_uid) == target_object_type:
                         parents_uid_list.remove(parent_uid)
-                # add the target object UID in the parents list of the dragged object
                 parents_uid_list.append(target_object_uid)
-                # update the parent links of the dragged object
-                object_uid = self.odf_data.object_link(self.dragged_object_uid, parents_uid_list, TO_PARENT)
-                if object_uid != None:
-                    # the links update has been done properly
-                    self.odf_data_changed = True
-                    self.selected_object_uid = object_uid
-                    self.selected_linked_uid = None
-                    self.edited_object_uid = object_uid
-                    self.focused_objects_widget = self.trv_objects_tree
-                    self.focused_sel_item_id = target_object_uid + object_uid
 
-            elif self.dragged_object_drop_action == 'copy':
-                # the dragged object UID as to be copied as a new child of the target object UID
-                object_uid = self.odf_data.object_copy(self.dragged_object_uid, target_object_uid)
-                if object_uid != None:
-                    # the object copy has been done properly
-                    self.odf_data_changed = True
-                    self.selected_object_uid = object_uid
-                    self.selected_linked_uid = None
-                    self.edited_object_uid = object_uid
-                    self.focused_objects_widget = self.trv_objects_tree
-                    self.focused_sel_item_id = target_object_uid + object_uid
+                # link the current selected object to its parents
+                obj_uid = self.odf_data.object_link(object_uid, parents_uid_list, TO_PARENT)
+                if obj_uid != None:
+                    new_selected_objects_uid_list.append(obj_uid)
+                    if object_uid == self.edited_object_uid:
+                        new_edited_object_uid = obj_uid
 
-            else:
-                # retore the lists selections
-                self.selected_object_uid = self.selected_object_uid_b4
-                self.selected_linked_uid = self.selected_linked_uid_b4
+            self.odf_data_changed = True
 
-        # update the content of GUI widgets if a drag&drop action has been done
-        if self.dragged_object_drop_action != None:
-            self.objects_list_update()
-            self.objects_tree_update()
-            # update the events log text
-            self.logs_update()
+        elif self.drag_drop_action == 'clone_under':
+            # dragged objects have to be cloned under the overflown object UID (target object UID) their parent
+            for object_uid in self.selected_objects_uid_list:
+                # clone each selected object under the target object UID
+                obj_uid = self.odf_data.object_clone(object_uid, target_object_uid)
+                if obj_uid != None:
+                    new_selected_objects_uid_list.append(obj_uid)
+                    if object_uid == self.edited_object_uid:
+                        new_edited_object_uid = obj_uid
 
-        if self.focused_objects_widget != self.lst_links_list:
-            # update the content of the linked objects list only if it has not the focus
-            self.object_links_list_update()
+            self.odf_data_changed = True
 
-        # update the status of GUI widgets
+        # update the objects selection data
+        if self.focused_objects_widget == self.lst_linked_objects_list and self.selected_linked_object_uid != None:
+            self.selected_linked_object_uid = new_edited_object_uid
+        else:
+            self.selected_object_uid = new_edited_object_uid
+            self.selected_linked_object_uid = None
+        self.selected_objects_uid_list = list(new_selected_objects_uid_list)
+
+        self.first_sel_item_index = None  # will be set in gui_update function
+        self.first_sel_node_iid = None    # will be set in gui_update function
+
+        # update the content of GUI widgets
         self.object_text_update()
-        self.gui_status_update_lists(self.dragged_object_drop_action != None)
-        self.gui_status_update_buttons()
-
-        # reset the drag&drop variables
-        self.object_dragging_in_progress = False
-        self.dragged_object_drop_action = None
-        self.drag_overflown_object_uid = None
-        self.dragged_object_uid = None
+        self.objects_list_content_update()
+        self.objects_tree_content_update()
+        self.objects_links_list_content_update()
+        self.gui_update_obj_list_focus(True)
+        self.gui_update_linkobj_list_focus(True)
+        self.gui_update_obj_tree_focus(self.focused_objects_widget == self.trv_objects_tree)
+        self.gui_update_buttons_state()
 
         self.mouse_cursor_processing(False)
+
+        self.drag_drop_action = None
+
+        self.logs_update()
+
+        return 'break'
 
     #-------------------------------------------------------------------------------------------------
     def object_unselect(self):
@@ -14093,18 +14409,18 @@ class C_GUI(C_GUI_NOTEBOOK):
             # clear the current object selection
             self.selected_object_app = 'GO'
             self.selected_object_uid = None
-            self.selected_linked_uid = None
-            self.edited_object_uid = None
+            self.selected_linked_object_uid = None
+            self.selected_objects_uid_list.clear()
 
             self.focused_objects_widget = None
-            self.focused_sel_item_id = None
 
             # update the object text and links list
             self.object_text_update()
-            self.object_links_list_update()
+            self.objects_links_list_content_update()
 
-            self.gui_status_update_lists()
-            self.gui_status_update_buttons()
+            self.gui_update_obj_list_focus()
+            self.gui_update_obj_tree_focus()
+            self.gui_update_buttons_state()
 
     #-------------------------------------------------------------------------------------------------
     def object_text_update(self):
@@ -14113,6 +14429,8 @@ class C_GUI(C_GUI_NOTEBOOK):
         # to block the GUI events triggered by the text box content change
         self.gui_events_block()
 
+        self.txt_object_text.config(state=tk.NORMAL)
+
         # erase the content of the text box and the viewer
         self.txt_object_text.delete(1.0, "end")
 
@@ -14120,10 +14438,16 @@ class C_GUI(C_GUI_NOTEBOOK):
         object_lines_list = []
         if self.selected_object_app == 'GO':
             # get the data lines list of the selected GrandOrgue object UID
+            if self.selected_linked_object_uid == None:
+                self.edited_object_uid = self.selected_object_uid
+            else:
+                self.edited_object_uid = self.selected_linked_object_uid
             object_lines_list = self.odf_data.object_lines_read(self.edited_object_uid)
         elif self.selected_object_app == 'HW':
             # get the data lines list of the selected Hauptwerk object UID
+            self.edited_object_uid = self.selected_object_uid
             object_lines_list = self.odf_hw2go.HW_ODF_get_object_attr_list(self.edited_object_uid)
+
 
         # write the object data lines in the object text box
         if len(object_lines_list) > 0:
@@ -14142,10 +14466,13 @@ class C_GUI(C_GUI_NOTEBOOK):
         self.txt_object_text.edit_modified(False)
 
         # update the status of the buttons of the text editor
-        self.gui_status_update_editor_buttons()
+        self.gui_update_editor_buttons_state()
 
         # update the content of the viewer
         self.viewer_update(self.edited_object_uid, None, self.selected_object_app)
+
+        if self.selected_object_app == 'HW':
+            self.txt_object_text.config(state=tk.DISABLED)
 
         self.txt_object_text['cursor'] = 'xterm'
 
@@ -14158,7 +14485,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         elif action == 'redo' and self.txt_object_text.edit("canredo"):
             self.txt_object_text.edit_redo()
 
-        self.gui_status_update_editor_buttons()
+        self.gui_update_editor_buttons_state()
 
         # update the syntax highlighting
         self.odf_syntax_highlight(self.txt_object_text)
@@ -14167,7 +14494,7 @@ class C_GUI(C_GUI_NOTEBOOK):
     def object_text_key_pressed(self, event):
         # (GUI event callback) the user has pressed a keyboard key in the object text box
 
-        self.gui_status_update_editor_buttons()
+        self.gui_update_editor_buttons_state()
 
         # update the syntax highlighting
         self.odf_syntax_highlight(self.txt_object_text)
@@ -14176,7 +14503,7 @@ class C_GUI(C_GUI_NOTEBOOK):
     def object_text_click(self, event=None):
         # (GUI event callback) the user has clicked with left button in the object text editor box
 
-        self.gui_status_update_editor_buttons()
+        self.gui_update_editor_buttons_state()
 
         # update the viewer according to the currently edited object and the content of the line where is the insertion cursor
         cursor_pos = self.txt_object_text.index(tk.INSERT)
@@ -14283,19 +14610,22 @@ class C_GUI(C_GUI_NOTEBOOK):
 
             if self.edited_object_uid not in (None, object_uid):
                 # the object UID has been renamed inside the edited lines list
-                if self.selected_linked_uid != None:
-                    self.selected_linked_uid = object_uid
+                if self.selected_linked_object_uid != None:
+                    self.selected_linked_object_uid = object_uid
                 else:
                     self.selected_object_uid = object_uid
-                self.focused_sel_item_id = self.focused_sel_item_id.replace(self.edited_object_uid, object_uid)
                 self.edited_object_uid = object_uid
 
+            self.selected_objects_uid_list = [self.edited_object_uid]
+
             # update the various GUI widgets
-            self.objects_list_update()
-            self.objects_tree_update()
-            self.object_links_list_update()
-            self.gui_status_update_lists(True)
-            self.gui_status_update_buttons()
+            self.objects_list_content_update()
+            self.objects_tree_content_update()
+            self.objects_links_list_content_update()
+            self.gui_update_obj_list_focus(True)
+            self.gui_update_linkobj_list_focus(True)
+            self.gui_update_obj_tree_focus()
+            self.gui_update_buttons_state()
             self.viewer_update('previous')
             changes_applied = True
         else:
@@ -14385,7 +14715,7 @@ class C_GUI(C_GUI_NOTEBOOK):
             # update the syntax highlighting in the object text
             self.odf_syntax_highlight(self.txt_object_text)
 
-        self.gui_status_update_editor_buttons()
+        self.gui_update_editor_buttons_state()
 
     #-------------------------------------------------------------------------------------------------
     def object_text_attr_get(self, attrib_name):
@@ -14394,7 +14724,6 @@ class C_GUI(C_GUI_NOTEBOOK):
 
         # put in a list the lines of the text box
         lines = self.txt_object_text.get('1.0', tk.END).splitlines()
-        attr_found = False
 
         # search the given attribute name in the lines
         for line_nb, line in enumerate(lines):
@@ -14432,7 +14761,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         else:
             if len(object_types_list) == 0:
                 return
-            msg = f'Choose a type of section to add as child of\n{self.odf_data.object_names_get(self.edited_object_uid)}'
+            msg = f'Choose a type of section to add as child of\n{self.odf_data.object_uid_names_get(self.edited_object_uid)}'
         chosen_type_list = AskUserChooseListItems(self.wnd_main, 'Section add', msg, object_types_list, multiselect_bool=False)
 
         if chosen_type_list == None or len(chosen_type_list) == 0:
@@ -14453,26 +14782,20 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.odf_data_changed = True
             # set the new object as the current selected and focused object
             self.selected_object_uid = new_object_uid
-            self.selected_linked_uid = None
-            self.edited_object_uid = new_object_uid
+            self.selected_linked_object_uid = None
+            self.selected_objects_uid_list = [self.selected_object_uid]
+            self.focused_objects_widget = None
 
             # update the content of GUI widgets
-            self.objects_list_update()
-            self.objects_tree_update()
-            self.object_links_list_update()
             self.object_text_update()
+            self.objects_list_content_update()
+            self.objects_tree_content_update()
+            self.objects_links_list_content_update()
 
-            if self.focused_objects_widget == self.trv_objects_tree:
-                if new_object_uid != 'Header':
-                    # in the objects tree the new object is child of the curent selected node
-                    self.focused_sel_item_id += new_object_uid
-                else:
-                    self.focused_sel_item_id = 'Header'
-            else:
-                self.focused_sel_item_id = new_object_uid
-
-            self.gui_status_update_lists(True, True)
-            self.gui_status_update_buttons()
+            self.gui_update_obj_list_focus(True)
+            self.gui_update_linkobj_list_focus(True)
+            self.gui_update_obj_tree_focus(self.focused_objects_widget == self.trv_objects_tree)
+            self.gui_update_buttons_state()
 
         # update the events log text
         self.logs_update()
@@ -14485,52 +14808,45 @@ class C_GUI(C_GUI_NOTEBOOK):
             # the user has answered Cancel if the edited object has been modified
             return
 
-        object_type = self.odf_data.object_type_get(self.edited_object_uid)
+        new_edited_object_uid = None
+        new_selected_objects_uid_list = []
 
-        if object_type in (None, 'Organ', 'Header'):
-            return
+        for object_uid in self.selected_objects_uid_list:
 
-        # recover the lines of the object to clone
-        object_lines = self.odf_data.object_lines_read(self.edited_object_uid)
-        # remove the first line which if it contains the object UID
-        if object_lines[0][0] == '[':
-            del object_lines[0]
-
-        # get the type of the object which must be taken in the parents of the object to clone (it can be None)
-        parent_object_type = self.odf_data.object_main_parent_type_get(self.edited_object_uid)
-
-        # recover the UID of the object which must be parent of the cloned object
-        parent_objects_uid_list = self.odf_data.object_kinship_list_get(self.edited_object_uid, TO_PARENT, parent_object_type)
-        if len(parent_objects_uid_list) > 0:
-            parent_object_uid = parent_objects_uid_list[0]
-        else:
+            # recover the UID of the object which must be parent of the cloned object (the main parent of the edited object)
             parent_object_uid = None
+            parent_object_type = self.odf_data.object_main_parent_type_get(object_uid)
+            if parent_object_type != None:
+                parent_objects_uid_list = self.odf_data.object_kinship_list_get(object_uid, TO_PARENT, parent_object_type)
+                if len(parent_objects_uid_list) > 0:
+                    parent_object_uid = parent_objects_uid_list[0]
 
-        # create the cloned object in the ODF
-        new_object_uid = self.odf_data.object_add(object_type, parent_object_uid, object_lines)
-        if new_object_uid != None:
+            # create the cloned object of the current selected object
+            obj_uid = self.odf_data.object_clone(object_uid, parent_object_uid)
+            if obj_uid != None:
+                new_selected_objects_uid_list.append(obj_uid)
+                if object_uid == self.edited_object_uid:
+                    new_edited_object_uid = obj_uid
+
+        if new_edited_object_uid != None:
             # the object has been created successfully
             self.odf_data_changed = True
-            logs.add(f'{new_object_uid} cloned from {self.edited_object_uid}')
-
-            if self.focused_objects_widget == self.trv_objects_tree:
-                self.focused_sel_item_id = self.focused_sel_item_id.replace(self.edited_object_uid, new_object_uid)
-            else:
-                self.focused_sel_item_id = new_object_uid
 
             # set the new object as the current selected and focused object
-            self.selected_object_uid = new_object_uid
-            self.selected_linked_uid = None
-            self.edited_object_uid = new_object_uid
+            self.selected_object_uid = new_edited_object_uid
+            self.selected_linked_object_uid = None
+            self.selected_objects_uid_list = list(new_selected_objects_uid_list)
 
             # update the content of GUI widgets
-            self.objects_list_update()
-            self.objects_tree_update()
-            self.object_links_list_update()
             self.object_text_update()
+            self.objects_list_content_update()
+            self.objects_tree_content_update()
+            self.objects_links_list_content_update()
 
-            self.gui_status_update_lists(True, True)
-            self.gui_status_update_buttons()
+            self.gui_update_obj_list_focus(True)
+            self.gui_update_linkobj_list_focus(True)
+            self.gui_update_obj_tree_focus(self.focused_objects_widget == self.trv_objects_tree)
+            self.gui_update_buttons_state()
 
         # update the events log text
         self.logs_update()
@@ -14543,13 +14859,6 @@ class C_GUI(C_GUI_NOTEBOOK):
         if not self.can_i_make_change():
             # the user has answered Cancel if the edited object has been modified
             return
-
-        # recover the list of the parents/children objects of the edited object
-        current_kinship_list = list(self.odf_data.object_kinship_list_get(self.edited_object_uid, relationship))
-
-        # add in the current kinship list the name of each object to have same object names as in the possible kinship list
-        for i, object_uid in enumerate(current_kinship_list):
-            current_kinship_list[i] = self.odf_data.object_names_get(object_uid)
 
         # recover the list of the objects UID which can be possibly parents or children of the edited object
         (possible_parents_list, possible_children_list)  = self.odf_data.object_poss_kinship_list_get(self.edited_object_uid)
@@ -14574,17 +14883,27 @@ class C_GUI(C_GUI_NOTEBOOK):
 
         # add in the possible kinship objects list the name of each object to facilitate the objects selection
         for i, object_uid in enumerate(possible_kinship_list):
-            possible_kinship_list[i] = self.odf_data.object_names_get(object_uid)
+            possible_kinship_list[i] = self.odf_data.object_uid_names_get(object_uid)
+
+        # recover the list of current parents/children objects of the edited object
+        current_kinship_list = list(self.odf_data.object_kinship_list_get(self.edited_object_uid, relationship))
+
+        # add in the current kinship list the name of each object to have same object names as in the possible kinship list
+        for i, object_uid in enumerate(current_kinship_list):
+            current_kinship_list[i] = self.odf_data.object_uid_names_get(object_uid)
 
         # let the user choose the parent/children object(s) to which link the selected object
         if relationship == TO_PARENT:
-            selected_kinship_list = AskUserChooseListItems(self.wnd_main, 'Link to parents',
-                                                          f'Select/unselect parent(s) of\n{self.odf_data.object_names_get(self.edited_object_uid)}',
-                                                          sorted(possible_kinship_list), current_kinship_list, True)
+            if len(self.selected_objects_uid_list) > 1:
+                msg = f'Select/unselect parent(s)\n common for ALL {len(self.selected_objects_uid_list)} selected sections'
+            else:
+                msg = f'Select/unselect parent(s)\nof {self.odf_data.object_uid_names_get(self.edited_object_uid)}'
+            selected_kinship_list = AskUserChooseListItems(self.wnd_main, 'Link to parents', msg,
+                                                           sorted(possible_kinship_list), current_kinship_list, True)
         else:
-            selected_kinship_list = AskUserChooseListItems(self.wnd_main, 'Link to children',
-                                                          f'Select/unselect child(ren) of\n{self.odf_data.object_names_get(self.edited_object_uid)}',
-                                                          sorted(possible_kinship_list), current_kinship_list, True)
+            msg = f'Select/unselect child(ren) of\n{self.odf_data.object_uid_names_get(self.edited_object_uid)}'
+            selected_kinship_list = AskUserChooseListItems(self.wnd_main, 'Link to children', msg,
+                                                           sorted(possible_kinship_list), current_kinship_list, True)
 
         if selected_kinship_list == None:
             # operation cancelled
@@ -14594,29 +14913,36 @@ class C_GUI(C_GUI_NOTEBOOK):
         for i, kinship in enumerate(selected_kinship_list):
             selected_kinship_list[i] = kinship.split(' ')[0]
 
-        # link the selected object to the one of the selected kinship objects list
-        object_uid = self.odf_data.object_link(self.edited_object_uid, selected_kinship_list, relationship)
-        if object_uid != None:
+        # link the selected objects to the ones of the selected kinship objects list
+        # do the link for the edited object in last so that it can be selected at the end
+        new_edited_object_uid = None
+        new_selected_objects_uid_list = []
+        for object_uid in self.selected_objects_uid_list:
+            obj_uid = self.odf_data.object_link(object_uid, selected_kinship_list, relationship)
+            if obj_uid != None:
+                new_selected_objects_uid_list.append(obj_uid)
+                if object_uid == self.edited_object_uid:
+                    new_edited_object_uid = obj_uid
+
+        if new_edited_object_uid != None:
             # the link change has been done successfully
             self.odf_data_changed = True
 
-            if self.focused_objects_widget != self.trv_objects_tree:
-                self.focused_sel_item_id = object_uid
-            # else if the focus is in the objects tree let unchanged the selected node iid
-            # in case the object has not been renamed or has still the current parent node
-
             # update the object selection
-            self.selected_object_uid = object_uid
-            self.selected_linked_uid = None
-            self.edited_object_uid = object_uid
+            self.selected_object_uid = new_edited_object_uid
+            self.selected_linked_object_uid = None
+            self.selected_objects_uid_list = list(new_selected_objects_uid_list)
 
             # update the content of GUI widgets
-            self.objects_list_update()
-            self.objects_tree_update()
-            self.object_links_list_update()
             self.object_text_update()
-            self.gui_status_update_lists(True)
-            self.gui_status_update_buttons()
+            self.objects_list_content_update()
+            self.objects_tree_content_update()
+            self.objects_links_list_content_update()
+
+            self.gui_update_obj_list_focus(True)
+            self.gui_update_linkobj_list_focus(True)
+            self.gui_update_obj_tree_focus(self.focused_objects_widget == self.trv_objects_tree)
+            self.gui_update_buttons_state()
 
         # update the events log text
         self.logs_update()
@@ -14656,20 +14982,22 @@ class C_GUI(C_GUI_NOTEBOOK):
                 # the object has been renamed successfully
                 self.odf_data_changed = True
                 # update the UID of the selected object
-                if self.selected_linked_uid != None:
-                    self.selected_linked_uid = new_uid
+                if self.selected_linked_object_uid != None:
+                    self.selected_linked_object_uid = new_uid
+                    self.selected_objects_uid_list = [self.selected_linked_object_uid]
                 else:
                     self.selected_object_uid = new_uid
-                self.focused_sel_item_id = self.focused_sel_item_id.replace(self.edited_object_uid, new_uid)
-                self.edited_object_uid = new_uid
+                    self.selected_objects_uid_list = [self.selected_object_uid]
 
                 # update the content of GUI widgets
-                self.objects_list_update()
-                self.objects_tree_update()
-                self.object_links_list_update()
                 self.object_text_update()
-                self.gui_status_update_lists(True)
-                self.gui_status_update_buttons()
+                self.objects_list_content_update()
+                self.objects_tree_content_update()
+                self.objects_links_list_content_update()
+                self.gui_update_obj_list_focus(True)
+                self.gui_update_linkobj_list_focus(True)
+                self.gui_update_obj_tree_focus()
+                self.gui_update_buttons_state()
 
             # update the events log text
             self.logs_update()
@@ -14678,55 +15006,75 @@ class C_GUI(C_GUI_NOTEBOOK):
     def object_delete(self):
         # (GUI event callback) the user has clicked on the button "Delete" to delete the current selected object UID
 
-        if self.edited_object_uid == None or self.selected_object_app != 'GO':
+        if len(self.selected_objects_uid_list) == 0:
             return
 
-        edited_object_type = self.odf_data.object_type_get(self.edited_object_uid)
+        # recover the type of the first selected object
+        selected_objects_type = self.odf_data.object_type_get(self.selected_objects_uid_list[0])
 
-        if len(self.odf_data.object_kinship_list_get(self.edited_object_uid, TO_CHILD)) > 0:
-            # the edited object has children
-            if edited_object_type == 'Panel':
-                answer = AskUserAnswerQuestion(self.wnd_main, 'OdfEdit', f"The section {self.edited_object_uid} and all his children sections Panel999xxx will be deleted.\nIs it ok to proceed ?", ['OK', 'Cancel'], 'OK')
-            else:
-                answer = AskUserAnswerQuestion(self.wnd_main, 'OdfEdit', f"The section {self.edited_object_uid} has children which some may become orphan once this section is deleted.\nIs it ok to proceed ?", ['OK', 'Cancel'], 'OK')
+        # prepare the message to show to the user
+        msg = ''
+        children_nb = 0
+        for object_uid in self.selected_objects_uid_list:
+            msg += f' {object_uid},'
+            if len(self.odf_data.object_kinship_list_get(object_uid, TO_CHILD)) > 0:
+                children_nb += 1
+
+        if len(self.selected_objects_uid_list) == 1:
+            msg = 'The section' + msg[:-1] + ' will be deleted.\n'
         else:
-            answer = AskUserAnswerQuestion(self.wnd_main, 'OdfEdit', f"The section {self.edited_object_uid} will be deleted.\nIs it ok to proceed ?", ['OK', 'Cancel'], 'OK')
+            msg = 'Sections ' + msg[:-1] + ' will be deleted.\n'
+
+        if children_nb > 0:
+            # some selected objects have children
+            if selected_objects_type == 'Panel':
+                msg += 'Children Panel999xxx section(s) will be deleted as well.\n'
+            else:
+                msg += 'Children section(s) may become orphan.\n'
+
+        msg += 'Is it ok to proceed ?'
+
+        # ask the user to confirm the deletion
+        answer = AskUserAnswerQuestion(self.wnd_main, 'OdfEdit', msg, ['OK', 'Cancel'], 'OK')
 
         if answer != 'OK':
             return
 
         # the user is ok for the deletion
 
-        # choose the object UID which will be selected after the removal of the current selected object
-        if self.focused_objects_widget == self.lst_links_list and self.selected_linked_uid != None:
-            # a parent/child object is selected in the linked objects list : the parent will be the selected object
+        # choose the object UID which will be selected after the deletion of the selected object(s)
+        next_selected_object_uid = None
+        if self.focused_objects_widget == self.lst_linked_objects_list and self.selected_linked_object_uid != None:
+            # an object is selected in the linked objects list : the selected object UID will be selected after the deletion
             next_selected_object_uid = self.selected_object_uid
-        else:
-            next_selected_object_uid = None
 
-        # identify the line in the objects list widget where is present the object to delete (to make visible this line after the deletion)
-        for line_nb in range(self.lst_objects_list.size()):
-            if self.lst_objects_list.get(line_nb).split(' ')[0] == self.edited_object_uid:
+        # identify the item number in the objects list widget where is present the first object to delete (to make visible this line after the deletion)
+        for item_nb in range(self.lst_objects_list.size()):
+            if self.lst_objects_list.get(item_nb).split(' ')[0] == self.selected_objects_uid_list[0]:
                 break
 
-        # remove the object in the ODF data
-        if self.odf_data.object_delete(self.edited_object_uid):
-            # the object has been removed without issue
-            self.odf_data_changed = True
-            # update the current object UID
-            self.selected_object_uid = next_selected_object_uid
-            self.selected_linked_uid = None
-            self.edited_object_uid = None
-            self.focused_objects_widget = None
+        # remove the selected object(s) in the ODF data
+        for object_uid in reversed(self.selected_objects_uid_list):
+            self.odf_data.object_delete(object_uid)
 
-            # update the content of GUI widgets
-            self.objects_list_update()
-            self.lst_objects_list.see(line_nb)
-            self.objects_tree_update()
-            self.object_links_list_update()
-            self.object_text_update()
-            self.gui_status_update_lists()
-            self.gui_status_update_buttons()
+        # the object has been removed without issue
+        self.odf_data_changed = True
+        # update the current object UID
+        self.selected_object_uid = next_selected_object_uid
+        self.selected_linked_object_uid = None
+        self.selected_objects_uid_list = [self.selected_object_uid]
+        self.focused_objects_widget = None
+
+        # update the content of GUI widgets
+        self.object_text_update()
+        self.objects_list_content_update()
+        self.lst_objects_list.see(item_nb)
+        self.objects_tree_content_update()
+        self.objects_links_list_content_update()
+        self.gui_update_obj_list_focus()
+        self.gui_update_linkobj_list_focus()
+        self.gui_update_obj_tree_focus()
+        self.gui_update_buttons_state()
 
         # update the events log text
         self.logs_update()
@@ -14761,7 +15109,7 @@ class C_GUI(C_GUI_NOTEBOOK):
             else:
                 # ask the user to give the MIDI note to which to extend the compass of the selected object (maximum 12 notes of extension)
                 if object_type == 'Manual':
-                    prompt += f"\nEnter the number of keys (up to 73) it should be extended to (it supports currently {midi_note_last - midi_note_first + 1} keys)."
+                    prompt += f"\nEnter the number of keys (up to 73) it should be extended to (it has currently {midi_note_last - midi_note_first + 1} keys)."
                     prompt += '\n(the added keys will not be visible in GrandOrgue)'
                 else:
                     prompt += f"\nEnter the MIDI note up to which to extend it (between {midi_note_last + 1} and 108 included)."
@@ -14792,7 +15140,7 @@ class C_GUI(C_GUI_NOTEBOOK):
                                 # the extension has been done successfully
                                 self.odf_data_changed = True
                                 self.object_text_update()
-                                self.gui_status_update_buttons()
+                                self.gui_update_buttons_state()
 
                                 new_midi_note_first, new_midi_note_last = compass
                                 if new_midi_note_last > midi_note_last:
@@ -14894,7 +15242,7 @@ class C_GUI(C_GUI_NOTEBOOK):
             # select the Logs tab of the notebook to show the check result
             self.notebook.select(self.frm_logs)
 
-            self.gui_status_update_buttons()
+            self.gui_update_buttons_state()
 
     #-------------------------------------------------------------------------------------------------
     def progress_status_update(self, message):
@@ -14957,7 +15305,7 @@ class ToolTip():
         self.tw.wm_overrideredirect(True)
         self.tw.wm_geometry(f"+{x}+{y}")
         label = tk.Label(self.tw, text=self.text, justify=tk.LEFT,
-                         background='#FFFFE5', relief=tk.SOLID, borderwidth=1, wraplength = self.wraplength)
+                         background='light yellow', relief=tk.SOLID, borderwidth=1, wraplength = self.wraplength)
         label.pack(ipadx=1)
 
     def hidetip(self):
