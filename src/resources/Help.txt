@@ -18,11 +18,11 @@ Multiple sections selection in sections lists/tree
 Mouse left click + Shift key permits to extend the selected sections until the clicked section.
 Mouse left click + Control key permits to add/remove the clicked sections.
 Only sections of same type, and under the same parent if selected in the sections tree, can be selected together.
+Parent / Clone / Delete buttons can operate on multiple selected sections.
 
 Drag & drop of selected sections :
 ------------------
-Sections can be moved or cloned (if Control key pressed) under another parent.
-Sections can be moved before or after another section of the same type.
+Selected sections can be moved or cloned (if Control key pressed) under another parent or before / after another section of the same type.
 
 Menu items
 ------------------
