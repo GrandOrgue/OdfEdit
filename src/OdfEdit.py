@@ -214,6 +214,9 @@
                           Improvements in the selection management in sections lists / tree
                           Fixed missing detections of some image definition attributes for the file picker button enabling
                           Fixed a regression in the images viewer not displaying manuals in v2.17
+   v2.19 - 18 Apr 2025  - ODF data check : fix related to the NumberOfSwitches attribute of a Panel section
+                          ODF data check : fix related to negative values set in CouplerNumber999 and StopNumber999 attributes of a General section
+                          HW2GO : supporting the use case where the switch of a keyboard key has no defined image
 
 TO DO LIST :
     ...
@@ -221,8 +224,8 @@ TO DO LIST :
 -------------------------------------------------------------------------------
 """
 
-APP_VERSION = 'v2.18'
-RELEASE_DATE = 'January 23rd 2025'
+APP_VERSION = 'v2.19'
+RELEASE_DATE = 'April 18th 2025'
 
 DEV_MODE = False
 LOG_HW2GO_drawstop = False
@@ -296,6 +299,7 @@ ATTR_TYPE_DRAWSTOP_FCT = 12    # used in DrawStop
 ATTR_TYPE_FILE_NAME = 13       # used in many objects for bitmap or wave files
 ATTR_TYPE_OBJECT_REF = 14      # used in many objects to make a reference to another object ID
 ATTR_TYPE_PIPE_WAVE = 15       # used in Rank
+ATTR_TYPE_INTEGER_ABS = 16     # check absolute volue of an integer, used in General and Divisional
 
 # notes and octaves constants
 NOTES_NAMES  = ['C', 'C#',  'D', 'D#',  'E', 'F', 'F#',  'G', 'G#',  'A', 'A#',  'B']
@@ -2080,7 +2084,7 @@ class C_ODF_DATA_CHECK:
             if manual_id != '':
                 manual_uid = 'Manual' + manual_id.zfill(3)
                 elements_nb = myint(self.object_attr_value_get(manual_uid, 'NumberOfCouplers'), 0)
-                self.check_attribute_value(object_uid, lines_list, f'CouplerNumber{str(idx).zfill(3)}', ATTR_TYPE_INTEGER, True, 0, elements_nb)
+                self.check_attribute_value(object_uid, lines_list, f'CouplerNumber{str(idx).zfill(3)}', ATTR_TYPE_INTEGER_ABS, True, 0, elements_nb)
 
         value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfDivisionalCouplers', ATTR_TYPE_INTEGER, is_general_obj and store_div_coupl_in_gen == 'Y', 0, self.objects_type_number_get('DivisionalCoupler')), 0)
         for idx in range(1, value + 1):
@@ -2092,7 +2096,7 @@ class C_ODF_DATA_CHECK:
             if manual_id != '':
                 manual_uid = 'Manual' + manual_id.zfill(3)
                 elements_nb = myint(self.object_attr_value_get(manual_uid, 'NumberOfStops'), 0)
-                self.check_attribute_value(object_uid, lines_list, f'StopNumber{str(idx).zfill(3)}', ATTR_TYPE_INTEGER, True, 0, elements_nb)
+                self.check_attribute_value(object_uid, lines_list, f'StopNumber{str(idx).zfill(3)}', ATTR_TYPE_INTEGER_ABS, True, 0, elements_nb)
 
         value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfTremulants', ATTR_TYPE_INTEGER, is_general_obj, 0, self.objects_type_number_get('Tremulant')), 0)
         for idx in range(1, value + 1):
@@ -2488,7 +2492,7 @@ class C_ODF_DATA_CHECK:
                 if count != value:
                     logs.add(f"ERROR in {object_uid} : NumberOfSetterElements={value} whereas {count} {object_uid}SetterElement section(s) defined")
 
-            value = self.check_attribute_value(object_uid, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, 999)
+            value = myint(self.check_attribute_value(object_uid, lines_list, 'NumberOfSwitches', ATTR_TYPE_INTEGER, False, 0, 999))
             if value != None:
                 for idx in range(1, value + 1):
                     self.check_attribute_value(object_uid, lines_list, f"Switch{str(idx).zfill(3)}", ATTR_TYPE_OBJECT_REF, True)
@@ -2908,14 +2912,23 @@ class C_ODF_DATA_CHECK:
             # check the attribute value according to the given type
 
             if attribute_value_type == ATTR_TYPE_INTEGER:
-                if (not attr_value.lstrip("-+").isdigit() or
-                    ((int(attr_value) < attribute_value_min or int(attr_value) > attribute_value_max))):
-                    logs.add(f"ERROR in {object_uid} {line} : the assigned value must be an integer in the range [{attribute_value_min} - {attribute_value_max}]")
+                if myint(attr_value) == None:
+                    logs.add(f"ERROR in {object_uid} {line} : the assigned value must be an integer")
+                elif int(attr_value) < attribute_value_min or int(attr_value) > attribute_value_max:
+                    logs.add(f"ERROR in {object_uid} {line} : the assigned value must be in the range [{attribute_value_min} - {attribute_value_max}]")
+
+            elif attribute_value_type == ATTR_TYPE_INTEGER_ABS:
+                if attr_value[0] == '-': attr_value = attr_value[1:]  # remove '-' at the beginning of the value
+                if myint(attr_value) == None:
+                    logs.add(f"ERROR in {object_uid} {line} : the assigned value must be an integer")
+                elif int(attr_value) < attribute_value_min or int(attr_value) > attribute_value_max:
+                    logs.add(f"ERROR in {object_uid} {line} : the assigned value must be in the range [{attribute_value_min} - {attribute_value_max}]")
 
             elif attribute_value_type == ATTR_TYPE_FLOAT:
-                if (not(attr_value.lstrip("-+").replace('.', '', 1).isdigit()) or
-                    ((float(attr_value) < attribute_value_min or float(attr_value) > attribute_value_max))):
-                    logs.add(f"ERROR in {object_uid} {line} : the assigned value must be an integer or decimal in the range [{attribute_value_min} - {attribute_value_max}]")
+                if myfloat(attr_value) == None:
+                    logs.add(f"ERROR in {object_uid} {line} : the assigned value must be an integer or a decimal")
+                elif float(attr_value) < attribute_value_min or float(attr_value) > attribute_value_max:
+                    logs.add(f"ERROR in {object_uid} {line} : the assigned value must be in the range [{attribute_value_min} - {attribute_value_max}]")
                     attr_value = ''
 
             elif attribute_value_type == ATTR_TYPE_BOOLEAN:
@@ -2924,7 +2937,7 @@ class C_ODF_DATA_CHECK:
                     attr_value = ''
 
             elif attribute_value_type == ATTR_TYPE_STRING:
-                pass # nothing to check in case of string value
+                pass # nothing to check in case of a string value
 
             elif attribute_value_type == ATTR_TYPE_COLOR:
                 if (not(attr_value.upper() in ('BLACK', 'BLUE', 'DARK BLUE', 'GREEN', 'DARK GREEN', 'CYAN', 'DARK CYAN', 'RED', 'DARK RED',
@@ -2956,7 +2969,7 @@ class C_ODF_DATA_CHECK:
                 elif attribute_name[-14:] == 'WindchestGroup':
                     attribute_name = 'WindchestGroup' # keep only the 'WindchestGroup' string, used in Rank object
 
-                attr_value = attr_value.lstrip("+-") # remove possible + or - at the beginning of the value, used in General or Divisional objects
+                if attr_value[0] == '-': attr_value = attr_value[1:]  # remove '-' at the beginning of the value, can be used for referencing in General or Divisional objects
 
                 if myint(attr_value) == None:
                     logs.add(f"ERROR in {object_uid} {line} : the attribute value can be a number only")
@@ -5537,7 +5550,10 @@ class C_ODF_HW2GO():
         # if HW_image_index_in_set = None, use the ImageSetInstance attribute DefaultImageIndexWithinSet if available, else use the index 1 by default
         # return True or False whether the operation has succeeded or not
 
-        if HW_object_dic['_type'] == 'ImageSetInstance':
+        if HW_object_dic == None:
+            return False
+
+        elif HW_object_dic['_type'] == 'ImageSetInstance':
             # ImageSetInstance object provided
 
             HW_image_set_inst_dic = HW_object_dic
@@ -5621,7 +5637,7 @@ class C_ODF_HW2GO():
             HW_image_attr_dic['ClickableAreaBottomRelativeYPosPixels'] = HW_image_attr_dic['ImageHeightPixels'] - 1
 
         # recover the image installation package ID
-        HW_image_attr_dic['InstallationPackageID'] = myint(self.HW_ODF_get_attribute_value(HW_image_set_dic, 'InstallationPackageID', MANDATORY))
+        HW_image_attr_dic['InstallationPackageID'] = myint(self.HW_ODF_get_attribute_value(HW_image_set_dic, 'InstallationPackageID'))
 
         # recover the bitmap file of the transparency image if any
         file_name = self.HW_ODF_get_attribute_value(HW_image_set_dic, 'TransparencyMaskBitmapFilename')
@@ -6212,13 +6228,13 @@ class C_ODF_HW2GO():
         self.available_HW_packages_id_list = []
         for HW_install_pack_dic in self.HW_odf_dic['RequiredInstallationPackage'].values():
             # scan and check the defined HW RequiredInstallationPackage objects
-            HW_package_id = myint(self.HW_ODF_get_attribute_value(HW_install_pack_dic, 'InstallationPackageID', MANDATORY))
+            HW_package_id = myint(self.HW_ODF_get_attribute_value(HW_install_pack_dic, 'InstallationPackageID'))
             if HW_package_id == None:
                 logs.add('ERROR : no installation package ID defined in the HW ODF')
                 return None
 
-            HW_package_name = self.HW_ODF_get_attribute_value(HW_install_pack_dic, 'Name', MANDATORY)
-            HW_package_supplier = self.HW_ODF_get_attribute_value(HW_install_pack_dic, 'SupplierName', MANDATORY)
+            HW_package_name = self.HW_ODF_get_attribute_value(HW_install_pack_dic, 'Name')
+            HW_package_supplier = self.HW_ODF_get_attribute_value(HW_install_pack_dic, 'SupplierName')
             if HW_package_name == None or HW_package_supplier == None:
                 logs.add('ERROR : no installation package name or supplier defined in the HW ODF')
                 return None
@@ -6233,7 +6249,7 @@ class C_ODF_HW2GO():
                 self.available_HW_packages_id_list.append(HW_package_id)
 
         # recover the main installation package ID
-        HW_install_package_id = myint(self.HW_ODF_get_attribute_value(self.HW_general_dic, 'OrganInfo_InstallationPackageID', MANDATORY))
+        HW_install_package_id = myint(self.HW_ODF_get_attribute_value(self.HW_general_dic, 'OrganInfo_InstallationPackageID'))
         if HW_install_package_id == None:
             logs.add('ERROR : no main installation package ID defined in the HW ODF')
             return None
@@ -6247,7 +6263,7 @@ class C_ODF_HW2GO():
         GO_organ_dic['OrganBuilder'] = mystr(self.HW_ODF_get_attribute_value(self.HW_general_dic, 'OrganInfo_Builder'))
         GO_organ_dic['OrganBuildDate'] = mystr(self.HW_ODF_get_attribute_value(self.HW_general_dic, 'OrganInfo_BuildDate'))
         GO_organ_dic['OrganComments'] = f'Sample set made for Hauptwerk converted for GrandOrgue on {date.today()} by OdfEdit {APP_VERSION} (see github.com/GrandOrgue/OdfEdit)'
-        GO_organ_dic['RecordingDetails'] = mystr(self.HW_ODF_get_attribute_value(self.HW_general_dic, 'Control_OrganDefinitionSupplierName', MANDATORY))
+        GO_organ_dic['RecordingDetails'] = mystr(self.HW_ODF_get_attribute_value(self.HW_general_dic, 'Control_OrganDefinitionSupplierName'))
 
         GO_organ_dic['HasPedals'] = 'N'  # will be set later in GO_ODF_build_Manual_objects
         GO_organ_dic['NumberOfManuals'] = 0
@@ -6838,38 +6854,38 @@ class C_ODF_HW2GO():
             for HW_keyboard_key_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_keyboard_keys_dic, 'KeyboardKey', TO_CHILD):
                 # scan the children HW KeyboardKey objects to recover the keys MIDI notes compass (logical and accessible keys)
 
-                # recover the Switch controlling the current HW KeyboardKey
-                HW_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_keyboard_key_dic, 'SwitchID')
-                if self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetInstanceID') != None:
-                    # the key Switch is visible
+                # recover the MIDI note number of the current HW KeyboardKey object
+                key_midi_note_nb = myint(self.HW_ODF_get_attribute_value(HW_keyboard_key_dic, 'NormalMIDINoteNumber'), 60)  # MIDI note = 60 if not defined
 
-                    # recover the MIDI note number of the current HW KeyboardKey object (it is an accessible key)
-                    key_midi_note_nb = myint(self.HW_ODF_get_attribute_value(HW_keyboard_key_dic, 'NormalMIDINoteNumber'), 60)  # MIDI note = 60 if not defined
+                # recover the switch controlling the current HW KeyboardKey
+                HW_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_keyboard_key_dic, 'SwitchID')
+                keys_switch_dic[key_midi_note_nb] = HW_switch_dic
+
+                if myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetInstanceID')) != None:
+                    # the switch has an associated image, so it is in the accessible keys compass
                     access_key_midi_first = min(access_key_midi_first, key_midi_note_nb)
                     access_key_midi_last = max(access_key_midi_last, key_midi_note_nb)
 
-                    keys_switch_dic[key_midi_note_nb] = HW_switch_dic
+                # add in the HW KeyboardKey object the UID of the corresponding GO object
+                HW_keyboard_key_dic['_GO_uid'] = GO_manual_uid
 
-                    # add in the HW KeyboardKey object the UID of the corresponding GO object
-                    HW_keyboard_key_dic['_GO_uid'] = GO_manual_uid
-
-                    # recover the MIDI note of the HW DivisionInput linked to the current HW KeyboardKey
-                    for HW_switch_linkage_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_switch_dic, 'SwitchLinkage', TO_CHILD):
-                        # scran the HW SwitchLinkage objects controlled by the HW Switch, one can make link to a DivisionInput
-                        HW_engage_action_code = myint(self.HW_ODF_get_attribute_value(HW_switch_linkage_dic, 'EngageLinkActionCode'))
-                        HW_disengage_action_code = myint(self.HW_ODF_get_attribute_value(HW_switch_linkage_dic, 'DisengageLinkActionCode'))
-                        if HW_engage_action_code == 1 and HW_disengage_action_code == 2:
-                            # standard action codes
-                            HW_dest_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_switch_linkage_dic, 'DestSwitchID')
-                            HW_division_input_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_dest_switch_dic, 'DivisionInput', TO_CHILD, FIRST_ONE)
-                            if HW_division_input_dic != None:
-                                # linked DivisionInput is found
-                                # recover the MIDI note number of the HW DivisionInput object (it is a logical key)
-                                div_midi_note_nb = myint(self.HW_ODF_get_attribute_value(HW_division_input_dic, 'NormalMIDINoteNumber'), 60)
-                                logical_key_midi_first = min(logical_key_midi_first, div_midi_note_nb)
-                                logical_key_midi_last = max(logical_key_midi_last, div_midi_note_nb)
-                                key_div_mapping_dic[key_midi_note_nb] = div_midi_note_nb
-                            break  # no need to check other SwitchLinkage objects
+                # recover the MIDI note of the HW DivisionInput linked to the current HW KeyboardKey
+                for HW_switch_linkage_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_switch_dic, 'SwitchLinkage', TO_CHILD):
+                    # scran the HW SwitchLinkage objects controlled by the HW Switch, one can make link to a DivisionInput
+                    HW_engage_action_code = myint(self.HW_ODF_get_attribute_value(HW_switch_linkage_dic, 'EngageLinkActionCode'))
+                    HW_disengage_action_code = myint(self.HW_ODF_get_attribute_value(HW_switch_linkage_dic, 'DisengageLinkActionCode'))
+                    if HW_engage_action_code == 1 and HW_disengage_action_code == 2:
+                        # standard action codes
+                        HW_dest_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_switch_linkage_dic, 'DestSwitchID')
+                        HW_division_input_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_dest_switch_dic, 'DivisionInput', TO_CHILD, FIRST_ONE)
+                        if HW_division_input_dic != None:
+                            # linked DivisionInput is found
+                            # recover the MIDI note number of the HW DivisionInput object (it is a logical key)
+                            div_midi_note_nb = myint(self.HW_ODF_get_attribute_value(HW_division_input_dic, 'NormalMIDINoteNumber'), 60)
+                            logical_key_midi_first = min(logical_key_midi_first, div_midi_note_nb)
+                            logical_key_midi_last = max(logical_key_midi_last, div_midi_note_nb)
+                            key_div_mapping_dic[key_midi_note_nb] = div_midi_note_nb
+                        break  # no need to check other SwitchLinkage objects
 
             # ensure that the logical keys compass covers the accessible keys entire compass
             logical_key_midi_first = min(logical_key_midi_first, access_key_midi_first)
@@ -6954,18 +6970,19 @@ class C_ODF_HW2GO():
         # define the manual graphical attributes in Panel999Element999 objects with Type = Manual
 
         # get the HW DisplayPage in which is displayed the keyboard
+        HW_display_page_dic = None
         if keyboard_disp_mode == 1:
             # recover the display page ID from the HW ImageSetInstance of the first key of the keyboard
-            HW_image_set_inst_id = myint(self.HW_ODF_get_attribute_value(keys_switch_dic[access_key_midi_first], 'Disp_ImageSetInstanceID', MANDATORY))
-            HW_image_set_inst_dic = self.HW_ODF_get_object_dic_from_id('ImageSetInstance', HW_image_set_inst_id)
-            keyboard_disp_page_id = myint(self.HW_ODF_get_attribute_value(HW_image_set_inst_dic, 'DisplayPageID'))
-            HW_display_page_dic = self.HW_ODF_get_object_dic_from_id('DisplayPage', keyboard_disp_page_id)
+            HW_image_set_inst_id = myint(self.HW_ODF_get_attribute_value(keys_switch_dic[access_key_midi_first], 'Disp_ImageSetInstanceID'))
+            if HW_image_set_inst_id != None:
+                HW_image_set_inst_dic = self.HW_ODF_get_object_dic_from_id('ImageSetInstance', HW_image_set_inst_id)
+                keyboard_disp_page_id = myint(self.HW_ODF_get_attribute_value(HW_image_set_inst_dic, 'DisplayPageID'))
+                HW_display_page_dic = self.HW_ODF_get_object_dic_from_id('DisplayPage', keyboard_disp_page_id)
         elif keyboard_disp_mode == 2:
             # recover the display page ID from the HW Keyboard object
             keyboard_disp_page_id = myint(self.HW_ODF_get_attribute_value(HW_keyboard_img_dic, 'KeyGen_DisplayPageID'))
-            HW_display_page_dic = self.HW_ODF_get_object_dic_from_id('DisplayPage', keyboard_disp_page_id)
-        else:
-            HW_display_page_dic = None
+            if keyboard_disp_page_id != None:
+                HW_display_page_dic = self.HW_ODF_get_object_dic_from_id('DisplayPage', keyboard_disp_page_id)
 
         if HW_display_page_dic == None:
             # the HW display page is not found, stop here the building of the GO Manual
@@ -7011,7 +7028,6 @@ class C_ODF_HW2GO():
                     for midi_note_nb in range(access_key_midi_first, access_key_midi_last + 1):
                         # scan the switches of the HW Keyboard by increasing MIDI note number
                         GO_key_nb = midi_note_nb - access_key_midi_first + 1
-
                         if midi_note_nb < access_key_midi_last:
                             # it is not the latest key of the keyboard
                             self.GO_ODF_build_Manual_keyimage_by_switch(keys_switch_dic[midi_note_nb], keys_switch_dic[midi_note_nb + 1], GO_panel_element_dic, GO_key_nb, layout_id)
@@ -7123,14 +7139,19 @@ class C_ODF_HW2GO():
         # add in the given GO panel element the key images attributes of the given HW Switch
         # sub-function of GO_ODF_build_Manual_object
 
-        if HW_switch_dic == None: return
+        if HW_switch_dic == None:
+            return
 
-        HW_image_set_inst_id = myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetInstanceID', MANDATORY))
+        HW_image_set_inst_id = myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetInstanceID'))
+        if HW_image_set_inst_id == None:
+            # the given HW switch has no associated image set
+            return
+
         HW_image_set_inst_dic = self.HW_ODF_get_object_dic_from_id('ImageSetInstance', HW_image_set_inst_id)
 
         # get the key engaged and disengaged images indexes
-        key_up_img_index = myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetIndexDisengaged', MANDATORY))
-        key_down_img_index = myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetIndexEngaged', MANDATORY))
+        key_up_img_index = myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetIndexDisengaged'), 2)
+        key_down_img_index = myint(self.HW_ODF_get_attribute_value(HW_switch_dic, 'Disp_ImageSetIndexEngaged'), 1)
 
         # add in the HW Switch and ImageSetInstance objects the UID of the corresponding GO object
         HW_switch_dic['_GO_uid'] = GO_panel_element_dic['_GO_uid']
@@ -7163,20 +7184,21 @@ class C_ODF_HW2GO():
 
         # width of the key, width calculated by the diff of XPos of the key and its next one
         if HW_next_switch_dic != None:
-            HW_next_img_set_instance_id = myint(self.HW_ODF_get_attribute_value(HW_next_switch_dic, 'Disp_ImageSetInstanceID', MANDATORY))
-            HW_next_img_set_instance_dic = self.HW_ODF_get_object_dic_from_id('ImageSetInstance', HW_next_img_set_instance_id)
+            HW_next_img_set_instance_id = myint(self.HW_ODF_get_attribute_value(HW_next_switch_dic, 'Disp_ImageSetInstanceID'))
+            if HW_next_img_set_instance_id != None:
+                HW_next_img_set_instance_dic = self.HW_ODF_get_object_dic_from_id('ImageSetInstance', HW_next_img_set_instance_id)
 
-            next_image_dic = {}
-            self.HW_ODF_get_image_attributes(HW_next_img_set_instance_dic, next_image_dic, key_up_img_index, layout_id)
-            key_width = int(next_image_dic['LeftXPosPixels']) - int(image_attr_dic['LeftXPosPixels'])
-            if key_width <= 0:
-                # key width is not correct, recover it from the image width
-                image_filename = os.path.dirname(self.HW_odf_file_name) + os.path.sep + path2ospath(image_attr_dic['BitmapFilename'])
-                if os.path.isfile(image_filename):
-                    im = Image.open(image_filename)
-                    key_width = im.size[0]
-            else:  # key_width > 0:
-                GO_panel_element_dic['Key' + key_nb_3digit_str + 'Width'] = str(key_width)
+                next_image_dic = {}
+                if self.HW_ODF_get_image_attributes(HW_next_img_set_instance_dic, next_image_dic, key_up_img_index, layout_id) != False:
+                    key_width = int(next_image_dic['LeftXPosPixels']) - int(image_attr_dic['LeftXPosPixels'])
+                    if key_width <= 0:
+                        # key width is not correct, recover it from the image width
+                        image_filename = os.path.dirname(self.HW_odf_file_name) + os.path.sep + path2ospath(image_attr_dic['BitmapFilename'])
+                        if os.path.isfile(image_filename):
+                            im = Image.open(image_filename)
+                            key_width = im.size[0]
+                    else:  # key_width > 0:
+                        GO_panel_element_dic['Key' + key_nb_3digit_str + 'Width'] = str(key_width)
 
         # offset of the key
         GO_panel_element_dic['Key' + key_nb_3digit_str + 'Offset'] = '0'
@@ -8421,7 +8443,7 @@ class C_ODF_HW2GO():
         # get the HW ImageSetInstance object associated to the given HW Switch object
         HW_image_set_inst_dic = self.HW_ODF_get_object_dic_by_ref_id('ImageSetInstance', HW_switch_dic, 'Disp_ImageSetInstanceID')
         # get the ID of the HW display page in which the switch is displayed
-        HW_switch_disp_page_id = myint(self.HW_ODF_get_attribute_value(HW_image_set_inst_dic, 'DisplayPageID', MANDATORY))
+        HW_switch_disp_page_id = myint(self.HW_ODF_get_attribute_value(HW_image_set_inst_dic, 'DisplayPageID'))
         if HW_switch_disp_page_id == None:
             # the given HW Switch has no graphical interface, a PanelElement cannot be built
             return
@@ -8941,8 +8963,8 @@ class C_ODF_HW2GO():
                     HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_attack_sample_dic, 'Sample', TO_CHILD, FIRST_ONE)
                     if HW_sample_dic != None:
                         attacks_count += 1
-                        HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
-                        sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
+                        HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID'))
+                        sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename'), HW_install_package_id)
                         if sample_file_name != None:
                             if attacks_count == 1:
                                 GO_attr_dic[pipe_id] = sample_file_name
@@ -8959,8 +8981,8 @@ class C_ODF_HW2GO():
                     for HW_pipe_release_sample_dic in HW_pipe_release_samples_list:
                         HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_release_sample_dic, 'Sample', TO_CHILD, FIRST_ONE)
                         if HW_sample_dic != None:
-                            HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
-                            sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
+                            HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID'))
+                            sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename'), HW_install_package_id)
                             if sample_file_name != None:
                                 releases_count += 1
                                 GO_attr_dic[pipe_id + 'ReleaseCount'] = releases_count
@@ -9489,8 +9511,8 @@ class C_ODF_HW2GO():
                             self.progress_status_update('+ reading samples pitch in metadata...')
                             message_shown = True
 
-                        HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
-                        file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
+                        HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID'))
+                        file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename'), HW_install_package_id)
                         if file_name != None:
                             full_file_name = self.HW_sample_set_odf_path + os.path.sep + file_name
                             metadata_dic = audio_player.wav_data_get(full_file_name, pitch_only=True)
@@ -9558,8 +9580,8 @@ class C_ODF_HW2GO():
                             if HW_sample_dic != None and attack_sel_highest_cont_contrl_val == 127:
                                 # a sample is defined and its selection is not conditioned to a continuous control value
                                 # recover the file name of the current sample
-                                HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
-                                sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
+                                HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID'))
+                                sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename'), HW_install_package_id)
                                 if sample_file_name != None:
                                     attack_nb += 1
                                     if attack_nb == 2:
@@ -9603,8 +9625,8 @@ class C_ODF_HW2GO():
                             if HW_sample_dic != None and attack_sel_highest_cont_contrl_val == 127:
                                 # a sample is defined and its selection is not conditioned to a continuous control value
                                 # recover the file name of the current alternate sample
-                                HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
-                                sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
+                                HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID'))
+                                sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename'), HW_install_package_id)
                                 if sample_file_name != None:
                                     attack_nb += 1
                                     if attack_nb == 2:
@@ -9669,8 +9691,8 @@ class C_ODF_HW2GO():
                                 HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_release_sample_dic, 'Sample', TO_CHILD, FIRST_ONE)
                                 if HW_sample_dic != None:
                                     # recover the file name of the current sample
-                                    HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
-                                    sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
+                                    HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID'))
+                                    sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename'), HW_install_package_id)
                                     if sample_file_name != None:
                                         release_nb += 1
                                         pipe_rel_id = pipe_id + 'Release' + str(release_nb).zfill(3)
@@ -9705,8 +9727,8 @@ class C_ODF_HW2GO():
                                 HW_sample_dic = self.HW_ODF_get_linked_objects_dic_by_type(HW_pipe_release_sample_dic, 'Sample', TO_CHILD, FIRST_ONE)
                                 if HW_sample_dic != None:
                                     # recover the file name of the current sample
-                                    HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID', MANDATORY))
-                                    sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename', MANDATORY), HW_install_package_id)
+                                    HW_install_package_id = myint(self.HW_ODF_get_attribute_value(HW_sample_dic, 'InstallationPackageID'))
+                                    sample_file_name = self.convert_HW2GO_file_name(self.HW_ODF_get_attribute_value(HW_sample_dic, 'SampleFilename'), HW_install_package_id)
                                     if sample_file_name != None:
                                         release_nb += 1
                                         pipe_rel_id = pipe_id + 'Release' + str(release_nb).zfill(3)
@@ -11068,7 +11090,7 @@ class C_GUI_NOTEBOOK():
             # the user has saved his modifications if he wanted and has not canceled the operation
             selected_text = self.lst_odf_sresults.get(selected_indice[0])
 
-            if self.selected_object_uid == '_General' or self.selected_object_uid[-6:].isdigit():
+            if self.selected_object_uid == '_General' or (self.selected_object_uid != None and self.selected_object_uid[-6:].isdigit()):
                 # the results are concerning HW UID
                 self.selected_object_app = 'HW'
             else:
@@ -13127,10 +13149,10 @@ class C_GUI(C_GUI_NOTEBOOK):
                 self.is_loading = False
 
                 # update the objects list / tree / text
+                self.object_text_update()
                 self.objects_list_content_update()
                 self.objects_list_update_hw()
                 self.objects_tree_content_update()
-                self.object_text_update()
                 self.objects_links_list_content_update()
                 self.gui_update_buttons_state()
                 self.gui_status_update_notebook()
@@ -13884,8 +13906,8 @@ class C_GUI(C_GUI_NOTEBOOK):
         # get the index of the item under the mouse cursor in the list
         index_under_mouse = list_widget.nearest(event.y)
 
-        if list_widget == self.lst_linked_objects_list and list_widget.get(index_under_mouse)[:4] in ('Pare', 'Chil'):
-            # a click on items Parents and Children of the objects links list must have none effect
+        if index_under_mouse == -1 or (list_widget == self.lst_linked_objects_list and list_widget.get(index_under_mouse)[:4] in ('Pare', 'Chil')):
+            # no item has been clicked or click on items Parents and Children of the objects links list must have none effect
             return 'break'
 
         if len(sel_items_index_list) == 0 or (not self.is_key_control_pressed and not self.is_key_shift_pressed):
@@ -13901,15 +13923,15 @@ class C_GUI(C_GUI_NOTEBOOK):
             self.drag_in_progress = False
 
         elif self.is_key_shift_pressed:
-                # a Shift key is pressed : select items between the first selected item and the currently selected item
-                for i in sel_items_index_list:
-                    list_widget.selection_clear(i)
-                if index_under_mouse < self.first_sel_item_index:
-                    for i in range(index_under_mouse, self.first_sel_item_index + 1):
-                        list_widget.selection_set(i)
-                else:
-                    for i in range(self.first_sel_item_index, index_under_mouse + 1):
-                        list_widget.selection_set(i)
+            # a Shift key is pressed : select items between the first selected item and the currently selected item
+            for i in sel_items_index_list:
+                list_widget.selection_clear(i)
+            if index_under_mouse < self.first_sel_item_index:
+                for i in range(index_under_mouse, self.first_sel_item_index + 1):
+                    list_widget.selection_set(i)
+            else:
+                for i in range(self.first_sel_item_index, index_under_mouse + 1):
+                    list_widget.selection_set(i)
 
         elif self.is_key_control_pressed:
             # a Control key is pressed : invert the selection status of the item under the mouse cursor
@@ -14023,6 +14045,11 @@ class C_GUI(C_GUI_NOTEBOOK):
 
         # get the idd of the node and the element type under the mouse cursor in the tree
         node_iid_under_mouse = tree_widget.identify_row(event.y)
+
+        if node_iid_under_mouse == '':
+            # none item has been clicked
+            return 'break'
+
         element = tree_widget.identify_element(event.x, event.y)
 
         if element == 'Treeitem.indicator':
@@ -14755,8 +14782,7 @@ class C_GUI(C_GUI_NOTEBOOK):
         lines = self.txt_object_text.get('1.0', tk.END).splitlines()
 
         # search the given attribute name in the lines
-        for line_nb, line in enumerate(lines):
-
+        for line in lines:
             (error_msg, attr_name, attr_value, comment) = self.odf_data.object_line_split(line)
             if error_msg == None and attr_name == attrib_name:
                 # attribute name found
