@@ -1,6 +1,8 @@
 # OdfEdit
-OdfEdit is an application (implemented in Python) permitting to edit an ODF (Organ Description File, extension .organ) for GrandOrgue in plain text mode, with objects/sections navigator by list or tree, syntax check, images / wav files viewer and help included.
+OdfEdit is an application (implemented in Python) permitting to edit an ODF (Organ Description File, extension .organ) for GrandOrgue in plain text mode, with objects/sections navigator by list or tree, syntax check, images files / wav files / panels viewer and help included.
 It can be run either directly with the Python file (OdfEdit.py and other files of the src folder) or by using the binary files provided in https://github.com/GrandOrgue/OdfEdit/releases (one for Windows and one for Linux)
+
+Releases notes can be found in github : https://github.com/GrandOrgue/OdfEdit/releases
 
 Way to run directly the script file :
 - install Python 3.x on your computer
