@@ -11,11 +11,11 @@ authors = [{ name = "Eric Turpault" }]
 license = { file = "LICENSE.txt" }
 keywords = ["organ", "ODF", "GrandOrgue", "Hauptwerk"]
 dependencies = [
-    "tkinter",
     "sounddevice",
     "audioplayer",
     "pillow",
     "lxml",
+    'pyobjc>=9.3; sys_platform == "darwin"',
 ]
 requires-python = ">=3.10"
 
