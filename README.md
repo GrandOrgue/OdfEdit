@@ -7,9 +7,15 @@ Releases notes can be found in github : https://github.com/GrandOrgue/OdfEdit/re
 
 Way to run directly the script file :
 
-- install Python 3.10 on your computer (from https://www.python.org/downloads/ to make sure it contains tkinter)
+- install Python 3.10 on your computer (from https://www.python.org/downloads/release/python-31019/ to make sure it contains tkinter)
 - clone this repository or download its contents (https://github.com/GrandOrgue/OdfEdit/archive/refs/heads/main.zip)
-- in the command line (on Windows, use Git Bash), run `./install.sh`, then `./odfedit.sh`
+- install and run the application with one of the following methods:
+  - automated:
+    - in the command line (on Windows, use Git Bash), go to the repository root folder and run `./install.sh`, then `./odfedit.sh`
+  - manual:
+    - install the Python libraries pillow, lxml, audioplayer and sounddevice
+    - install the project with pip : pip install OdfEdit
+    - in the local src folder run the command : python3 OdfEdit.py (or in Linux : python3 ./OdfEdit.py)
 
 The Windows binary has been tested in Windows 10
 The Linux binary has been tested in Ubuntu 22.04.2 LTS in Oracle VM VirtualBox
