@@ -23,7 +23,7 @@ fi
 # Step 2: Create new venv
 # ---------------------------
 echo "Creating virtual environment..."
-$PYTHON_BIN -m venv "$VENV_DIR"
+$PYTHON_BIN -m venv "$VENV_DIR" --system-site-packages
 
 # ---------------------------
 # Step 3: Activate venv

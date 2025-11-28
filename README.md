@@ -8,6 +8,7 @@ Releases notes can be found in github : https://github.com/GrandOrgue/OdfEdit/re
 Way to run directly the script file :
 
 - install Python >=3.10 on your computer (from https://www.python.org/downloads/ to make sure it contains tkinter)
+  - on Linux, run `sudo apt-get install python3-tkinter python3-pillow-tk python3-gobject` (replace `apt-get` with your package manager command)
 - clone this repository or download its contents (https://github.com/GrandOrgue/OdfEdit/archive/refs/heads/main.zip)
 - install and run the application with one of the following methods:
   - automated:
