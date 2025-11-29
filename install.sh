@@ -34,6 +34,12 @@ source "$VENV_DIR/bin/activate"
 # Step 4: Install ODFEdit dependencies
 # ---------------------------
 echo "Installing ODFEdit dependencies..."
+if ! python3 -c "from PIL import ImageTk" 2>/dev/null; then
+    echo "Pillow missing or ImageTk unavailable, installing from source..."
+    pip install --force-reinstall --no-binary :all: pillow
+else
+    echo "Pillow with ImageTk is already installed."
+fi
 pip install .
 
 echo "ODFEdit setup complete!"
