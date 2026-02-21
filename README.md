@@ -17,7 +17,7 @@ Way to run directly the script file :
     - install the project with pip : pip install OdfEdit
     - in the local src folder run the command : python3 OdfEdit.py (or in Linux : python3 ./OdfEdit.py)
 
-OdfEdit can be used as well in a web-based frontend that runs entirely in a browser, without any installation required : OdfEdit Web, available at https://www.openpipes.org/odfweb/
+OdfEdit can be used as well in a web-based frontend that runs entirely in a browser, without any installation required : OdfEdit Web, available at https://www.openpipes.org/odfweb/.
 It supports opening and editing .organ files, inline attribute editing, ODF validation, and the Hauptwerk → GrandOrgue conversion functionality.
 
 The Windows binary has been tested in Windows 10
