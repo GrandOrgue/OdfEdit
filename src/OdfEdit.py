@@ -224,7 +224,9 @@
                           HW2GO : supporting switch linkages with engagement and disengagement managed by parallel switch linkage sections
                           HW2GO : fixing an issue for a conditional switch controlling multiple other switches and controlling actually only the first one
                           HW2GO : managing the stops linked to ranks through keyboard keys switches instead of through StopRank objects
-                          HW2GO : rework of the keyboard keys horizontal position conversion to take into account images position not increasing
+                          HW2GO : rework of the keyboard keys horizontal position conversion to take into account images position not increasing from one key to the next one
+   v2.21 -              - HW2GO : if a software exception occurs in one step of the HW to GO conversion, a log message is displayed and the convertion continues the next steps
+                          HW2GO : fix an exception issue observed with the sample set "Düsseldorf, St. Lambertus" of PG
 
 TO DO LIST :
     ...
@@ -237,6 +239,7 @@ import re
 import math
 import sys
 import time
+import logging
 ##import traceback  # to run with : traceback.print_stack(limit=5) in a function to print in the Python console the stack of last 5 calls to this function
 
 from threading import Thread
@@ -261,8 +264,8 @@ else:
     is_audio_player_lib_present = False
 
 # application version and release date
-APP_VERSION = 'v2.20'
-RELEASE_DATE = 'February 8th 2026'
+APP_VERSION = 'v2.21'
+RELEASE_DATE = 'April 8th 2026'
 
 # logs activation flags
 DEV_MODE = False
@@ -3985,11 +3988,7 @@ class C_ODF_DATA(C_ODF_DATA_CHECK, C_ODF_MISC):
     def object_dic_get(self, object_uid):
         # return the dictionary of the object of the ODF dictionary having the given UID
 
-        try:
-            return self.odf_data_dic[object_uid]
-        except Exception:
-            # object not existing
-            return None
+        return mydickey(self.odf_data_dic, object_uid)
 
     #-------------------------------------------------------------------------------------------------
     def object_names_get(self, object_uid):
@@ -6149,57 +6148,98 @@ class C_ODF_HW2GO():
             # build the GO Panel objects by sorted HW DisplayPage ID order
             self.progress_status_update('Building GrandOrgue Panels...')
             for HW_display_page_dic in HW_sorted_display_pages_dic_list:
-                self.GO_ODF_build_Panel_object(HW_display_page_dic)
+                try:
+                    self.GO_ODF_build_Panel_object(HW_display_page_dic)
+                except Exception:
+                    logs.add(f'! An issue has occurred when converting the panel "{mydickey(HW_display_page_dic, "Name")}"')
+                    logging.exception(f'Exception when converting the panel "{mydickey(HW_display_page_dic, "Name")}"')
 
             # build GO Manual objects from HW Keyboard objects
             self.progress_status_update('Building GrandOrgue Manuals...')
             for HW_keyboard_dic in self.HW_ODF_get_linked_objects_dic_by_type('root', 'Keyboard', sorted_by='ID'):
-                self.GO_ODF_build_Manual_object(HW_keyboard_dic)
+                try:
+                    self.GO_ODF_build_Manual_object(HW_keyboard_dic)
+                except Exception:
+                    logs.add(f'! An issue has occurred when converting the manual "{mydickey(HW_keyboard_dic, "Name")}"')
+                    logging.exception(f'Exception when converting the manual "{mydickey(HW_keyboard_dic, "Name")}"')
 
             # build GO Manual objects from HW Division objects not yet converted to a GO Manual by the previous loop
             # (case of a Division not directly controlled by a Keyboard)
             for HW_division_dic in self.HW_ODF_get_linked_objects_dic_by_type('root', 'Division', sorted_by='ID'):
                 if HW_division_dic['_GO_uid'] == '':
                     # current HW Division is not yet converted to a GO Manual
-                    self.GO_ODF_build_Manual_object(HW_division_dic)
+                    try:
+                        self.GO_ODF_build_Manual_object(HW_division_dic)
+                    except Exception:
+                        logs.add(f'! An issue has occurred when converting the manual "{mydickey(HW_keyboard_dic, "Name")}"')
+                        logging.exception(f'Exception when converting the manual "{mydickey(HW_keyboard_dic, "Name")}"')
 
             # build GO combination objects (General, Divisional)
             self.progress_status_update('Building GrandOrgue Combinations...')
             for HW_combination_dic in self.HW_odf_dic['Combination'].values():
                 # scan the HW Combination objects
-                self.GO_ODF_build_Drawstop_controlled_object(HW_combination_dic)
+                try:
+                    self.GO_ODF_build_Drawstop_controlled_object(HW_combination_dic)
+                except Exception:
+                    logs.add(f'! An issue has occurred when converting the combination "{mydickey(HW_combination_dic, "Name")}"')
+                    logging.exception(f'Exception when converting the combination "{mydickey(HW_combination_dic, "Name")}"')
+
             # build the combination master capture button which is given in the _General object
-            self.GO_ODF_build_Drawstop_controlled_object(self.HW_general_dic)
+            try:
+                self.GO_ODF_build_Drawstop_controlled_object(self.HW_general_dic)
+            except Exception:
+                logs.add('! An issue has occurred when converting the master capture combination')
+                logging.exception('Exception when converting the master capture combination')
 
             # build the GO Coupler objects
             self.progress_status_update('Building GrandOrgue Couplers...')
             for HW_key_action_dic in self.HW_ODF_get_linked_objects_dic_by_type('root', 'KeyAction', sorted_by='SourceKeyboardID'):
-                self.GO_ODF_build_Drawstop_controlled_object(HW_key_action_dic)
+                try:
+                    self.GO_ODF_build_Drawstop_controlled_object(HW_key_action_dic)
+                except Exception:
+                    logs.add(f'! An issue has occurred when converting the coupler "{mydickey(HW_key_action_dic, "Name")}"')
+                    logging.exception(f'Exception when converting the coupler "{mydickey(HW_key_action_dic, "Name")}"')
 
             # build the GO pipes Stop objects by sorted HW Division ID
             for HW_division_dic in HW_sorted_divisions_dic_list:
                 for HW_stop_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_division_dic, 'Stop', TO_CHILD, sorted_by='ID'):
                     # scan the HW Stop objects belonging to the current HW Division for the stop pipes or noise objects
                     self.progress_status_update(f'Building the GrandOrgue Stop "{HW_stop_dic["Name"]}"...')
-                    self.GO_ODF_build_Drawstop_controlled_object(HW_stop_dic)
+                    try:
+                        self.GO_ODF_build_Drawstop_controlled_object(HW_stop_dic)
+                    except Exception:
+                        logs.add(f'! An issue has occurred when converting the stop "{mydickey(HW_stop_dic, "Name")}"')
+                        logging.exception(f'Exception when converting the stop "{mydickey(HW_stop_dic, "Name")}"')
 
             # build the GO Tremulant objects
             if 'Tremulant' in self.HW_odf_dic.keys():
                 self.progress_status_update('Building GrandOrgue tremulants...')
                 for HW_tremulant_dic in self.HW_odf_dic['Tremulant'].values():
-                    self.GO_ODF_build_Drawstop_controlled_object(HW_tremulant_dic)
+                    try:
+                        self.GO_ODF_build_Drawstop_controlled_object(HW_tremulant_dic)
+                    except Exception:
+                        logs.add(f'! An issue has occurred when converting the tremulant "{mydickey(HW_tremulant_dic, "Name")}"')
+                        logging.exception(f'Exception when converting the tremulant "{mydickey(HW_tremulant_dic, "Name")}"')
 
             # build GO Stop or Switch objects controlled by switches and which can have a function in GO (noises or switched images)
             self.progress_status_update('Building other switch controlled GrandOrgue features...')
             for HW_switch_dic in self.HW_ODF_get_linked_objects_dic_by_type('root', 'Switch', sorted_by='ID'):
                 # scan the HW Switch objects
-                self.GO_ODF_build_Switch_effects_object(HW_switch_dic)
+                try:
+                    self.GO_ODF_build_Switch_effects_object(HW_switch_dic)
+                except Exception:
+                    logs.add(f'! An issue has occurred when converting the switch "{mydickey(HW_switch_dic, "Name")}"')
+                    logging.exception(f'Exception when converting the switch "{mydickey(HW_switch_dic, "Name")}"')
 
             # build the GO Stop objects for keyboard keys noises by sorted HW Division ID
             if not do_not_build_keys_noise_bool:
                 for HW_keyboard_dic in self.HW_ODF_get_linked_objects_dic_by_type('root', 'Keyboard', sorted_by='ID'):
                     self.progress_status_update(f'Building the GrandOrgue Stop for keyboard "{HW_keyboard_dic["Name"]}" keys noise...')
-                    self.GO_ODF_build_Manual_noise_object(HW_keyboard_dic)
+                    try:
+                        self.GO_ODF_build_Manual_noise_object(HW_keyboard_dic)
+                    except Exception:
+                        logs.add(f'! An issue has occurred when converting the noises of the manual "{mydickey(HW_keyboard_dic, "Name")}"')
+                        logging.exception(f'Exception when converting the noises of the manual "{mydickey(HW_keyboard_dic, "Name")}"')
 
             # build the labels
             self.progress_status_update('Building the GrandOrgue Labels...')
@@ -6210,7 +6250,11 @@ class C_ODF_HW2GO():
                     GO_panel_uid = HW_display_page_dic['_GO_uid']
                     for HW_text_inst_dic in self.HW_ODF_get_linked_objects_dic_by_type(HW_display_page_dic, 'TextInstance', TO_CHILD):
                         # scan the HW TextInstance objects of the current display page
-                        self.GO_ODF_build_Label_object(HW_text_inst_dic, GO_panel_uid)
+                        try:
+                            self.GO_ODF_build_Label_object(HW_text_inst_dic, GO_panel_uid)
+                        except Exception:
+                            logs.add(f'! An issue has occurred when converting the label "{mydickey(HW_text_inst_dic, "Name")}"')
+                            logging.exception(f'Exception when converting the noises of the label "{mydickey(HW_text_inst_dic, "Name")}"')
 
             if build_unused_ranks_bool:
                 # build the GO Ranks objects corresponding to HW Ranks of pipes not converted in GO Ranks previously
@@ -6218,9 +6262,13 @@ class C_ODF_HW2GO():
                     if HW_rank_dic['_GO_uid'] == '':
                         # HW Rank not converted in a GO Rank or Stop
                         self.progress_status_update(f'Building unused GrandOrgue Rank "{HW_rank_dic["Name"]}"...')
-                        GO_rank_uid = self.GO_ODF_build_Rank_object(HW_rank_dic)
-                        if GO_rank_uid is not None:
-                            self.GO_odf_dic[GO_rank_uid]['Name'] += ' UNUSED'
+                        try:
+                            GO_rank_uid = self.GO_ODF_build_Rank_object(HW_rank_dic)
+                            if GO_rank_uid is not None:
+                                self.GO_odf_dic[GO_rank_uid]['Name'] += ' UNUSED'
+                        except Exception:
+                            logs.add(f'! An issue has occurred when converting the unused rank "{mydickey(HW_rank_dic, "Name")}"')
+                            logging.exception(f'Exception when converting the unused rank "{mydickey(HW_rank_dic, "Name")}"')
 
             self.progress_status_update('Completing the building operation...')
 
@@ -6799,7 +6847,7 @@ class C_ODF_HW2GO():
             #   4 : Manual 3
             #   5 : Manual 4
             #   6 : Manual 5
-            #   7 : Manual 6 miscellaneous/noises
+            #   7 : Manual 6+ miscellaneous/noises
             HW_keyboard_assignment_code = myint(self.HW_ODF_get_attribute_value(HW_keyboard_dic, 'DefaultInputOutputKeyboardAsgnCode'), 0)
 
             logprint(LOG_HW2GO_manual, f"Building GO manual from HW {HW_keyboard_dic['_uid']} '{HW_keyboard_dic['Name']}', DefaultInputOutputKeyboardAsgnCode={HW_keyboard_assignment_code}")
@@ -6809,6 +6857,11 @@ class C_ODF_HW2GO():
                  self.HW_ODF_get_linked_objects_dic_by_type(HW_keyboard_dic, 'KeyAction', TO_CHILD, FIRST_ONE) is None)):
                 # the given HW Keyboard is not visible and it is not forwarding action from parent or to child KeyAction, it is ignored
                 logprint(LOG_HW2GO_manual, "    ====> SKIPPED : not visible and not forwarding KeyAction effect")
+                return None
+
+            if HW_keyboard_assignment_code >= 6:
+                # it is not a functional keyboard (miscellaneous or noises), it is ignored
+                logprint(LOG_HW2GO_manual, "    ====> SKIPPED : not functional keyboard")
                 return None
 
             # find what the HW Keyboard is controlling (Division, Keyboard with KeyboardKey children, KeyImageSet)
@@ -7239,33 +7292,6 @@ class C_ODF_HW2GO():
         if image_attr_dic['TransparencyMaskBitmapFilename'] is not None:
             GO_panel_element_dic['Key' + key_nb_3digit_str + 'MaskOn'] = image_attr_dic['TransparencyMaskBitmapFilename']
 
-##        # width of the key, calculated by the diff of XPos of the key and its next one, or recovered from the key image width
-##        key_width = 0
-##        if HW_next_switch_dic is not None:
-##            HW_next_img_set_instance_id = myint(self.HW_ODF_get_attribute_value(HW_next_switch_dic, 'Disp_ImageSetInstanceID'))
-##            if HW_next_img_set_instance_id is not None:
-##                HW_next_img_set_instance_dic = self.HW_ODF_get_object_dic_from_id('ImageSetInstance', HW_next_img_set_instance_id)
-##
-##                next_image_dic = {}
-##                if self.HW_ODF_get_image_attributes(HW_next_img_set_instance_dic, next_image_dic, key_up_img_index, layout_id):
-##                    key_width = int(next_image_dic['LeftXPosPixels']) - int(image_attr_dic['LeftXPosPixels'])
-##
-##        if key_width <= 0 or key_width > 200 :
-##            # the calculated key width is not good or has not been calculated, set the key width from the key image width (better than nothing)
-##            key_width = 0
-##            image_filename = os.path.dirname(self.HW_odf_file_name) + os.path.sep + path2ospath(image_attr_dic['BitmapFilename'])
-##            if os.path.isfile(image_filename):
-##                im = Image.open(image_filename)
-##                key_width = im.width
-##
-##        if key_width > 0:
-##            GO_panel_element_dic['Key' + key_nb_3digit_str + 'Width'] = key_width
-##
-##        # offset of the key
-##        GO_panel_element_dic['Key' + key_nb_3digit_str + 'Offset'] = '0'
-##        if image_attr_dic['TopYPosPixels'] - GO_panel_element_dic['PositionY'] != 0:
-##            GO_panel_element_dic['Key' + key_nb_3digit_str + 'YOffset'] = image_attr_dic['TopYPosPixels'] - GO_panel_element_dic['PositionY']
-
         # get the X position of the key image
         key_image_xpos = int(image_attr_dic['LeftXPosPixels'])
 
@@ -7620,44 +7646,6 @@ class C_ODF_HW2GO():
                                         break
                             if trem_HW_switch_dic is not None:
                                 break
-
-##                if trem_HW_switch_dic is None:
-##                    # the HW Stop has tremmed samples defined neither in alternate ranks nor in an alternate pipes layer
-##                    # look if the given HW Stop has tremmed samples defined in
-##                    # using the Stop attribute Hint_PrimaryAssociatedRankID and the Rank attribute SoundEngine01_Layer2Desc
-##                    # (this tremmed samples definition method is used by Piotr Grabowski in some sample sets)
-##
-##                    print(HW_object_dic['Name'])
-##                    # get the Switch controlling the Stop
-##                    HW_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_object_dic, 'ControllingSwitchID')
-##
-##                    controlled_HW_objects_dic_list = []
-##                    self.HW_ODF_get_switch_controlled_objects(HW_switch_dic, controlled_HW_objects_dic_list)
-##                    for HW_ctrl_object_dic in controlled_HW_objects_dic_list:
-##                        # scan the HW objects controlled by the switch controlling the stop
-##                        if HW_ctrl_object_dic['_type'] == 'SwitchLinkage':
-##                            if self.HW_ODF_get_attribute_value(HW_ctrl_object_dic, 'ConditionSwitchID') is not None:
-##                                # the current SwitchLinkage object is controlled by a conditional switch
-##                                # (this condition is normally coming from the switch controlling the stop to enable this switch linkage between a division input and pipes)
-##                                # get the list of HW objects controlled by the destination Switch of the current SwitchLinkage
-##                                HW_dest_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_ctrl_object_dic, 'DestSwitchID')
-##                                controlled_HW_objects_dic_list2 = []
-##                                self.HW_ODF_get_switch_controlled_objects(HW_dest_switch_dic, controlled_HW_objects_dic_list2)
-##                                for HW_ctrl_object_dic2 in controlled_HW_objects_dic_list2:
-##                                    # scan the HW objects controlled by the destination switch
-##                                    if HW_ctrl_object_dic2['_type'] == 'Pipe_SoundEngine01':
-##                                        if self.HW_ODF_get_attribute_value(HW_ctrl_object_dic2, 'Pitch_Tempered_RankBasePitch64ftHarmonicNum') is not None:
-##                                            # it is not a noise sample (a noise sample has not harmonic number defined)
-##                                            HW_rank_dic = self.HW_ODF_get_object_dic_by_ref_id('Rank', HW_ctrl_object_dic2, 'RankID')
-##                                            if 'trem' in HW_rank_dic['Name']:
-##                                                # the pipe is a tremmed sample
-##                                                trem_HW_switch_dic = self.HW_ODF_get_object_dic_by_ref_id('Switch', HW_ctrl_object_dic2, 'ControllingPalletSwitchID')
-##                                                print('Trem switch : ' + trem_HW_switch_dic['Name'])
-##                                            # no need to set trem_def_method which is not used in the function GO_ODF_build_Stop_pipes_attributes if there is no StopRank
-##                                    if trem_HW_switch_dic is not None:
-##                                        break
-##                                if trem_HW_switch_dic is not None:
-##                                    break
 
             GO_object_type = 'Stop'
             GO_attr_dic = self.GO_ODF_build_Stop_pipes_attributes(HW_object_dic, self.trem_samples_mode, trem_def_method)
