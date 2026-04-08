@@ -8,6 +8,8 @@ Releases notes can be found in github : https://github.com/GrandOrgue/OdfEdit/re
 Way to run directly the script file :
 
 - install Python >=3.10 on your computer (from https://www.python.org/downloads/ to make sure it contains tkinter)
+  - on Fedora Linux 43, run `sudo dnf install python3-tkinter python3-pillow-tk`
+  - on Ubuntu Linux 25.10, run `sudo apt update; sudo apt install python3-venv python3-tk cmake libjpeg-dev zlib1g-dev libtiff-dev libfreetype-dev liblcms2-dev libwebp-dev libopenjp2-7-dev tcl-dev tk-dev python3-dev`
 - clone this repository or download its contents (https://github.com/GrandOrgue/OdfEdit/archive/refs/heads/main.zip)
 - install and run the application with one of the following methods:
   - automated:
