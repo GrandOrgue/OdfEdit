@@ -225,8 +225,11 @@
                           HW2GO : fixing an issue for a conditional switch controlling multiple other switches and controlling actually only the first one
                           HW2GO : managing the stops linked to ranks through keyboard keys switches instead of through StopRank objects
                           HW2GO : rework of the keyboard keys horizontal position conversion to take into account images position not increasing from one key to the next one
-   v2.21 -              - HW2GO : if a software exception occurs in one step of the HW to GO conversion, a log message is displayed and the convertion continues the next steps
-                          HW2GO : fix an exception issue observed with the sample set "Düsseldorf, St. Lambertus" of PG
+   v2.21 - 08 Apr 2026  - HW2GO : if a software exception occurs in one step of the HW to GO conversion, a log message is displayed and the conversion continues the next steps
+                          HW2GO : fix an exception issue observed with the sample set "Düsseldorf, St. Lambertus" of PG when converting some manuals (new use case)
+   v2.22 - 04 Jul 2026  - HW2GO : fix an exception issue observed with the sample set "St. Guilhem Le Desert" of SP when converting the Tremulant Fort
+                          HW2GO : fix an exception issue observed with the sample set "Munich, St. Margaret " of PG when converting the Manual Auxiliarwerk
+
 
 TO DO LIST :
     ...
@@ -264,8 +267,8 @@ else:
     is_audio_player_lib_present = False
 
 # application version and release date
-APP_VERSION = 'v2.21'
-RELEASE_DATE = 'April 8th 2026'
+APP_VERSION = 'v2.22'
+RELEASE_DATE = 'July 4th 2026'
 
 # logs activation flags
 DEV_MODE = False
@@ -6345,7 +6348,7 @@ class C_ODF_HW2GO():
         GO_organ_dic['ChurchAddress'] = mystr(self.HW_ODF_get_attribute_value(self.HW_general_dic, 'OrganInfo_Location'))
         GO_organ_dic['OrganBuilder'] = mystr(self.HW_ODF_get_attribute_value(self.HW_general_dic, 'OrganInfo_Builder'))
         GO_organ_dic['OrganBuildDate'] = mystr(self.HW_ODF_get_attribute_value(self.HW_general_dic, 'OrganInfo_BuildDate'))
-        GO_organ_dic['OrganComments'] = f'Sample set made for Hauptwerk converted for GrandOrgue on {date.today()} by OdfEdit {APP_VERSION} (see github.com/GrandOrgue/OdfEdit)'
+        GO_organ_dic['OrganComments'] = f'GrandOrgue organ definition file generated from a Hauptwerk sample set on {date.today()} by OdfEdit {APP_VERSION} (see github.com/GrandOrgue/OdfEdit)'
         GO_organ_dic['RecordingDetails'] = mystr(self.HW_ODF_get_attribute_value(self.HW_general_dic, 'Control_OrganDefinitionSupplierName'))
 
         GO_organ_dic['HasPedals'] = 'N'  # will be set later in GO_ODF_build_Manual_objects
@@ -7062,7 +7065,7 @@ class C_ODF_HW2GO():
             # the keyboard is not visible, stop here the building of the GO Manual
             return GO_manual_uid
 
-        if access_key_midi_first > logical_key_midi_first:
+        if access_key_midi_first != 999 and access_key_midi_first > logical_key_midi_first:
             # the first keys of the logical keyboard are not accessible : map them to no MIDI note to make them inactive
             for key_midi_note_nb in range(logical_key_midi_first, access_key_midi_first):
                 GO_manual_dic['MIDIKey' + str(key_midi_note_nb).zfill(3)] = 0
@@ -7072,6 +7075,10 @@ class C_ODF_HW2GO():
             if key_midi_note_nb != key_div_mapping_dic[key_midi_note_nb]:
                 # the current key is mapped to a pipe having another MIDI note than its normal key MIDI note : map it to this other MIDI note
                 GO_manual_dic['MIDIKey' + str(key_midi_note_nb).zfill(3)] = key_div_mapping_dic[key_midi_note_nb]
+
+        if access_key_midi_first == 999:
+            # there is no accessible / visible manual
+            return GO_manual_uid
 
         # define the manual graphical attributes in Panel999Element999 objects with Type = Manual
 
@@ -9673,6 +9680,8 @@ class C_ODF_HW2GO():
             GO_windchest_uid = self.GO_ODF_build_WindchestGroup_object(HW_wind_comp_dic, HW_cont_ctrl_dic, HW_enclosure_dic)
             GO_rank_dic['WindchestGroup'] = GO_windchest_uid[-3:]
             HW_rank1_dic['_GO_windchest_uid'] = GO_windchest_uid
+            if HW_rank2_dic is not None:
+                HW_rank2_dic['_GO_windchest_uid'] = GO_windchest_uid
 
             GO_rank_dic['Percussive'] = 'N'
             GO_rank_dic['HarmonicNumber'] = 0  # is set later with the first pipe
